@@ -122,6 +122,8 @@ class ControlPanel(object):
         actions.append(('refresh', None))
         options.append('Manage devices...')
         actions.append(('manage', None))
+        options.append('Diagnose LAN search...')
+        actions.append(('diagnose', None))
         options.append('Settings')
         actions.append(('settings', None))
 
@@ -140,9 +142,27 @@ class ControlPanel(object):
             self.refresh_devices()
         elif kind == 'manage':
             self.manage_devices()
+        elif kind == 'diagnose':
+            self.diagnose()
         elif kind == 'settings':
             utils.open_settings()
         return None
+
+    def diagnose(self):
+        """Probe the LAN and explain the result on screen and in the log."""
+        import diagnostics
+
+        progress = xbmcgui.DialogProgressBG()
+        progress.create('Paragon Govee', 'Probing the network...')
+        try:
+            text, _report = diagnostics.run(self.app)
+        except Exception as exc:
+            utils.log('Diagnostics failed: %s' % exc)
+            progress.close()
+            _dialog().ok('Paragon Govee', 'Diagnostics failed:\n\n%s' % exc)
+            return
+        progress.close()
+        _dialog().ok('Paragon Govee - LAN diagnostics', text)
 
     # -- control ------------------------------------------------------------
 

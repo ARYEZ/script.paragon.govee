@@ -29,6 +29,7 @@ import struct
 import time
 
 MULTICAST_GROUP = '239.255.255.250'
+BROADCAST_ADDRESS = '255.255.255.255'
 SCAN_PORT = 4001      # devices listen here for multicast discovery
 LISTEN_PORT = 4002    # devices answer here
 COMMAND_PORT = 4003   # devices listen here for unicast control
@@ -39,6 +40,57 @@ _BUFFER_SIZE = 2048
 
 class LANError(Exception):
     """Raised when the LAN transport cannot be used at all."""
+
+
+def local_addresses():
+    """Best-effort list of this host's IPv4 addresses, loopback excluded.
+
+    Kodi boxes are routinely multi-homed -- a VPN, a Hyper-V or docker bridge,
+    wired plus wireless -- and a multicast sent from a socket bound to
+    0.0.0.0 leaves via whichever interface the routing table prefers, which is
+    frequently not the one the lights are on. Enumerating lets discovery probe
+    every interface instead of betting on the default route.
+
+    Uses only the standard library, since Kodi 17.6 has no netifaces.
+    """
+    found = []
+
+    def remember(address):
+        if (address and address not in found
+                and not address.startswith('127.')
+                and not address.startswith('169.254.')):
+            found.append(address)
+
+    try:
+        hostname = socket.gethostname()
+    except socket.error:
+        hostname = ''
+
+    if hostname:
+        try:
+            for entry in socket.getaddrinfo(hostname, None, socket.AF_INET):
+                remember(entry[4][0])
+        except socket.error:
+            pass
+        try:
+            remember(socket.gethostbyname(hostname))
+            for address in socket.gethostbyname_ex(hostname)[2]:
+                remember(address)
+        except socket.error:
+            pass
+
+    # A connect() on a UDP socket assigns a source address without sending
+    # anything, which reveals the address the default route would use.
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(('203.0.113.1', 9))  # TEST-NET-3, never routed anywhere
+        remember(probe.getsockname()[0])
+    except socket.error:
+        pass
+    finally:
+        probe.close()
+
+    return found
 
 
 def _encode(message):
@@ -191,26 +243,76 @@ class LANTransport(object):
 
     # -- public API --------------------------------------------------------
 
+    def _send_scan(self, sock):
+        """Fire the scan out of every interface we can find.
+
+        Returns a list of (description, error-or-None) so a caller that wants
+        to report on the attempt can, and so a partial failure is visible
+        rather than silently reducing coverage.
+        """
+        payload = _encode(scan_message())
+        attempts = []
+
+        targets = [self.bind_address] if self.bind_address \
+            else local_addresses()
+        # An empty entry means "leave the interface to the routing table",
+        # which is the right answer on a single-homed box and a useful extra
+        # shot when address enumeration came back short.
+        if '' not in targets:
+            targets.append('')
+
+        for address in targets:
+            label = address or 'default route'
+            if address:
+                try:
+                    sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF,
+                                    socket.inet_aton(address))
+                except socket.error as exc:
+                    attempts.append(('multicast via %s' % label, str(exc)))
+                    continue
+            try:
+                sock.sendto(payload, (MULTICAST_GROUP, SCAN_PORT))
+                attempts.append(('multicast via %s' % label, None))
+            except socket.error as exc:
+                attempts.append(('multicast via %s' % label, str(exc)))
+
+        # Broadcast fallback: some switches and access points drop or fail to
+        # flood 239.255.255.250 while passing a plain broadcast fine.
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock.sendto(payload, (BROADCAST_ADDRESS, SCAN_PORT))
+            attempts.append(('broadcast', None))
+        except socket.error as exc:
+            attempts.append(('broadcast', str(exc)))
+
+        return attempts
+
+    def _bind_error(self, exc):
+        """Explain a failed bind on 4002 in terms the user can act on."""
+        return ('Could not listen on UDP port %d: %s. Another Govee program '
+                '(the Govee Desktop app, Home Assistant, a second Kodi) is '
+                'probably holding it -- close it and search again.'
+                % (LISTEN_PORT, exc))
+
     def discover(self, timeout=3.0):
-        """Multicast a scan and return a list of device dicts.
+        """Scan for devices and return a list of device dicts.
 
         Each dict carries at least `ip`, `device` (the Govee device id) and
         `sku` (the model, e.g. H6159). Duplicates are collapsed, because a
-        device that hears the scan twice will answer twice.
+        device that hears the scan on more than one interface answers to each.
         """
         try:
             sock = self._make_socket(want_replies=True)
         except socket.error as exc:
-            raise LANError('Could not bind UDP port %d for discovery: %s'
-                           % (LISTEN_PORT, exc))
+            raise LANError(self._bind_error(exc))
 
         found = {}
         try:
-            payload = _encode(scan_message())
-            try:
-                sock.sendto(payload, (MULTICAST_GROUP, SCAN_PORT))
-            except socket.error as exc:
-                raise LANError('Could not send discovery multicast: %s' % exc)
+            attempts = self._send_scan(sock)
+            if not any(error is None for _label, error in attempts):
+                raise LANError('Could not send the discovery scan: %s'
+                               % '; '.join('%s: %s' % (label, error)
+                                           for label, error in attempts[:3]))
 
             deadline = time.time() + max(0.5, float(timeout))
             for ip, data in self._collect(sock, deadline, 'scan'):
@@ -225,6 +327,74 @@ class LANTransport(object):
 
         self._log('LAN discovery found %d device(s)' % len(found))
         return list(found.values())
+
+    def probe(self, timeout=4.0):
+        """Diagnostic sweep. Returns a report dict; never raises.
+
+        discover() only reports what it found, which is no help when the
+        answer is nothing. This records each step -- interfaces seen, whether
+        the reply port could be opened, which probes went out, and every
+        datagram that came back including ones we could not parse -- so a
+        silent failure can be told apart from a blocked port, a busy port, and
+        devices that simply do not speak the LAN protocol.
+        """
+        report = {
+            'addresses': local_addresses(),
+            'bind_address': self.bind_address,
+            'listen_port': LISTEN_PORT,
+            'bound': False,
+            'bind_error': None,
+            'attempts': [],
+            'raw_replies': [],
+            'devices': [],
+        }
+
+        try:
+            sock = self._make_socket(want_replies=True)
+            report['bound'] = True
+        except socket.error as exc:
+            report['bind_error'] = self._bind_error(exc)
+            return report
+
+        seen = {}
+        try:
+            report['attempts'] = self._send_scan(sock)
+
+            deadline = time.time() + max(1.0, float(timeout))
+            while True:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                sock.settimeout(remaining)
+                try:
+                    payload, address = sock.recvfrom(_BUFFER_SIZE)
+                except socket.timeout:
+                    break
+                except socket.error as exc:
+                    report['raw_replies'].append(('-', 'receive failed: %s'
+                                                  % exc))
+                    break
+
+                text = payload.decode('utf-8', 'replace')
+                report['raw_replies'].append((address[0], text[:300]))
+
+                message = _decode(payload)
+                if message and message.get('cmd') == 'scan':
+                    data = message.get('data')
+                    if isinstance(data, dict) and data.get('device'):
+                        data = dict(data)
+                        data.setdefault('ip', address[0])
+                        # The scan goes out on several paths, so a device
+                        # answers more than once. Raw replies stay as they
+                        # came -- that is the diagnostic value -- but the
+                        # device list is deduplicated so the count shown to
+                        # the user is the number of lights, not of datagrams.
+                        seen[data['device'].upper()] = data
+        finally:
+            sock.close()
+
+        report['devices'] = list(seen.values())
+        return report
 
     def send(self, ip, message):
         """Fire a control message at a device. Returns True if it went out.

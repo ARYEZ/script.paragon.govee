@@ -1,3 +1,18 @@
+v1.0.2
+- LAN search now sends the scan from every local interface rather than only
+  whichever one the routing table prefers, which is what broke discovery on
+  multi-homed boxes (VPN, Hyper-V or docker bridge, wired plus wireless).
+- Added a plain broadcast fallback alongside the multicast scan, for networks
+  that drop or fail to flood 239.255.255.250.
+- New "Diagnose LAN search..." tool in the control panel, also reachable as
+  RunScript(script.paragon.govee,action=diagnose). It distinguishes the reply
+  port being held by another program, the scan failing to send, replies that
+  are not Govee, and total silence, and writes the full detail to kodi.log.
+- A failed bind on UDP 4002 now names the likely culprit instead of reporting
+  a generic error.
+- Fixed the diagnostic device count including one entry per probe path, which
+  would have reported several times the real number of lights.
+
 v1.0.1
 - Fixed the background service crashing on startup with "TypeError: an
   integer is required". Kodi parses xbmc.Player constructor arguments in the

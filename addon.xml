@@ -9,7 +9,7 @@ Targets Kodi 17.6 (Krypton) - xbmc.python 2.25.0, Python 2.7.
 The Python sources are written to run unmodified on Python 3 as well, so the
 same tree can be re-targeted at Kodi 19+ by bumping the xbmc.python import.
 -->
-<addon id="script.paragon.govee" name="Paragon Govee" version="1.0.1" provider-name="Aryez">
+<addon id="script.paragon.govee" name="Paragon Govee" version="1.0.2" provider-name="Aryez">
     <requires>
         <import addon="xbmc.python" version="2.25.0"/>
     </requires>
@@ -25,7 +25,7 @@ same tree can be re-targeted at Kodi 19+ by bumping the xbmc.python import.
         <source>https://github.com/Aryez/script.paragon.govee</source>
         <website>https://github.com/Aryez/script.paragon.govee</website>
         <forum/>
-        <news>v1.0.1[CR]Fixed the background service failing to start on Kodi 17.6 with "TypeError: an integer is required".[CR][CR]v1.0.0[CR]First release.[CR]LAN and Cloud transports with automatic per-device selection.[CR]Power, brightness, colour and colour temperature control.[CR]User-editable scenes.[CR]Playback-reactive lighting service.[CR]RunScript() actions for keymaps and favourites.</news>
+        <news>v1.0.2[CR]LAN search now probes every network interface and falls back to broadcast.[CR]Added a Diagnose LAN search tool that says why a search found nothing.[CR][CR]v1.0.1[CR]Fixed the background service failing to start on Kodi 17.6 with "TypeError: an integer is required".[CR][CR]v1.0.0[CR]First release.[CR]LAN and Cloud transports with automatic per-device selection.[CR]Power, brightness, colour and colour temperature control.[CR]User-editable scenes.[CR]Playback-reactive lighting service.[CR]RunScript() actions for keymaps and favourites.</news>
         <assets>
             <icon>icon.png</icon>
             <fanart>fanart.png</fanart>

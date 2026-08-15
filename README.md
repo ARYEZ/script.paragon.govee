@@ -127,6 +127,7 @@ RunScript(script.paragon.govee,action=color,value=FF8800)        # RRGGBB
 RunScript(script.paragon.govee,action=temp,value=2700)           # Kelvin
 RunScript(script.paragon.govee,action=scene,name=Movie Night)
 RunScript(script.paragon.govee,action=refresh)
+RunScript(script.paragon.govee,action=diagnose)                  # why no lights?
 ```
 
 Add `target=<name or device id>` to any of them to hit one light:
@@ -168,10 +169,32 @@ Example `keymaps/govee.xml` in your Kodi userdata:
 
 ## Troubleshooting
 
-**No lights found.** Confirm LAN Control is on in the Govee app, and that Kodi
-and the lights are on the same subnet. On a multi-homed box (VPN or docker
-interface) the discovery multicast may leave the wrong interface — set
-**Advanced → Network address to send from** to the LAN address.
+**No lights found.** Run **Diagnose LAN search...** from the control panel
+first — it tells these apart instead of leaving you guessing, and writes the
+full detail to `kodi.log`:
+
+* *Could not open UDP port 4002* — another Govee program holds the reply port.
+  Close the **Govee Desktop app**, and any Home Assistant Govee integration on
+  the same machine, then search again.
+* *Nothing answered* — in order of likelihood: your model does not implement
+  the Govee LAN API; inbound UDP 4002 is blocked for Kodi by the firewall; or
+  LAN Control is off for the lights in the Govee Home app.
+* *Replies that are not Govee* — something else on the network answered; the
+  raw contents are in the log.
+
+On Windows, allow `kodi.exe` through Windows Defender Firewall on private
+networks — the scan goes out fine but the replies get dropped otherwise.
+
+**The Govee Desktop app sees my lights but the add-on doesn't.** That does not
+prove the lights speak the LAN API. Govee's desktop app uses its own protocol,
+and the documented LAN API covers only certain models — largely the RGBIC
+strips and lamps. If your lights have no **LAN Control** toggle in the Govee
+Home app, they are cloud-only: set a Govee API key in Settings and switch
+**How to reach the lights** to Automatic or Cloud only.
+
+On a multi-homed box the scan used to leave the wrong interface; since v1.0.2
+it goes out on every interface plus a broadcast. If you still need to pin it,
+set **Advanced → Network address to send from** to the LAN address.
 
 **Commands work but "Show status" fails.** Status replies arrive on UDP 4002.
 If another Govee integration (Home Assistant, a second Kodi) already holds that
@@ -190,7 +213,7 @@ button that appears to do nothing is worse.
 ## Development
 
 ```
-python3 tests/test_paragon_govee.py     # 90 tests
+python3 tests/test_paragon_govee.py     # 102 tests
 python3 tests/check_py2.py              # Python 2.7 syntax gate
 python3 tools/make_assets.py            # regenerate icon.png / fanart.png
 ```

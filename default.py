@@ -139,6 +139,10 @@ def run_action(app, params, utils):
             utils.force_notify(warnings[0])
         else:
             utils.notify('Found %d light(s)' % len(devices))
+    elif action == 'diagnose':
+        import diagnostics
+        text, _report = diagnostics.run(app)
+        xbmcgui.Dialog().ok('Paragon Govee - LAN diagnostics', text)
     elif action == 'pick_scene':
         # Fired by the "choose scene" buttons in the add-on settings.
         import gui

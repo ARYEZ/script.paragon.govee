@@ -465,6 +465,59 @@ class TestLANTransport(unittest.TestCase):
             __import__('time').sleep(0.05)
         self.assertEqual(len(self.cmd_device.commands('turn')), 3)
 
+    def test_probe_reports_a_successful_sweep(self):
+        report = self.transport.probe(timeout=1.5)
+        self.assertTrue(report['bound'])
+        self.assertIsNone(report['bind_error'])
+        self.assertTrue(any(err is None for _l, err in report['attempts']))
+        self.assertTrue(report['raw_replies'])
+        self.assertEqual(len(report['devices']), 1)
+        self.assertEqual(report['devices'][0]['sku'], 'H6159')
+
+    def test_probe_records_raw_replies_it_cannot_parse(self):
+        """A non-Govee answer must show up, not be silently dropped."""
+        noise = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.addCleanup(noise.close)
+
+        original = self.scan_device._reply
+
+        def reply_with_noise(address, message):
+            original(address, message)
+            noise.sendto(b'not json at all', address)
+
+        self.scan_device._reply = reply_with_noise
+        report = self.transport.probe(timeout=1.5)
+
+        raw = ' '.join(text for _ip, text in report['raw_replies'])
+        self.assertIn('not json at all', raw)
+        self.assertEqual(len(report['devices']), 1)
+
+    def test_scan_goes_out_on_more_than_one_path(self):
+        """Multicast per interface plus a broadcast fallback."""
+        sock = self.transport._make_socket(want_replies=True)
+        try:
+            attempts = self.transport._send_scan(sock)
+        finally:
+            sock.close()
+
+        labels = [label for label, _error in attempts]
+        self.assertIn('broadcast', labels)
+        self.assertTrue(any(label.startswith('multicast') for label in labels))
+        self.assertTrue(any(error is None for _label, error in attempts))
+
+    def test_bind_failure_names_the_likely_culprit(self):
+        blocker = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.addCleanup(blocker.close)
+        message = self.transport._bind_error(socket.error('in use'))
+        self.assertIn('4002'.replace('4002', str(govee_lan.LISTEN_PORT)),
+                      message)
+        self.assertIn('Govee Desktop', message)
+
+    def test_local_addresses_excludes_loopback_and_link_local(self):
+        for address in govee_lan.local_addresses():
+            self.assertFalse(address.startswith('127.'), address)
+            self.assertFalse(address.startswith('169.254.'), address)
+
     def test_controller_discovery_builds_devices(self):
         controller = GoveeController(lan=self.transport, cloud=None,
                                      mode=devices_mod.TRANSPORT_LAN)
@@ -1040,6 +1093,132 @@ class TestPlaybackService(unittest.TestCase):
         svc.player.service = None
         svc.player.onPlayBackStopped()
         self.assertIsNone(svc._pending)
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics
+#
+# The whole point of this module is telling apart failures that look identical
+# from the control panel, so each verdict gets its own case.
+# ---------------------------------------------------------------------------
+
+class TestDiagnostics(unittest.TestCase):
+
+    def setUp(self):
+        clean_profile()
+        xbmcaddon.reset()
+        xbmcgui.reset()
+        for name in ('addon_utils', 'paragon_govee', 'diagnostics'):
+            if name in sys.modules:
+                del sys.modules[name]
+
+    def tearDown(self):
+        clean_profile()
+
+    @staticmethod
+    def report(**overrides):
+        base = {
+            'addresses': ['192.168.1.50'], 'bind_address': '',
+            'listen_port': 4002, 'bound': True, 'bind_error': None,
+            'attempts': [('multicast via 192.168.1.50', None),
+                         ('broadcast', None)],
+            'raw_replies': [], 'devices': [],
+        }
+        base.update(overrides)
+        return base
+
+    def test_port_busy_is_named_as_such(self):
+        import diagnostics
+
+        report = self.report(bound=False, bind_error='port in use')
+        self.assertEqual(diagnostics.classify(report),
+                         diagnostics.CAUSE_PORT_BUSY)
+        report['cause'] = diagnostics.CAUSE_PORT_BUSY
+        text = diagnostics.summary(report)
+        self.assertIn('Govee Desktop', text)
+
+    def test_send_failure_is_distinguished_from_silence(self):
+        import diagnostics
+
+        report = self.report(attempts=[('multicast via eth0', 'no route'),
+                                       ('broadcast', 'not permitted')])
+        self.assertEqual(diagnostics.classify(report),
+                         diagnostics.CAUSE_NO_SEND)
+        report['cause'] = diagnostics.CAUSE_NO_SEND
+        self.assertIn('no route', diagnostics.summary(report))
+
+    def test_silence_suggests_model_support_firewall_and_lan_toggle(self):
+        import diagnostics
+
+        report = self.report()
+        self.assertEqual(diagnostics.classify(report),
+                         diagnostics.CAUSE_NO_REPLIES)
+        report['cause'] = diagnostics.CAUSE_NO_REPLIES
+        text = diagnostics.summary(report)
+        self.assertIn('do not support the Govee LAN API', text)
+        self.assertIn('firewall', text)
+        self.assertIn('LAN Control', text)
+        self.assertIn('192.168.1.50', text)
+
+    def test_unparsed_replies_are_their_own_verdict(self):
+        import diagnostics
+
+        report = self.report(raw_replies=[('192.168.1.9', 'HTTP/1.1 200 OK')])
+        self.assertEqual(diagnostics.classify(report),
+                         diagnostics.CAUSE_UNPARSED)
+        report['cause'] = diagnostics.CAUSE_UNPARSED
+        self.assertIn('none was a Govee scan response',
+                      diagnostics.summary(report))
+
+    def test_success_lists_the_models_found(self):
+        import diagnostics
+
+        report = self.report(
+            raw_replies=[('192.168.1.9', '{}')],
+            devices=[{'device': 'AA:BB', 'sku': 'H6159', 'ip': '192.168.1.9'},
+                     {'device': 'CC:DD', 'sku': 'H6104', 'ip': '192.168.1.10'}])
+        self.assertEqual(diagnostics.classify(report), diagnostics.CAUSE_OK)
+        report['cause'] = diagnostics.CAUSE_OK
+        text = diagnostics.summary(report)
+        self.assertIn('H6104', text)
+        self.assertIn('H6159', text)
+
+    def test_log_lines_carry_the_detail_needed_to_debug(self):
+        import diagnostics
+
+        report = self.report(
+            raw_replies=[('192.168.1.9', 'garbage')],
+            devices=[{'device': 'AA:BB', 'sku': 'H6159', 'ip': '192.168.1.9'}])
+        report['mode'] = 'auto'
+        report['api_key_set'] = False
+        report['cause'] = diagnostics.CAUSE_OK
+
+        text = '\n'.join(diagnostics.format_lines(report))
+        self.assertIn('192.168.1.50', text)      # interfaces enumerated
+        self.assertIn('Listening on UDP 4002', text)
+        self.assertIn('garbage', text)           # raw reply preserved
+        self.assertIn('H6159', text)
+        self.assertIn('Verdict', text)
+
+    def test_run_writes_to_the_log_and_returns_a_summary(self):
+        import diagnostics
+        import xbmc
+        from paragon_govee import ParagonGovee
+
+        app = ParagonGovee()
+
+        class StubLAN(object):
+            def probe(self, timeout=4.0):
+                return TestDiagnostics.report()
+
+        app.controller.lan = StubLAN()
+        del xbmc.LOG_LINES[:]
+
+        text, report = diagnostics.run(app)
+        self.assertEqual(report['cause'], diagnostics.CAUSE_NO_REPLIES)
+        self.assertIn('nothing answered', text)
+        logged = '\n'.join(message for _level, message in xbmc.LOG_LINES)
+        self.assertIn('Paragon Govee LAN diagnostics', logged)
 
 
 # ---------------------------------------------------------------------------

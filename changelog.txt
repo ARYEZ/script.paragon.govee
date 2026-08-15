@@ -1,3 +1,19 @@
+v1.1.0
+- New "Capture lights as a new scene..." in the Scenes menu. It snapshots what
+  every light is doing right now and saves it as a scene. This is the way to
+  get a Govee Tap-to-Run into Kodi: run it in the Govee app, then capture the
+  result. The saved copy replays over the LAN, so it needs no Govee account
+  credentials and no cloud call.
+- Scenes can now carry a different setting per light, not just one uniform
+  setting for all of them. Scenes without per-light entries are unchanged, and
+  a light with no entry falls back to the scene's own values.
+- Added bulk status reads: the whole set of lights is queried in one pass
+  instead of one bind and one timeout each. Capturing 25 bulbs now costs about
+  one timeout rather than the better part of a minute.
+- Cloud and LAN state readings are now normalised onto the same keys. The
+  cloud reported powerState where the LAN reported onOff, which pushed the
+  difference onto every caller.
+
 v1.0.2
 - LAN search now sends the scan from every local interface rather than only
   whichever one the routing table prefers, which is what broke discovery on

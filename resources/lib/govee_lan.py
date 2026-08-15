@@ -424,6 +424,65 @@ class LANTransport(object):
             sock.close()
         return sent
 
+    def status_many(self, ips, timeout=3.0):
+        """Query several devices in one pass. Returns {ip: state}.
+
+        Asking 25 bulbs one at a time would mean 25 sequential binds of port
+        4002 and 25 timeouts -- the better part of a minute. Here the requests
+        all go out first and the replies are collected in a single window, so
+        the whole sweep costs about one timeout. Devices that stay silent are
+        simply absent from the result.
+        """
+        ips = [ip for ip in ips if ip]
+        if not ips:
+            return {}
+
+        try:
+            sock = self._make_socket(want_replies=True)
+        except socket.error as exc:
+            self._log('Could not bind UDP port %d for bulk status: %s'
+                      % (LISTEN_PORT, exc))
+            return {}
+
+        results = {}
+        try:
+            payload = _encode(status_message())
+            for ip in ips:
+                try:
+                    sock.sendto(payload, (ip, COMMAND_PORT))
+                except socket.error as exc:
+                    self._log('Status request to %s failed: %s' % (ip, exc))
+
+            wanted = set(ips)
+            deadline = time.time() + max(0.5, float(timeout))
+            while len(results) < len(wanted):
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                sock.settimeout(remaining)
+                try:
+                    reply, address = sock.recvfrom(_BUFFER_SIZE)
+                except socket.timeout:
+                    break
+                except socket.error as exc:
+                    self._log('Bulk status receive failed: %s' % exc)
+                    break
+
+                if address[0] not in wanted:
+                    continue
+                message = _decode(reply)
+                if message is None or message.get('cmd') != 'devStatus':
+                    continue
+                data = message.get('data')
+                if isinstance(data, dict):
+                    results[address[0]] = data
+        finally:
+            sock.close()
+
+        self._log('Bulk status answered for %d of %d device(s)'
+                  % (len(results), len(ips)))
+        return results
+
     def status(self, ip, timeout=2.0):
         """Ask a device for its current state. Returns a dict or None.
 

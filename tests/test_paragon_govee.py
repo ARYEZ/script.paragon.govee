@@ -16,6 +16,7 @@ import shutil
 import socket
 import sys
 import threading
+import time
 import unittest
 
 try:
@@ -59,16 +60,17 @@ def clean_profile():
 class FakeGoveeDevice(object):
     """A UDP socket that answers scan and devStatus like a real Govee light."""
 
-    def __init__(self, device_id, sku, port):
+    def __init__(self, device_id, sku, port, host='127.0.0.1'):
         self.device_id = device_id
         self.sku = sku
+        self.host = host
         self.received = []
         self.state = {'onOff': 1, 'brightness': 42,
                       'color': {'r': 10, 'g': 20, 'b': 30},
                       'colorTemInKelvin': 0}
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.bind(('127.0.0.1', port))
+        self.sock.bind((host, port))
         self.sock.settimeout(0.2)
         self._stop = threading.Event()
         self.thread = threading.Thread(target=self._serve)
@@ -92,7 +94,7 @@ class FakeGoveeDevice(object):
             cmd = message.get('cmd')
             if cmd == 'scan':
                 self._reply(address, {'msg': {'cmd': 'scan', 'data': {
-                    'ip': '127.0.0.1', 'device': self.device_id,
+                    'ip': self.host, 'device': self.device_id,
                     'sku': self.sku, 'wifiVersionSoft': '1.02.03'}}})
             elif cmd == 'devStatus':
                 self._reply(address, {'msg': {'cmd': 'devStatus',
@@ -101,6 +103,10 @@ class FakeGoveeDevice(object):
     def _reply(self, address, message):
         out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
+            # Bind to this device's own address so the reply carries it as the
+            # source. A real light answers from its own IP, and the transport
+            # relies on that to tell which device a status reply belongs to.
+            out.bind((self.host, 0))
             out.sendto(json.dumps(message).encode('utf-8'), address)
         finally:
             out.close()
@@ -311,6 +317,133 @@ class TestScenes(unittest.TestCase):
         self.assertTrue(errors)
 
 
+class TestSceneCapture(unittest.TestCase):
+    """Snapshotting the lights -- how a Govee Tap-to-Run gets into Kodi."""
+
+    def test_state_to_settings_reads_a_temperature_bulb(self):
+        settings = scene_lib.state_to_settings(
+            {'power': 'on', 'brightness': 30, 'colorTem': 2200,
+             'color': {'r': 0, 'g': 0, 'b': 0}})
+        self.assertEqual(settings['mode'], scene_lib.MODE_TEMP)
+        self.assertEqual(settings['kelvin'], 2200)
+        self.assertEqual(settings['brightness'], 30)
+
+    def test_state_to_settings_reads_a_colour_bulb(self):
+        settings = scene_lib.state_to_settings(
+            {'power': 'on', 'brightness': 80, 'colorTem': 0,
+             'color': {'r': 255, 'g': 40, 'b': 10}})
+        self.assertEqual(settings['mode'], scene_lib.MODE_COLOR)
+        self.assertEqual(settings['color'], [255, 40, 10])
+
+    def test_state_to_settings_treats_off_as_off(self):
+        settings = scene_lib.state_to_settings(
+            {'power': 'off', 'brightness': 80, 'colorTem': 2700})
+        self.assertEqual(settings['power'], scene_lib.POWER_OFF)
+
+    def test_state_to_settings_rejects_unreadable_state(self):
+        self.assertIsNone(scene_lib.state_to_settings(None))
+        self.assertIsNone(scene_lib.state_to_settings({}))
+        self.assertIsNone(scene_lib.state_to_settings({'power': 'unknown'}))
+
+    def test_capture_skips_devices_that_did_not_answer(self):
+        devices = [Device('AA:BB', name='One', lan=True),
+                   Device('CC:DD', name='Two', lan=True)]
+        states = {'AA:BB': {'power': 'on', 'brightness': 50, 'colorTem': 3000},
+                  'CC:DD': None}
+
+        scene, captured, skipped = scene_lib.capture_scene('Snap', devices,
+                                                           states)
+        self.assertEqual(captured, 1)
+        self.assertEqual(skipped, ['Two'])
+        self.assertEqual(scene['targets'], ['AA:BB'])
+
+    def test_captured_scene_replays_each_light_differently(self):
+        """The point of capture: one scene, 2 lights, 2 different states."""
+        warm = Device('AA:BB', name='Warm', lan=True)
+        red = Device('CC:DD', name='Red', lan=True)
+        states = {
+            'AA:BB': {'power': 'on', 'brightness': 30, 'colorTem': 2200},
+            'CC:DD': {'power': 'on', 'brightness': 80, 'colorTem': 0,
+                      'color': {'r': 255, 'g': 40, 'b': 10}},
+        }
+        scene, _captured, _skipped = scene_lib.capture_scene(
+            'Twilight', [warm, red], states)
+
+        controller = RecordingController()
+        applied, errors = scene_lib.apply_scene(controller, scene, [warm, red])
+
+        self.assertEqual(applied, 2)
+        self.assertEqual(errors, [])
+        self.assertIn(('brightness', 'AA:BB', 30), controller.calls)
+        self.assertIn(('temp', 'AA:BB', 2200), controller.calls)
+        self.assertIn(('brightness', 'CC:DD', 80), controller.calls)
+        self.assertIn(('color', 'CC:DD', 255, 40, 10), controller.calls)
+
+    def test_captured_off_lights_stay_off_on_replay(self):
+        on = Device('AA:BB', name='On', lan=True)
+        off = Device('CC:DD', name='Off', lan=True)
+        states = {'AA:BB': {'power': 'on', 'brightness': 50, 'colorTem': 3000},
+                  'CC:DD': {'power': 'off'}}
+        scene, _c, _s = scene_lib.capture_scene('Mixed', [on, off], states)
+
+        controller = RecordingController()
+        scene_lib.apply_scene(controller, scene, [on, off])
+
+        self.assertIn(('turn', 'CC:DD', False), controller.calls)
+        self.assertNotIn(('brightness', 'CC:DD', 50), controller.calls)
+        self.assertIn(('turn', 'AA:BB', True), controller.calls)
+
+    def test_captured_scene_survives_a_json_round_trip(self):
+        device = Device('AA:BB', name='One', lan=True)
+        states = {'AA:BB': {'power': 'on', 'brightness': 30, 'colorTem': 2200}}
+        scene, _c, _s = scene_lib.capture_scene('Snap', [device], states)
+
+        restored = scene_lib.normalise(json.loads(json.dumps(scene)))
+        self.assertEqual(restored['devices']['AA:BB']['kelvin'], 2200)
+        self.assertEqual(restored['devices']['AA:BB']['brightness'], 30)
+
+    def test_normalise_clamps_per_device_entries_too(self):
+        scene = scene_lib.normalise({
+            'name': 'Hand edited',
+            'devices': {'aa:bb': {'power': 'on', 'brightness': 9000,
+                                  'mode': 'nonsense', 'kelvin': -5},
+                        'cc:dd': 'not a dict'},
+        })
+        self.assertEqual(list(scene['devices'].keys()), ['AA:BB'])
+        self.assertEqual(scene['devices']['AA:BB']['brightness'], 100)
+        self.assertEqual(scene['devices']['AA:BB']['mode'],
+                         scene_lib.MODE_NONE)
+        self.assertEqual(scene['devices']['AA:BB']['kelvin'], 1500)
+
+    def test_uniform_scenes_still_apply_to_devices_with_no_entry(self):
+        """A device added after a capture falls back to the scene defaults."""
+        known = Device('AA:BB', name='Known', lan=True)
+        newcomer = Device('EE:FF', name='New', lan=True)
+        scene = scene_lib.make_scene(
+            'Mixed', brightness=55, mode=scene_lib.MODE_TEMP, kelvin=3000,
+            devices={'AA:BB': {'power': 'on', 'brightness': 10,
+                               'mode': scene_lib.MODE_TEMP, 'kelvin': 2000,
+                               'color': [255, 255, 255]}})
+
+        controller = RecordingController()
+        scene_lib.apply_scene(controller, scene, [known, newcomer])
+
+        self.assertIn(('brightness', 'AA:BB', 10), controller.calls)
+        self.assertIn(('brightness', 'EE:FF', 55), controller.calls)
+        self.assertIn(('temp', 'EE:FF', 3000), controller.calls)
+
+    def test_describe_summarises_a_captured_scene(self):
+        devices = [Device('AA:BB', name='One', lan=True),
+                   Device('CC:DD', name='Two', lan=True)]
+        states = {'AA:BB': {'power': 'on', 'brightness': 50, 'colorTem': 3000},
+                  'CC:DD': {'power': 'off'}}
+        scene, _c, _s = scene_lib.capture_scene('Snap', devices, states)
+        text = scene_lib.describe(scene)
+        self.assertIn('captured', text)
+        self.assertIn('2 light(s)', text)
+        self.assertIn('1 on', text)
+
+
 # ---------------------------------------------------------------------------
 # Device model and transport selection
 # ---------------------------------------------------------------------------
@@ -439,11 +572,11 @@ class TestLANTransport(unittest.TestCase):
     def test_control_message_reaches_the_device(self):
         self.assertTrue(self.transport.send('127.0.0.1',
                                             govee_lan.brightness_message(77)))
-        deadline = __import__('time').time() + 2
-        while __import__('time').time() < deadline:
+        deadline = time.time() + 2
+        while time.time() < deadline:
             if self.cmd_device.commands('brightness'):
                 break
-            __import__('time').sleep(0.05)
+            time.sleep(0.05)
         sent = self.cmd_device.commands('brightness')
         self.assertEqual(len(sent), 1)
         self.assertEqual(sent[0]['data']['value'], 77)
@@ -458,11 +591,11 @@ class TestLANTransport(unittest.TestCase):
         transport = govee_lan.LANTransport(bind_address='127.0.0.1', retries=3,
                                            retry_gap=0.01)
         transport.send('127.0.0.1', govee_lan.turn_message(True))
-        deadline = __import__('time').time() + 2
-        while __import__('time').time() < deadline:
+        deadline = time.time() + 2
+        while time.time() < deadline:
             if len(self.cmd_device.commands('turn')) >= 3:
                 break
-            __import__('time').sleep(0.05)
+            time.sleep(0.05)
         self.assertEqual(len(self.cmd_device.commands('turn')), 3)
 
     def test_probe_reports_a_successful_sweep(self):
@@ -517,6 +650,44 @@ class TestLANTransport(unittest.TestCase):
         for address in govee_lan.local_addresses():
             self.assertFalse(address.startswith('127.'), address)
             self.assertFalse(address.startswith('169.254.'), address)
+
+    def test_bulk_status_queries_several_devices_in_one_pass(self):
+        """25 bulbs must cost about one timeout, not 25 of them."""
+        second = FakeGoveeDevice('EE:FF:00:11', 'H6008', TEST_COMMAND_PORT,
+                                 host='127.0.0.2')
+        self.addCleanup(second.close)
+        second.state = {'onOff': 0, 'brightness': 10,
+                        'color': {'r': 1, 'g': 2, 'b': 3},
+                        'colorTemInKelvin': 2700}
+
+        started = time.time()
+        states = self.transport.status_many(['127.0.0.1', '127.0.0.2'],
+                                            timeout=2.0)
+        elapsed = time.time() - started
+
+        self.assertEqual(sorted(states.keys()), ['127.0.0.1', '127.0.0.2'])
+        self.assertEqual(states['127.0.0.1']['brightness'], 42)
+        self.assertEqual(states['127.0.0.2']['colorTemInKelvin'], 2700)
+        # Both answered, so it returns as soon as the set is complete rather
+        # than sitting out the full window twice.
+        self.assertLess(elapsed, 2.0)
+
+    def test_bulk_status_returns_what_it_got_when_one_is_silent(self):
+        states = self.transport.status_many(['127.0.0.1', '127.0.0.9'],
+                                            timeout=1.0)
+        self.assertIn('127.0.0.1', states)
+        self.assertNotIn('127.0.0.9', states)
+
+    def test_controller_get_states_maps_replies_onto_devices(self):
+        controller = GoveeController(lan=self.transport, cloud=None,
+                                     mode=devices_mod.TRANSPORT_LAN)
+        device = Device('AA:BB:CC:DD', name='Lamp', lan=True, ip='127.0.0.1')
+        ghost = Device('99:99', name='Ghost', lan=True, ip='127.0.0.9')
+
+        states = controller.get_states([device, ghost], timeout=1.0)
+        self.assertEqual(states['AA:BB:CC:DD']['power'], 'on')
+        self.assertEqual(states['AA:BB:CC:DD']['brightness'], 42)
+        self.assertIsNone(states['99:99'])
 
     def test_controller_discovery_builds_devices(self):
         controller = GoveeController(lan=self.transport, cloud=None,
@@ -1357,13 +1528,102 @@ class TestControlPanel(unittest.TestCase):
         self.assertEqual([c[0] for c in self.recorder.calls],
                          ['turn', 'brightness', 'temp'])
 
-    def test_scene_menu_last_row_opens_the_editor(self):
-        scene_count = len(self.app.scenes)
-        # Last row is "Manage scenes...", then cancel out of both menus.
-        xbmcgui.SELECT_QUEUE.extend([scene_count])
+    def test_scene_menu_trailing_rows_are_capture_then_manage(self):
+        """Pick the rows by label so adding another cannot silently rewire them."""
+        xbmcgui.SELECT_QUEUE.extend([-1])
+        self.panel().scene_menu()
+        labels = xbmcgui.SELECT_CALLS[-1][1]
+
+        xbmcgui.reset()
+        xbmcgui.SELECT_QUEUE.extend([labels.index('Manage scenes...')])
         self.panel().scene_menu()
         headings = [heading for heading, _options in xbmcgui.SELECT_CALLS]
         self.assertIn('Manage scenes', headings)
+
+        xbmcgui.reset()
+        # Capture prompts for a name; declining leaves everything alone.
+        xbmcgui.SELECT_QUEUE.extend(
+            [labels.index('Capture lights as a new scene...')])
+        before = len(self.app.scenes)
+        self.panel().scene_menu()
+        self.assertEqual(len(self.app.scenes), before)
+
+    def test_capture_saves_what_the_lights_are_doing(self):
+        one = self.app.devices[0]
+        two = Device('CC:DD', name='Strip', lan=True, ip='10.0.0.3')
+        self.app._devices = [one, two]
+
+        self.recorder.get_states = lambda devices, timeout=3.0: {
+            'AA:BB': {'power': 'on', 'brightness': 30, 'colorTem': 2200,
+                      'color': {'r': 0, 'g': 0, 'b': 0}},
+            'CC:DD': {'power': 'on', 'brightness': 80, 'colorTem': 0,
+                      'color': {'r': 255, 'g': 40, 'b': 10}},
+        }
+
+        xbmcgui.INPUT_QUEUE.append('Twilight')
+        self.panel().capture_scene()
+
+        scene = self.app.scene_by_name('Twilight')
+        self.assertIsNotNone(scene)
+        self.assertEqual(sorted(scene['devices'].keys()), ['AA:BB', 'CC:DD'])
+        self.assertEqual(scene['devices']['AA:BB']['mode'],
+                         scene_lib.MODE_TEMP)
+        self.assertEqual(scene['devices']['AA:BB']['kelvin'], 2200)
+        self.assertEqual(scene['devices']['CC:DD']['mode'],
+                         scene_lib.MODE_COLOR)
+        self.assertEqual(scene['devices']['CC:DD']['color'], [255, 40, 10])
+
+        # And it survived to disk in a form that reloads.
+        saved = json.load(open(os.path.join(PROFILE, 'scenes.json')))
+        stored = [s for s in saved if s['name'] == 'Twilight'][0]
+        self.assertEqual(stored['devices']['CC:DD']['brightness'], 80)
+
+    def test_capture_reports_lights_that_did_not_answer(self):
+        two = Device('CC:DD', name='Strip', lan=True, ip='10.0.0.3')
+        self.app._devices = [self.app.devices[0], two]
+        self.recorder.get_states = lambda devices, timeout=3.0: {
+            'AA:BB': {'power': 'on', 'brightness': 30, 'colorTem': 2200},
+            'CC:DD': None,
+        }
+
+        xbmcgui.INPUT_QUEUE.append('Partial')
+        self.panel().capture_scene()
+
+        scene = self.app.scene_by_name('Partial')
+        self.assertEqual(list(scene['devices'].keys()), ['AA:BB'])
+        shown = ' '.join(line for _h, line in xbmcgui.OK_DIALOGS)
+        self.assertIn('Strip', shown)
+
+    def test_capture_with_no_answers_saves_nothing(self):
+        self.recorder.get_states = lambda devices, timeout=3.0: {'AA:BB': None}
+        before = len(self.app.scenes)
+
+        xbmcgui.INPUT_QUEUE.append('Nothing')
+        self.panel().capture_scene()
+
+        self.assertEqual(len(self.app.scenes), before)
+        self.assertIsNone(self.app.scene_by_name('Nothing'))
+
+    def test_capture_asks_before_replacing_an_existing_scene(self):
+        self.recorder.get_states = lambda devices, timeout=3.0: {
+            'AA:BB': {'power': 'on', 'brightness': 30, 'colorTem': 2200}}
+
+        xbmcgui.INPUT_QUEUE.append('Movie Night')
+        xbmcgui.YESNO_QUEUE.append(False)   # decline the replace
+        self.panel().capture_scene()
+
+        scene = self.app.scene_by_name('Movie Night')
+        self.assertFalse(scene.get('devices'))  # original, uncaptured
+
+        xbmcgui.INPUT_QUEUE.append('Movie Night')
+        xbmcgui.YESNO_QUEUE.append(True)    # accept it this time
+        self.panel().capture_scene()
+
+        scene = self.app.scene_by_name('Movie Night')
+        self.assertTrue(scene.get('devices'))
+        # Replaced in place rather than duplicated.
+        self.assertEqual(len([s for s in self.app.scenes
+                              if s['name'] == 'Movie Night']), 1)
 
     def test_new_scene_can_be_named_and_saved(self):
         panel = self.panel()

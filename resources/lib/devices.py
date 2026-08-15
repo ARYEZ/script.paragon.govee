@@ -265,19 +265,44 @@ class GoveeController(object):
         return self._send(device, color_temp_message(kelvin), 'colorTem',
                           kelvin)
 
+    @staticmethod
+    def lan_state(raw):
+        """Normalise a LAN devStatus payload."""
+        return {
+            'power': 'on' if raw.get('onOff') else 'off',
+            'brightness': raw.get('brightness'),
+            'color': raw.get('color'),
+            'colorTem': raw.get('colorTemInKelvin'),
+            'source': TRANSPORT_LAN,
+        }
+
+    @staticmethod
+    def cloud_state(raw):
+        """Normalise a cloud state payload onto the same keys as the LAN one.
+
+        The cloud calls it `powerState`, the LAN calls it `onOff`. Leaving the
+        two shapes different pushes that difference onto every caller, so it
+        is reconciled once, here.
+        """
+        power = raw.get('powerState')
+        if power not in ('on', 'off'):
+            power = None
+        return {
+            'power': power,
+            'brightness': raw.get('brightness'),
+            'color': raw.get('color'),
+            'colorTem': raw.get('colorTem'),
+            'online': raw.get('online'),
+            'source': TRANSPORT_CLOUD,
+        }
+
     def get_state(self, device):
         """Best-effort current state as a dict, or None if unavailable."""
         transport = self.pick_transport(device)
         if transport == TRANSPORT_LAN and device.ip:
             state = self.lan.status(device.ip)
             if state is not None:
-                return {
-                    'power': 'on' if state.get('onOff') else 'off',
-                    'brightness': state.get('brightness'),
-                    'color': state.get('color'),
-                    'colorTem': state.get('colorTemInKelvin'),
-                    'source': TRANSPORT_LAN,
-                }
+                return self.lan_state(state)
             if self.mode != TRANSPORT_AUTO or not device.cloud:
                 return None
 
@@ -287,9 +312,39 @@ class GoveeController(object):
             except (CloudError, RateLimited) as exc:
                 self._log('State lookup failed for %s: %s' % (device.name, exc))
                 return None
-            state['source'] = TRANSPORT_CLOUD
-            return state
+            return self.cloud_state(state)
         return None
+
+    def get_states(self, devices, timeout=3.0):
+        """Read many devices at once. Returns {device_id: state or None}.
+
+        LAN devices are swept in a single pass; anything left over falls back
+        to a per-device read. With 25 bulbs that is the difference between a
+        few seconds and the better part of a minute.
+        """
+        states = {}
+        lan_devices = []
+
+        for device in devices:
+            states[device.device_id] = None
+            if self.pick_transport(device) == TRANSPORT_LAN and device.ip:
+                lan_devices.append(device)
+
+        if lan_devices and self.lan:
+            by_ip = self.lan.status_many([d.ip for d in lan_devices],
+                                         timeout=timeout)
+            for device in lan_devices:
+                raw = by_ip.get(device.ip)
+                if raw is not None:
+                    states[device.device_id] = self.lan_state(raw)
+
+        # Whatever the bulk sweep did not answer for, try individually. That
+        # covers cloud-only devices and LAN devices that dropped a datagram.
+        for device in devices:
+            if states[device.device_id] is None:
+                states[device.device_id] = self.get_state(device)
+
+        return states
 
 
 def build_controller(settings):

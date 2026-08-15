@@ -103,6 +103,28 @@ light or just a few. The starter set is `Movie Night`, `Paused`, `Lights Up`,
 Scenes live in `scenes.json` in the add-on's profile directory, so they survive
 upgrades and can be hand-edited or copied between boxes.
 
+### Govee Tap-to-Run scenes
+
+Tap-to-Run scenes cannot be triggered through the Govee API. They are not part
+of the LAN protocol, and the developer API key does not reach them either —
+they run over Govee's undocumented AWS IoT channel, which needs your Govee
+account email and password.
+
+Use **Scenes… → Capture lights as a new scene…** instead:
+
+1. Run the Tap-to-Run in the Govee app, so the lights are how you want them.
+2. In Kodi, capture it and give it a name.
+
+The add-on reads every light's current power, brightness, colour and colour
+temperature and stores them as a scene that holds a *different setting per
+light*. Replaying it is pure LAN — instant, no account credentials, no cloud,
+no rate limit — which also makes it safe to drive from playback.
+
+The limit: a capture is a snapshot of a static state. A Govee scene that
+animates (a DIY effect, "autoplay", anything that cycles) is captured as
+whatever frame the lights happened to be showing. For static scenes on plain
+colour bulbs it reproduces them exactly.
+
 ### Playback lighting
 
 **Settings → Playback lighting → Change the lights with playback.**
@@ -213,7 +235,7 @@ button that appears to do nothing is worse.
 ## Development
 
 ```
-python3 tests/test_paragon_govee.py     # 102 tests
+python3 tests/test_paragon_govee.py     # 120 tests
 python3 tests/check_py2.py              # Python 2.7 syntax gate
 python3 tools/make_assets.py            # regenerate icon.png / fanart.png
 ```

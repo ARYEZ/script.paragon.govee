@@ -34,7 +34,7 @@ SCENE_FILE = 'scenes.json'
 
 
 def make_scene(name, power=POWER_ON, brightness=None, mode=MODE_NONE,
-               color=None, kelvin=None, targets=None):
+               color=None, kelvin=None, targets=None, devices=None):
     return {
         'name': name,
         'power': power,
@@ -43,7 +43,134 @@ def make_scene(name, power=POWER_ON, brightness=None, mode=MODE_NONE,
         'color': list(color) if color else [255, 255, 255],
         'kelvin': kelvin or 2700,
         'targets': list(targets or []),
+        'devices': dict(devices or {}),
     }
+
+
+def _normalise_settings(raw, fallback_power=POWER_ON):
+    """Clamp one set of light settings. Shared by scenes and per-device entries."""
+    if not isinstance(raw, dict):
+        return None
+
+    power = raw.get('power', fallback_power)
+    if power not in (POWER_ON, POWER_OFF, POWER_KEEP):
+        power = fallback_power
+
+    brightness = raw.get('brightness')
+    if brightness is not None:
+        try:
+            brightness = max(1, min(100, int(brightness)))
+        except (TypeError, ValueError):
+            brightness = None
+
+    mode = raw.get('mode', MODE_NONE)
+    if mode not in (MODE_COLOR, MODE_TEMP, MODE_NONE):
+        mode = MODE_NONE
+
+    color = raw.get('color') or [255, 255, 255]
+    try:
+        color = [max(0, min(255, int(c))) for c in color][:3]
+    except (TypeError, ValueError):
+        color = [255, 255, 255]
+    while len(color) < 3:
+        color.append(255)
+
+    try:
+        kelvin = int(raw.get('kelvin') or 2700)
+    except (TypeError, ValueError):
+        kelvin = 2700
+    kelvin = max(1500, min(12000, kelvin))
+
+    return {'power': power, 'brightness': brightness, 'mode': mode,
+            'color': color, 'kelvin': kelvin}
+
+
+def settings_for(scene, device_id):
+    """The settings a scene applies to one device.
+
+    A captured scene stores a per-device entry; everything else falls back to
+    the scene's own uniform values. This is what lets one scene hold 25
+    different bulb states without every other scene growing a device map.
+    """
+    per_device = (scene.get('devices') or {}).get((device_id or '').upper())
+    if per_device:
+        return per_device
+    return {
+        'power': scene.get('power', POWER_ON),
+        'brightness': scene.get('brightness'),
+        'mode': scene.get('mode', MODE_NONE),
+        'color': scene.get('color') or [255, 255, 255],
+        'kelvin': scene.get('kelvin', 2700),
+    }
+
+
+def state_to_settings(state):
+    """Turn a device state reading into scene settings, or None if unusable.
+
+    Which appearance mode a bulb is in has to be inferred: Govee reports a
+    colour temperature of 0 when the bulb is showing RGB, and reports RGB of
+    0,0,0 when it is showing white, so whichever one is non-zero is the live
+    one.
+    """
+    if not state:
+        return None
+
+    power = state.get('power')
+    if power not in ('on', 'off'):
+        return None
+    if power == 'off':
+        return {'power': POWER_OFF, 'brightness': None, 'mode': MODE_NONE,
+                'color': [255, 255, 255], 'kelvin': 2700}
+
+    settings = {'power': POWER_ON, 'brightness': None, 'mode': MODE_NONE,
+                'color': [255, 255, 255], 'kelvin': 2700}
+
+    brightness = state.get('brightness')
+    if brightness is not None:
+        try:
+            settings['brightness'] = max(1, min(100, int(brightness)))
+        except (TypeError, ValueError):
+            pass
+
+    kelvin = state.get('colorTem')
+    color = state.get('color') or {}
+    try:
+        kelvin = int(kelvin or 0)
+    except (TypeError, ValueError):
+        kelvin = 0
+
+    if kelvin > 0:
+        settings['mode'] = MODE_TEMP
+        settings['kelvin'] = max(1500, min(12000, kelvin))
+    elif isinstance(color, dict) and any(color.get(k) for k in ('r', 'g', 'b')):
+        settings['mode'] = MODE_COLOR
+        settings['color'] = [max(0, min(255, int(color.get(k) or 0)))
+                             for k in ('r', 'g', 'b')]
+
+    return settings
+
+
+def capture_scene(name, devices, states):
+    """Build a scene from what the lights are doing right now.
+
+    Returns (scene, captured_count, skipped_names). This is how a Govee
+    Tap-to-Run gets into Kodi: run it in the Govee app, then snapshot the
+    result here. Replaying the snapshot is pure LAN, so it needs no account
+    credentials and no cloud round-trip.
+    """
+    per_device = {}
+    skipped = []
+
+    for device in devices:
+        settings = state_to_settings(states.get(device.device_id))
+        if settings is None:
+            skipped.append(device.name)
+            continue
+        per_device[device.device_id] = settings
+
+    scene = make_scene(name, targets=sorted(per_device.keys()),
+                       devices=per_device)
+    return scene, len(per_device), skipped
 
 
 def default_scenes():
@@ -81,48 +208,30 @@ def normalise(scene):
     if not name:
         return None
 
-    power = scene.get('power', POWER_ON)
-    if power not in (POWER_ON, POWER_OFF, POWER_KEEP):
-        power = POWER_ON
-
-    brightness = scene.get('brightness')
-    if brightness is not None:
-        try:
-            brightness = max(1, min(100, int(brightness)))
-        except (TypeError, ValueError):
-            brightness = None
-
-    mode = scene.get('mode', MODE_NONE)
-    if mode not in (MODE_COLOR, MODE_TEMP, MODE_NONE):
-        mode = MODE_NONE
-
-    color = scene.get('color') or [255, 255, 255]
-    try:
-        color = [max(0, min(255, int(c))) for c in color][:3]
-    except (TypeError, ValueError):
-        color = [255, 255, 255]
-    while len(color) < 3:
-        color.append(255)
-
-    try:
-        kelvin = int(scene.get('kelvin') or 2700)
-    except (TypeError, ValueError):
-        kelvin = 2700
-    kelvin = max(1500, min(12000, kelvin))
+    settings = _normalise_settings(scene) or _normalise_settings({})
 
     targets = scene.get('targets') or []
     if not isinstance(targets, list):
         targets = []
     targets = [str(t).upper() for t in targets if t]
 
+    per_device = {}
+    raw_devices = scene.get('devices')
+    if isinstance(raw_devices, dict):
+        for device_id, entry in raw_devices.items():
+            cleaned = _normalise_settings(entry)
+            if cleaned is not None and device_id:
+                per_device[str(device_id).upper()] = cleaned
+
     return {
         'name': name,
-        'power': power,
-        'brightness': brightness,
-        'mode': mode,
-        'color': color,
-        'kelvin': kelvin,
+        'power': settings['power'],
+        'brightness': settings['brightness'],
+        'mode': settings['mode'],
+        'color': settings['color'],
+        'kelvin': settings['kelvin'],
         'targets': targets,
+        'devices': per_device,
     }
 
 
@@ -158,6 +267,12 @@ def find(scenes, name):
 def describe(scene):
     """One-line summary for list rows, e.g. '35%, 2400K'."""
     bits = []
+    per_device = scene.get('devices') or {}
+    if per_device:
+        # A captured scene has no single brightness or colour to report.
+        lit = len([s for s in per_device.values()
+                   if s.get('power') != POWER_OFF])
+        return 'captured, %d light(s), %d on' % (len(per_device), lit)
     if scene.get('power') == POWER_OFF:
         return 'Off'
     if scene.get('power') == POWER_KEEP:
@@ -204,26 +319,30 @@ def apply_scene(controller, scene, devices, log_func=None):
     applied = 0
     errors = []
     for device in targets:
+        # A captured scene carries this device's own recorded settings; every
+        # other scene falls back to its single uniform set.
+        settings = settings_for(scene, device.device_id)
         try:
-            if scene['power'] == POWER_OFF:
+            if settings['power'] == POWER_OFF:
                 controller.turn(device, False)
                 applied += 1
                 continue
 
-            if scene['power'] == POWER_ON:
+            if settings['power'] == POWER_ON:
                 controller.turn(device, True)
 
             # Brightness before colour: on several Govee models a colour
             # command re-asserts the previous brightness, so setting colour
             # last keeps the two from fighting.
-            if scene['brightness'] is not None \
+            if settings['brightness'] is not None \
                     and device.supports_cmd('brightness'):
-                controller.set_brightness(device, scene['brightness'])
+                controller.set_brightness(device, settings['brightness'])
 
-            if scene['mode'] == MODE_COLOR and device.supports_cmd('color'):
-                controller.set_color(device, *scene['color'])
-            elif scene['mode'] == MODE_TEMP and device.supports_cmd('colorTem'):
-                controller.set_color_temp(device, scene['kelvin'])
+            if settings['mode'] == MODE_COLOR and device.supports_cmd('color'):
+                controller.set_color(device, *settings['color'])
+            elif settings['mode'] == MODE_TEMP \
+                    and device.supports_cmd('colorTem'):
+                controller.set_color_temp(device, settings['kelvin'])
 
             applied += 1
         except ControlError as exc:

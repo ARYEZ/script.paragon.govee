@@ -285,15 +285,72 @@ class ControlPanel(object):
             scenes = self.app.scenes
             options = ['%s  -  %s' % (s['name'], scene_lib.describe(s))
                        for s in scenes]
+            options.append('Capture lights as a new scene...')
             options.append('Manage scenes...')
 
             choice = _select('Scenes', options)
             if choice == BACK:
                 return
             if choice == len(scenes):
+                self.capture_scene()
+                continue
+            if choice == len(scenes) + 1:
                 self.manage_scenes()
                 continue
             self.app.apply_scene(scenes[choice])
+
+    def capture_scene(self):
+        """Snapshot the lights' current state into a scene.
+
+        This is the route for Govee Tap-to-Run scenes: run one in the Govee
+        app, then capture the result here. The saved copy replays over the
+        LAN, so it needs no Govee account credentials and no cloud call.
+        """
+        if not self.app.enabled_devices:
+            utils.force_notify('No lights to capture. Run a device refresh.')
+            return
+
+        name = _dialog().input('Name for the captured scene', '')
+        if not name or not name.strip():
+            return
+        name = name.strip()
+
+        existing = self.app.scene_by_name(name)
+        if existing is not None and not _dialog().yesno(
+                'Paragon Govee',
+                'A scene called "%s" already exists.\n\nReplace it with what '
+                'the lights are doing now?' % name):
+            return
+
+        progress = xbmcgui.DialogProgressBG()
+        progress.create('Paragon Govee', 'Reading the lights...')
+        try:
+            scene, captured, skipped = self.app.capture_scene(name)
+        except Exception as exc:
+            utils.log('Capture failed: %s' % exc)
+            progress.close()
+            _dialog().ok('Paragon Govee', 'Capture failed:\n\n%s' % exc)
+            return
+        progress.close()
+
+        if not captured:
+            _dialog().ok('Paragon Govee',
+                         'None of the lights reported their state.\n\n'
+                         'Status replies need UDP port %d -- close the Govee '
+                         'Desktop app and try again.' % 4002)
+            return
+
+        if self.app.save_scene(scene) is None:
+            utils.force_notify('That scene could not be saved')
+            return
+
+        message = 'Captured "%s" from %d light(s).' % (name, captured)
+        if skipped:
+            message += ('\n\n%d did not answer and were left out:\n%s'
+                        % (len(skipped), ', '.join(skipped[:6])))
+            _dialog().ok('Paragon Govee', message)
+        else:
+            utils.notify(message)
 
     def manage_scenes(self):
         while True:

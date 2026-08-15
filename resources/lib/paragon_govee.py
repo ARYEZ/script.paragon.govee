@@ -127,6 +127,33 @@ class ParagonGovee(object):
     def scene_by_name(self, name):
         return scene_lib.find(self.scenes, name)
 
+    def capture_scene(self, name, timeout=3.0):
+        """Snapshot what the lights are doing now into a named scene.
+
+        Returns (scene, captured_count, skipped_names). Nothing is saved here;
+        the caller decides whether to keep it.
+        """
+        devices = self.enabled_devices
+        states = self.controller.get_states(devices, timeout=timeout)
+        scene, captured, skipped = scene_lib.capture_scene(
+            name, devices, states)
+        utils.log('Captured "%s" from %d of %d light(s)'
+                  % (name, captured, len(devices)))
+        return scene, captured, skipped
+
+    def save_scene(self, scene):
+        """Add or replace a scene by name. Returns the normalised scene."""
+        cleaned = scene_lib.normalise(scene)
+        if cleaned is None:
+            return None
+        existing = scene_lib.find(self.scenes, cleaned['name'])
+        if existing is not None:
+            self._scenes[self._scenes.index(existing)] = cleaned
+        else:
+            self._scenes.append(cleaned)
+        self.save_scenes()
+        return cleaned
+
     def apply_scene(self, scene, announce=True):
         """Apply a scene dict and report the outcome. Returns True if any
         device accepted it."""

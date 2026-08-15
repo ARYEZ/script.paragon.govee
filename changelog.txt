@@ -1,3 +1,12 @@
+v1.1.1
+- "Capture lights as a scene..." is now on the main menu as well as inside
+  Scenes, where it was easy to miss.
+- The main menu title shows the running version, so a `git pull` can be
+  confirmed at a glance.
+- Main menu rows are now (label, handler) pairs like the rest of the menus,
+  which removes the last place where inserting a row could rewire the ones
+  below it.
+
 v1.1.0
 - New "Capture lights as a new scene..." in the Scenes menu. It snapshots what
   every light is doing right now and saves it as a scene. This is the way to

@@ -84,10 +84,15 @@ All Lights (3)
 Living Room Strip  [LAN]
 Bedside Lamp       [LAN+CLOUD]
 Scenes...
+Capture lights as a scene...
 Refresh devices
 Manage devices...
+Diagnose LAN search...
 Settings
 ```
+
+The title bar shows the running version, which is the quickest way to confirm
+a `git pull` took effect.
 
 Pick a light (or **All Lights**) for power, brightness, colour and colour
 temperature. **Manage devices** lets you rename a light, exclude one from
@@ -110,7 +115,8 @@ of the LAN protocol, and the developer API key does not reach them either —
 they run over Govee's undocumented AWS IoT channel, which needs your Govee
 account email and password.
 
-Use **Scenes… → Capture lights as a new scene…** instead:
+Use **Capture lights as a scene…** instead — it is on the main menu, and
+also inside **Scenes…**:
 
 1. Run the Tap-to-Run in the Govee app, so the lights are how you want them.
 2. In Kodi, capture it and give it a name.
@@ -235,7 +241,7 @@ button that appears to do nothing is worse.
 ## Development
 
 ```
-python3 tests/test_paragon_govee.py     # 120 tests
+python3 tests/test_paragon_govee.py     # 123 tests
 python3 tests/check_py2.py              # Python 2.7 syntax gate
 python3 tools/make_assets.py            # regenerate icon.png / fanart.png
 ```

@@ -99,13 +99,18 @@ class ControlPanel(object):
     # -- main menu ---------------------------------------------------------
 
     def main_menu(self):
+        """Top-level menu, built as (label, handler) rows.
+
+        The version is in the heading on purpose: the add-on is normally
+        installed as a git clone and updated with `git pull`, and this is the
+        quickest way to confirm which version is actually running.
+        """
         devices = self.app.enabled_devices
-        options = []
-        actions = []
+        rows = []
 
         if devices:
-            options.append('All Lights (%d)' % len(devices))
-            actions.append(('group', None))
+            rows.append(('All Lights (%d)' % len(devices),
+                         lambda: self.control_menu(None, 'All Lights')))
 
         for device in devices:
             label = device.name
@@ -113,39 +118,26 @@ class ControlPanel(object):
             if transports:
                 label = '%s  [%s]' % (device.name,
                                       '+'.join(t.upper() for t in transports))
-            options.append(label)
-            actions.append(('device', device))
+            # Bind the device to this row rather than closing over the loop
+            # variable, which would otherwise leave every row pointing at the
+            # last light.
+            rows.append((label,
+                         lambda d=device: self.control_menu([d], d.name)))
 
-        options.append('Scenes...')
-        actions.append(('scenes', None))
-        options.append('Refresh devices')
-        actions.append(('refresh', None))
-        options.append('Manage devices...')
-        actions.append(('manage', None))
-        options.append('Diagnose LAN search...')
-        actions.append(('diagnose', None))
-        options.append('Settings')
-        actions.append(('settings', None))
+        rows.extend([
+            ('Scenes...', self.scene_menu),
+            ('Capture lights as a scene...', self.capture_scene),
+            ('Refresh devices', self.refresh_devices),
+            ('Manage devices...', self.manage_devices),
+            ('Diagnose LAN search...', self.diagnose),
+            ('Settings', utils.open_settings),
+        ])
 
-        choice = _select('Paragon Govee', options)
+        choice = _select('Paragon Govee %s' % utils.ADDON_VERSION,
+                         [label for label, _handler in rows])
         if choice == BACK:
             return BACK
-
-        kind, payload = actions[choice]
-        if kind == 'group':
-            self.control_menu(None, 'All Lights')
-        elif kind == 'device':
-            self.control_menu([payload], payload.name)
-        elif kind == 'scenes':
-            self.scene_menu()
-        elif kind == 'refresh':
-            self.refresh_devices()
-        elif kind == 'manage':
-            self.manage_devices()
-        elif kind == 'diagnose':
-            self.diagnose()
-        elif kind == 'settings':
-            utils.open_settings()
+        rows[choice][1]()
         return None
 
     def diagnose(self):

@@ -1470,6 +1470,54 @@ class TestControlPanel(unittest.TestCase):
         self.panel().control_menu([self.app.devices[0]], 'Lamp')
         self.assertIn('Show status', xbmcgui.SELECT_CALLS[-1][1])
 
+    def test_main_menu_offers_capture_and_shows_the_version(self):
+        xbmcgui.SELECT_QUEUE.extend([-1])
+        self.panel().run()
+
+        heading, labels = xbmcgui.SELECT_CALLS[-1]
+        self.assertIn('Capture lights as a scene...', labels)
+        self.assertIn(xbmcaddon._INFO['version'], heading)
+
+    def test_main_menu_capture_row_reaches_capture(self):
+        self.recorder.get_states = lambda devices, timeout=3.0: {
+            'AA:BB': {'power': 'on', 'brightness': 30, 'colorTem': 2200}}
+
+        xbmcgui.SELECT_QUEUE.extend([-1])
+        self.panel().run()
+        labels = xbmcgui.SELECT_CALLS[-1][1]
+
+        xbmcgui.reset()
+        xbmcgui.SELECT_QUEUE.extend(
+            [labels.index('Capture lights as a scene...')])
+        xbmcgui.INPUT_QUEUE.append('From Main Menu')
+        self.panel().main_menu()
+
+        self.assertIsNotNone(self.app.scene_by_name('From Main Menu'))
+
+    def test_every_device_row_targets_its_own_light(self):
+        """Guards against a loop-variable closure pointing all rows at one light."""
+        self.app._devices = [
+            Device('AA:BB', name='One', lan=True, ip='10.0.0.1'),
+            Device('CC:DD', name='Two', lan=True, ip='10.0.0.2'),
+            Device('EE:FF', name='Three', lan=True, ip='10.0.0.3'),
+        ]
+
+        xbmcgui.SELECT_QUEUE.extend([-1])
+        self.panel().main_menu()
+        labels = xbmcgui.SELECT_CALLS[-1][1]
+
+        for device in self.app.devices:
+            row = [i for i, label in enumerate(labels)
+                   if label.startswith(device.name)][0]
+            del self.recorder.calls[:]
+            xbmcgui.reset()
+            # Select the device row, then "Off" inside the control menu.
+            xbmcgui.SELECT_QUEUE.extend([row, 2])
+            self.panel().main_menu()
+            self.assertEqual(self.recorder.calls,
+                             [('turn', device.device_id, False)],
+                             'row for %s drove the wrong light' % device.name)
+
     def test_brightness_preset_index_maps_to_the_shown_percentage(self):
         import gui
 

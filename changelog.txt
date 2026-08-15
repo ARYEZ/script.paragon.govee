@@ -1,0 +1,16 @@
+v1.0.0
+- First release.
+- Govee LAN transport: multicast discovery, power, brightness, colour, colour
+  temperature and status, with no API key and no rate limit.
+- Govee Cloud transport as a fallback for lights without LAN Control.
+- Automatic per-device transport selection; LAN preferred when available.
+- Devices found on both transports are merged into one entry.
+- Control panel: per-light and all-lights power, brightness, colour and colour
+  temperature, plus device rename, enable/disable and identify.
+- User-editable scenes, seeded with Movie Night, Paused, Lights Up,
+  Warm Evening, Paragon Purple and All Off.
+- Playback lighting service: applies scenes on play, pause and stop, with
+  content-type, fullscreen and delay filters. Only restores on stop if it was
+  the thing that dimmed the lights.
+- RunScript() actions for keymaps and favourites, with optional per-light
+  targeting by name or device id.

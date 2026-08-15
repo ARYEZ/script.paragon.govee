@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+Paragon Govee
+Creator: Aryez
+Year: 2026
+Part of: Paragon TV Project
+
+Targets Kodi 17.6 (Krypton) - xbmc.python 2.25.0, Python 2.7.
+The Python sources are written to run unmodified on Python 3 as well, so the
+same tree can be re-targeted at Kodi 19+ by bumping the xbmc.python import.
+-->
+<addon id="script.paragon.govee" name="Paragon Govee" version="1.0.0" provider-name="Aryez">
+    <requires>
+        <import addon="xbmc.python" version="2.25.0"/>
+    </requires>
+    <extension point="xbmc.python.script" library="default.py">
+        <provides>executable</provides>
+    </extension>
+    <extension point="xbmc.service" library="service.py" start="login"/>
+    <extension point="xbmc.addon.metadata">
+        <summary lang="en_GB">Control Govee lights from inside Kodi</summary>
+        <description lang="en_GB">Paragon Govee is part of the Paragon TV project. It replaces the Govee desktop and phone apps for day-to-day use by controlling your lights directly from Kodi.[CR][CR]Lights are driven over the Govee LAN API (UDP, no internet round-trip, no rate limit) whenever LAN Control is enabled on the device, and fall back to the Govee Cloud API when it is not. Power, brightness, RGB colour and colour temperature are all supported, along with named scenes you can build and re-use.[CR][CR]An optional background service syncs your lights to playback: dim when something starts, come part-way up on pause, and restore when playback stops. Every action is also reachable through RunScript() so it can be bound to a remote button or saved as a favourite.</description>
+        <platform>all</platform>
+        <license>GPL-3.0</license>
+        <source>https://github.com/Aryez/script.paragon.govee</source>
+        <website>https://github.com/Aryez/script.paragon.govee</website>
+        <forum/>
+        <news>v1.0.0[CR]First release.[CR]LAN and Cloud transports with automatic per-device selection.[CR]Power, brightness, colour and colour temperature control.[CR]User-editable scenes.[CR]Playback-reactive lighting service.[CR]RunScript() actions for keymaps and favourites.</news>
+        <assets>
+            <icon>icon.png</icon>
+            <fanart>fanart.png</fanart>
+        </assets>
+    </extension>
+</addon>

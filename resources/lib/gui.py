@@ -1,0 +1,600 @@
+# -*- coding: utf-8 -*-
+"""
+Paragon Govee
+Creator: Aryez
+Year: 2026
+Part of: Paragon TV Project
+
+The interactive control panel.
+
+Everything is built from the stock Kodi dialogs rather than a custom window.
+On Krypton a custom skin file has to be maintained per resolution and per skin,
+and none of that buys anything for what is essentially a list of lights and a
+handful of values -- dialogs work identically under Estuary, skin.paragon and
+whatever else the user has installed.
+"""
+
+import xbmcgui
+
+import addon_utils as utils
+import scenes as scene_lib
+from devices import ControlError
+
+# Presets offered before the user has to type anything.
+BRIGHTNESS_STEPS = [5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+
+COLOR_PRESETS = [
+    ('Warm White', (255, 180, 107)),
+    ('Cool White', (255, 255, 255)),
+    ('Paragon Purple', (150, 60, 220)),
+    ('Deep Red', (255, 0, 0)),
+    ('Amber', (255, 120, 0)),
+    ('Lime', (120, 255, 60)),
+    ('Teal', (0, 200, 180)),
+    ('Ocean Blue', (0, 80, 255)),
+    ('Magenta', (255, 0, 150)),
+]
+
+TEMP_PRESETS = [
+    ('Candle - 2000K', 2000),
+    ('Warm - 2700K', 2700),
+    ('Soft - 3000K', 3000),
+    ('Neutral - 4000K', 4000),
+    ('Cool - 5000K', 5000),
+    ('Daylight - 6500K', 6500),
+]
+
+BACK = -1
+
+
+def _dialog():
+    return xbmcgui.Dialog()
+
+
+def _select(heading, options):
+    """Wrapper around Dialog().select that returns BACK when cancelled."""
+    if not options:
+        return BACK
+    return _dialog().select(heading, options)
+
+
+def _report(result, success_message):
+    """Turn a (applied, errors) result pair into one user-facing message."""
+    done, errors = result
+    if done and not errors:
+        utils.notify(success_message)
+    elif done and errors:
+        utils.notify('%s (%d light(s) failed)' % (success_message, len(errors)))
+    elif errors:
+        utils.force_notify(errors[0])
+    else:
+        utils.force_notify('No lights to control. Run a device refresh.')
+
+
+class ControlPanel(object):
+    """Drives the nested dialog menus."""
+
+    def __init__(self, app):
+        self.app = app
+
+    # -- entry point -------------------------------------------------------
+
+    def run(self):
+        if not self.app.devices:
+            if self._first_run():
+                return
+        while True:
+            if self.main_menu() == BACK:
+                return
+
+    def _first_run(self):
+        """Offer a discovery pass when the cache is empty. True = give up."""
+        prompt = ('No Govee lights are known yet.\n\n'
+                  'Search the network for them now?')
+        if not _dialog().yesno('Paragon Govee', prompt):
+            return True
+        self.refresh_devices()
+        return not self.app.devices
+
+    # -- main menu ---------------------------------------------------------
+
+    def main_menu(self):
+        devices = self.app.enabled_devices
+        options = []
+        actions = []
+
+        if devices:
+            options.append('All Lights (%d)' % len(devices))
+            actions.append(('group', None))
+
+        for device in devices:
+            label = device.name
+            transports = device.transports()
+            if transports:
+                label = '%s  [%s]' % (device.name,
+                                      '+'.join(t.upper() for t in transports))
+            options.append(label)
+            actions.append(('device', device))
+
+        options.append('Scenes...')
+        actions.append(('scenes', None))
+        options.append('Refresh devices')
+        actions.append(('refresh', None))
+        options.append('Manage devices...')
+        actions.append(('manage', None))
+        options.append('Settings')
+        actions.append(('settings', None))
+
+        choice = _select('Paragon Govee', options)
+        if choice == BACK:
+            return BACK
+
+        kind, payload = actions[choice]
+        if kind == 'group':
+            self.control_menu(None, 'All Lights')
+        elif kind == 'device':
+            self.control_menu([payload], payload.name)
+        elif kind == 'scenes':
+            self.scene_menu()
+        elif kind == 'refresh':
+            self.refresh_devices()
+        elif kind == 'manage':
+            self.manage_devices()
+        elif kind == 'settings':
+            utils.open_settings()
+        return None
+
+    # -- control ------------------------------------------------------------
+
+    def control_menu(self, targets, heading):
+        """Power/brightness/colour menu for one device or the whole group.
+
+        Rows are (label, handler) pairs rather than a list indexed against a
+        chain of elifs, so inserting a row cannot silently rewire the ones
+        below it.
+        """
+        while True:
+            rows = [
+                ('Toggle',
+                 lambda: _report(self.app.toggle_all(targets),
+                                 'Toggled %s' % heading)),
+                ('On',
+                 lambda: _report(self.app.power_all(True, targets),
+                                 '%s on' % heading)),
+                ('Off',
+                 lambda: _report(self.app.power_all(False, targets),
+                                 '%s off' % heading)),
+                ('Brightness...',
+                 lambda: self.brightness_menu(targets, heading)),
+                ('Colour...', lambda: self.color_menu(targets, heading)),
+                ('Colour temperature...',
+                 lambda: self.temp_menu(targets, heading)),
+            ]
+            if targets and len(targets) == 1:
+                rows.append(('Show status',
+                             lambda: self.show_status(targets[0])))
+
+            choice = _select(heading, [label for label, _handler in rows])
+            if choice == BACK:
+                return
+            rows[choice][1]()
+
+    def brightness_menu(self, targets, heading):
+        options = ['%d%%' % step for step in BRIGHTNESS_STEPS]
+        options.append('Custom...')
+        choice = _select('%s - brightness' % heading, options)
+        if choice == BACK:
+            return
+
+        if choice == len(BRIGHTNESS_STEPS):
+            value = self._ask_number('Brightness (1-100)', '50')
+            if value is None:
+                return
+            percent = max(1, min(100, value))
+        else:
+            percent = BRIGHTNESS_STEPS[choice]
+
+        _report(self.app.brightness_all(percent, targets),
+                '%s at %d%%' % (heading, percent))
+
+    def color_menu(self, targets, heading):
+        options = [name for name, _rgb in COLOR_PRESETS]
+        options.append('Custom hex...')
+        choice = _select('%s - colour' % heading, options)
+        if choice == BACK:
+            return
+
+        if choice == len(COLOR_PRESETS):
+            rgb = self._ask_hex()
+            if rgb is None:
+                return
+            label = '#%02X%02X%02X' % rgb
+        else:
+            label, rgb = COLOR_PRESETS[choice]
+
+        _report(self.app.color_all(rgb, targets),
+                '%s set to %s' % (heading, label))
+
+    def temp_menu(self, targets, heading):
+        options = [name for name, _k in TEMP_PRESETS]
+        options.append('Custom...')
+        choice = _select('%s - colour temperature' % heading, options)
+        if choice == BACK:
+            return
+
+        if choice == len(TEMP_PRESETS):
+            value = self._ask_number('Colour temperature in Kelvin', '2700')
+            if value is None:
+                return
+            kelvin = max(1500, min(12000, value))
+        else:
+            kelvin = TEMP_PRESETS[choice][1]
+
+        _report(self.app.color_temp_all(kelvin, targets),
+                '%s at %dK' % (heading, kelvin))
+
+    def show_status(self, device):
+        state = self.app.controller.get_state(device)
+        if not state:
+            _dialog().ok('Paragon Govee',
+                         'Could not read the state of %s.\n\n'
+                         'LAN status needs UDP port 4002, which another '
+                         'program may be holding.' % device.name)
+            return
+
+        lines = ['Power: %s' % state.get('power', 'unknown')]
+        if state.get('brightness') is not None:
+            lines.append('Brightness: %s%%' % state.get('brightness'))
+        color = state.get('color')
+        if isinstance(color, dict) and any(color.get(k) for k in 'rgb'):
+            lines.append('Colour: RGB %s, %s, %s'
+                         % (color.get('r', 0), color.get('g', 0),
+                            color.get('b', 0)))
+        if state.get('colorTem'):
+            lines.append('Temperature: %sK' % state.get('colorTem'))
+        lines.append('Read over: %s' % str(state.get('source', '?')).upper())
+        if device.ip:
+            lines.append('Address: %s' % device.ip)
+
+        _dialog().ok(device.name, '\n'.join(lines))
+
+    # -- scenes -------------------------------------------------------------
+
+    def scene_menu(self):
+        while True:
+            scenes = self.app.scenes
+            options = ['%s  -  %s' % (s['name'], scene_lib.describe(s))
+                       for s in scenes]
+            options.append('Manage scenes...')
+
+            choice = _select('Scenes', options)
+            if choice == BACK:
+                return
+            if choice == len(scenes):
+                self.manage_scenes()
+                continue
+            self.app.apply_scene(scenes[choice])
+
+    def manage_scenes(self):
+        while True:
+            scenes = self.app.scenes
+            options = [s['name'] for s in scenes]
+            options.append('Add a new scene...')
+
+            choice = _select('Manage scenes', options)
+            if choice == BACK:
+                return
+            if choice == len(scenes):
+                self.edit_scene(None)
+            else:
+                self.edit_scene(choice)
+
+    def edit_scene(self, index):
+        """Edit an existing scene by index, or create one when index is None."""
+        scenes = self.app.scenes
+        if index is None:
+            scene = scene_lib.make_scene('New scene')
+        else:
+            scene = dict(scenes[index])
+
+        while True:
+            brightness = ('leave alone' if scene['brightness'] is None
+                          else '%d%%' % scene['brightness'])
+            if scene['mode'] == scene_lib.MODE_COLOR:
+                appearance = 'RGB %d, %d, %d' % tuple(scene['color'][:3])
+            elif scene['mode'] == scene_lib.MODE_TEMP:
+                appearance = '%dK' % scene['kelvin']
+            else:
+                appearance = 'leave alone'
+            targets = scene['targets']
+            target_label = ('all lights' if not targets
+                            else '%d selected' % len(targets))
+
+            options = [
+                'Name: %s' % scene['name'],
+                'Power: %s' % scene['power'],
+                'Brightness: %s' % brightness,
+                'Appearance: %s' % appearance,
+                'Lights: %s' % target_label,
+                'Test this scene',
+                'Save',
+            ]
+            if index is not None:
+                options.append('Delete')
+
+            choice = _select('Edit scene', options)
+            if choice == BACK:
+                return
+
+            if choice == 0:
+                name = _dialog().input('Scene name', scene['name'])
+                if name and name.strip():
+                    scene['name'] = name.strip()
+            elif choice == 1:
+                pick = _select('Power', ['Turn on', 'Turn off',
+                                         'Leave as it is'])
+                if pick != BACK:
+                    scene['power'] = [scene_lib.POWER_ON, scene_lib.POWER_OFF,
+                                      scene_lib.POWER_KEEP][pick]
+            elif choice == 2:
+                self._edit_brightness(scene)
+            elif choice == 3:
+                self._edit_appearance(scene)
+            elif choice == 4:
+                self._edit_targets(scene)
+            elif choice == 5:
+                self.app.apply_scene(scene)
+            elif choice == 6:
+                self._save_scene(scene, index)
+                return
+            elif choice == 7:
+                if _dialog().yesno('Paragon Govee',
+                                   'Delete the scene "%s"?' % scene['name']):
+                    del scenes[index]
+                    self.app.save_scenes()
+                    utils.notify('Scene deleted')
+                return
+
+    def _save_scene(self, scene, index):
+        cleaned = scene_lib.normalise(scene)
+        if cleaned is None:
+            utils.force_notify('That scene could not be saved')
+            return
+        scenes = self.app.scenes
+        clash = scene_lib.find(scenes, cleaned['name'])
+        if clash is not None and (index is None or scenes[index] is not clash):
+            if not _dialog().yesno(
+                    'Paragon Govee',
+                    'A scene called "%s" already exists.\n\nReplace it?'
+                    % cleaned['name']):
+                return
+            scenes.remove(clash)
+            if index is not None and index >= len(scenes):
+                index = None
+
+        if index is None:
+            scenes.append(cleaned)
+        else:
+            scenes[index] = cleaned
+        self.app.save_scenes()
+        utils.notify('Scene "%s" saved' % cleaned['name'])
+
+    def _edit_brightness(self, scene):
+        options = ['Leave brightness alone']
+        options += ['%d%%' % step for step in BRIGHTNESS_STEPS]
+        options.append('Custom...')
+        choice = _select('Scene brightness', options)
+        if choice == BACK:
+            return
+        if choice == 0:
+            scene['brightness'] = None
+        elif choice == len(options) - 1:
+            value = self._ask_number('Brightness (1-100)', '50')
+            if value is not None:
+                scene['brightness'] = max(1, min(100, value))
+        else:
+            scene['brightness'] = BRIGHTNESS_STEPS[choice - 1]
+
+    def _edit_appearance(self, scene):
+        choice = _select('Scene appearance',
+                         ['Colour temperature', 'Colour', 'Leave alone'])
+        if choice == BACK:
+            return
+        if choice == 2:
+            scene['mode'] = scene_lib.MODE_NONE
+        elif choice == 0:
+            options = [name for name, _k in TEMP_PRESETS] + ['Custom...']
+            pick = _select('Colour temperature', options)
+            if pick == BACK:
+                return
+            if pick == len(TEMP_PRESETS):
+                value = self._ask_number('Kelvin', str(scene['kelvin']))
+                if value is None:
+                    return
+                scene['kelvin'] = max(1500, min(12000, value))
+            else:
+                scene['kelvin'] = TEMP_PRESETS[pick][1]
+            scene['mode'] = scene_lib.MODE_TEMP
+        else:
+            options = [name for name, _rgb in COLOR_PRESETS] + ['Custom hex...']
+            pick = _select('Colour', options)
+            if pick == BACK:
+                return
+            if pick == len(COLOR_PRESETS):
+                rgb = self._ask_hex()
+                if rgb is None:
+                    return
+                scene['color'] = list(rgb)
+            else:
+                scene['color'] = list(COLOR_PRESETS[pick][1])
+            scene['mode'] = scene_lib.MODE_COLOR
+
+    def _edit_targets(self, scene):
+        """Pick which lights a scene touches, one at a time.
+
+        Krypton's Dialog().multiselect exists but silently differs across skins
+        on some builds, so this uses a plain checklist the user toggles.
+        """
+        devices = self.app.devices
+        if not devices:
+            utils.force_notify('No devices known yet')
+            return
+
+        chosen = set(scene['targets'])
+        while True:
+            options = ['Apply to all lights' + (' [x]' if not chosen else '')]
+            for device in devices:
+                mark = '[x]' if device.device_id in chosen else '[ ]'
+                options.append('%s %s' % (mark, device.name))
+            options.append('Done')
+
+            choice = _select('Lights in this scene', options)
+            if choice == BACK or choice == len(options) - 1:
+                scene['targets'] = sorted(chosen)
+                return
+            if choice == 0:
+                chosen = set()
+                continue
+            device = devices[choice - 1]
+            if device.device_id in chosen:
+                chosen.discard(device.device_id)
+            else:
+                chosen.add(device.device_id)
+
+    # -- devices ------------------------------------------------------------
+
+    def refresh_devices(self):
+        progress = xbmcgui.DialogProgressBG()
+        progress.create('Paragon Govee', 'Searching for lights...')
+        try:
+            devices, warnings = self.app.refresh_devices()
+        except Exception as exc:  # a failed refresh must not kill the panel
+            utils.log('Device refresh raised: %s' % exc)
+            progress.close()
+            _dialog().ok('Paragon Govee', 'Device search failed:\n\n%s' % exc)
+            return
+        progress.close()
+
+        if not devices:
+            message = 'No lights were found.\n\n' \
+                      'Check that LAN Control is switched on for each light ' \
+                      'in the Govee Home app, or set a Govee API key in ' \
+                      'Settings to use the cloud.'
+            if warnings:
+                message += '\n\n' + '\n'.join(warnings[:2])
+            _dialog().ok('Paragon Govee', message)
+            return
+
+        lan_count = len([d for d in devices if d.lan])
+        summary = 'Found %d light(s), %d on the LAN.' % (len(devices),
+                                                         lan_count)
+        if warnings:
+            _dialog().ok('Paragon Govee',
+                         summary + '\n\n' + '\n'.join(warnings[:2]))
+        else:
+            utils.notify(summary)
+
+    def manage_devices(self):
+        while True:
+            devices = self.app.devices
+            if not devices:
+                utils.force_notify('No devices known yet')
+                return
+            options = []
+            for device in devices:
+                mark = '[x]' if device.enabled else '[ ]'
+                options.append('%s %s  (%s)'
+                               % (mark, device.name,
+                                  '+'.join(device.transports()) or 'offline'))
+
+            choice = _select('Manage devices - select to edit', options)
+            if choice == BACK:
+                return
+            self._edit_device(devices[choice])
+
+    def _edit_device(self, device):
+        options = [
+            'Rename (currently "%s")' % device.name,
+            'Disable' if device.enabled else 'Enable',
+            'Identify (flash this light)',
+        ]
+        choice = _select(device.name, options)
+        if choice == BACK:
+            return
+
+        if choice == 0:
+            name = _dialog().input('Light name', device.name)
+            if name and name.strip():
+                device.name = name.strip()
+                self.app.save_devices()
+                utils.notify('Renamed to %s' % device.name)
+        elif choice == 1:
+            device.enabled = not device.enabled
+            self.app.save_devices()
+            utils.notify('%s %s' % (device.name,
+                                    'enabled' if device.enabled else 'disabled'))
+        elif choice == 2:
+            self._identify(device)
+
+    def _identify(self, device):
+        """Blink a light so the user can tell which physical unit it is."""
+        import time
+
+        try:
+            for _ in range(3):
+                self.app.controller.turn(device, False)
+                time.sleep(0.4)
+                self.app.controller.turn(device, True)
+                time.sleep(0.4)
+        except ControlError as exc:
+            utils.force_notify(str(exc))
+            return
+        utils.notify('Flashed %s' % device.name)
+
+    # -- input helpers ------------------------------------------------------
+
+    @staticmethod
+    def _ask_number(heading, default):
+        value = _dialog().input(heading, str(default),
+                                type=xbmcgui.INPUT_NUMERIC)
+        if value is None or value == '':
+            return None
+        try:
+            return int(value)
+        except ValueError:
+            utils.force_notify('That is not a number')
+            return None
+
+    @staticmethod
+    def _ask_hex():
+        """Prompt for an RGB hex colour, returning an (r, g, b) tuple."""
+        value = _dialog().input('Colour as hex, e.g. FF8800', '')
+        if not value:
+            return None
+        text = value.strip().lstrip('#')
+        if len(text) == 3:
+            text = ''.join(char * 2 for char in text)
+        if len(text) != 6:
+            utils.force_notify('Enter six hex digits, e.g. FF8800')
+            return None
+        try:
+            return (int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16))
+        except ValueError:
+            utils.force_notify('That is not a valid hex colour')
+            return None
+
+
+def pick_scene_for_setting(app, setting_id):
+    """Settings helper: choose a scene and write its name into `setting_id`."""
+    scenes = app.scenes
+    if not scenes:
+        utils.force_notify('No scenes are defined yet')
+        return
+    options = ['(none)'] + ['%s  -  %s' % (s['name'], scene_lib.describe(s))
+                            for s in scenes]
+    choice = _select('Choose a scene', options)
+    if choice == BACK:
+        return
+    name = '' if choice == 0 else scenes[choice - 1]['name']
+    utils.set_setting(setting_id, name)
+    utils.notify('Scene set to %s' % (name or 'none'))

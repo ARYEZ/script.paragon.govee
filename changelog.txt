@@ -1,3 +1,13 @@
+v1.0.1
+- Fixed the background service crashing on startup with "TypeError: an
+  integer is required". Kodi parses xbmc.Player constructor arguments in the
+  base type, before a subclass __init__ runs, so the player subclass must
+  take no arguments; the service now attaches itself after construction.
+- Player callbacks are inert before the service attaches and after it
+  detaches, so a callback arriving during startup or shutdown is a no-op.
+- Test stubs now reproduce Kodi's constructor-argument parsing for both
+  xbmc.Player and xbmc.Monitor, so this class of failure is caught off-device.
+
 v1.0.0
 - First release.
 - Govee LAN transport: multicast discovery, power, brightness, colour, colour

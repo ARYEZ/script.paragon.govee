@@ -1007,6 +1007,40 @@ class TestPlaybackService(unittest.TestCase):
         svc.player.onPlayBackStopped()
         self.assertEqual(svc._pending, service.EVENT_STOP)
 
+    def test_player_subclass_takes_no_constructor_arguments(self):
+        """Kodi parses Player() arguments in the base type.
+
+        Passing anything to the subclass constructor fails with
+        "an integer is required" before the subclass __init__ runs, which is
+        what crashed the service on Krypton. The service must construct the
+        player bare and attach itself afterwards.
+        """
+        import service
+
+        with self.assertRaises(TypeError):
+            service.GoveePlayer(object())
+
+        player = service.GoveePlayer()
+        self.assertIsNone(player.service)
+
+        svc = service.GoveeService()
+        self.assertIs(svc.player.service, svc)
+
+    def test_callbacks_are_inert_before_attach_and_after_detach(self):
+        import service
+
+        player = service.GoveePlayer()
+        player.onPlayBackStarted()  # must not raise on a bare player
+
+        svc = service.GoveeService()
+        svc.player.onPlayBackStarted()
+        self.assertEqual(svc._pending, service.EVENT_PLAY)
+
+        svc._pending = None
+        svc.player.service = None
+        svc.player.onPlayBackStopped()
+        self.assertIsNone(svc._pending)
+
 
 # ---------------------------------------------------------------------------
 # Control panel menu walks

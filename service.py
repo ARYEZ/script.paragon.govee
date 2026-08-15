@@ -42,31 +42,47 @@ WINDOW_FULLSCREEN_VIDEO = 12005
 
 
 class GoveePlayer(xbmc.Player):
-    """Records playback transitions for the service loop to act on."""
+    """Records playback transitions for the service loop to act on.
 
-    def __init__(self, service):
-        xbmc.Player.__init__(self)
+    Deliberately has no __init__ and takes no constructor arguments. Kodi's
+    binding declares Player(int playerCore) and parses constructor arguments
+    in the base type, before any subclass __init__ runs -- so passing the
+    service in fails with "an integer is required" and no subclass frame in
+    the traceback. The service is attached after construction instead; see
+    `attach`.
+    """
+
+    service = None
+
+    def attach(self, service):
         self.service = service
+        return self
+
+    def _notify(self, event):
+        # Callbacks can fire between construction and attach, and Kodi keeps
+        # calling them after the service asks to be torn down.
+        if self.service is not None:
+            self.service.queue_event(event)
 
     def onPlayBackStarted(self):
-        self.service.queue_event(EVENT_PLAY)
+        self._notify(EVENT_PLAY)
 
     # Kodi 18+ fires this once streams are actually open. Harmless on Krypton,
     # which never calls it; the queue collapses the duplicate on newer builds.
     def onAVStarted(self):
-        self.service.queue_event(EVENT_PLAY)
+        self._notify(EVENT_PLAY)
 
     def onPlayBackPaused(self):
-        self.service.queue_event(EVENT_PAUSE)
+        self._notify(EVENT_PAUSE)
 
     def onPlayBackResumed(self):
-        self.service.queue_event(EVENT_PLAY)
+        self._notify(EVENT_PLAY)
 
     def onPlayBackStopped(self):
-        self.service.queue_event(EVENT_STOP)
+        self._notify(EVENT_STOP)
 
     def onPlayBackEnded(self):
-        self.service.queue_event(EVENT_STOP)
+        self._notify(EVENT_STOP)
 
 
 class GoveeService(xbmc.Monitor):
@@ -78,7 +94,7 @@ class GoveeService(xbmc.Monitor):
         self._pending = None
         self._last_applied = None
         self._we_dimmed = False
-        self.player = GoveePlayer(self)
+        self.player = GoveePlayer().attach(self)
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -244,7 +260,11 @@ if __name__ == '__main__':
     except Exception as error:
         utils.log('Service crashed: %s' % error, xbmc.LOGERROR)
     finally:
-        # Drop the Player reference so Kodi can tear the callbacks down.
+        # Kodi can still fire Player callbacks after the loop exits. Detaching
+        # turns those into no-ops rather than letting them reach a service
+        # that is on its way out.
+        if service.player is not None:
+            service.player.service = None
         service.player = None
         del service
         # `time` is imported for this: give Kodi a beat to collect the

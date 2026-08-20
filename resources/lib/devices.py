@@ -336,14 +336,24 @@ class GoveeController(object):
             for device in lan_devices:
                 raw = by_ip.get(device.ip)
                 if raw is not None:
+                    self._log('State of %s: %s' % (device.name, raw))
                     states[device.device_id] = self.lan_state(raw)
+                else:
+                    self._log('No state from %s (%s)'
+                              % (device.name, device.ip))
 
-        # Whatever the bulk sweep did not answer for, try individually. That
-        # covers cloud-only devices and LAN devices that dropped a datagram.
+        # Only non-LAN devices fall back to an individual read. Retrying a
+        # silent LAN device here would re-bind port 4002 once per device and
+        # sit out a timeout each time -- with 25 bulbs that is half a minute
+        # of the UI apparently hung. status_many already retries internally,
+        # so a device still missing at this point is genuinely not answering.
         for device in devices:
-            if states[device.device_id] is None:
+            if states[device.device_id] is None and device not in lan_devices:
                 states[device.device_id] = self.get_state(device)
 
+        answered = len([s for s in states.values() if s])
+        self._log('Read state from %d of %d device(s)'
+                  % (answered, len(devices)))
         return states
 
 

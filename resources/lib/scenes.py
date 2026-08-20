@@ -104,13 +104,42 @@ def settings_for(scene, device_id):
     }
 
 
-def state_to_settings(state):
+def detect_brightness_scale(states):
+    """Work out which brightness scale a set of readings uses.
+
+    Govee documents brightness as 0-100, but some models report the raw 0-254
+    register. A single reading of 51 is ambiguous -- it could be 51% or 20% --
+    so the scale cannot be inferred per bulb. Across a whole capture it can:
+    one reading above 100 proves the wider scale, and every bulb in a capture
+    is answering the same way.
+
+    Returns 100 or 254. When every bulb happens to read at or below 100 on a
+    254-scale model the two are indistinguishable and this returns 100; the
+    captured values are then self-consistently low rather than wrong in a way
+    that changes which bulb is brighter than which.
+    """
+    for state in (states or {}).values():
+        if not state:
+            continue
+        value = state.get('brightness')
+        try:
+            if value is not None and int(value) > 100:
+                return 254
+        except (TypeError, ValueError):
+            continue
+    return 100
+
+
+def state_to_settings(state, brightness_scale=100):
     """Turn a device state reading into scene settings, or None if unusable.
 
     Which appearance mode a bulb is in has to be inferred: Govee reports a
     colour temperature of 0 when the bulb is showing RGB, and reports RGB of
     0,0,0 when it is showing white, so whichever one is non-zero is the live
     one.
+
+    `brightness_scale` comes from detect_brightness_scale() over the whole
+    capture; see there for why it cannot be decided from one reading.
     """
     if not state:
         return None
@@ -128,9 +157,13 @@ def state_to_settings(state):
     brightness = state.get('brightness')
     if brightness is not None:
         try:
-            settings['brightness'] = max(1, min(100, int(brightness)))
+            brightness = int(brightness)
         except (TypeError, ValueError):
-            pass
+            brightness = None
+    if brightness is not None:
+        if brightness_scale and brightness_scale != 100:
+            brightness = int(round(brightness * 100.0 / brightness_scale))
+        settings['brightness'] = max(1, min(100, brightness))
 
     kelvin = state.get('colorTem')
     color = state.get('color') or {}
@@ -160,9 +193,11 @@ def capture_scene(name, devices, states):
     """
     per_device = {}
     skipped = []
+    scale = detect_brightness_scale(states)
 
     for device in devices:
-        settings = state_to_settings(states.get(device.device_id))
+        settings = state_to_settings(states.get(device.device_id),
+                                     brightness_scale=scale)
         if settings is None:
             skipped.append(device.name)
             continue

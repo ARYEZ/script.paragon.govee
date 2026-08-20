@@ -337,12 +337,15 @@ class ControlPanel(object):
             return
 
         message = 'Captured "%s" from %d light(s).' % (name, captured)
+        summary = self.app.summarise_capture(scene)
+        if summary:
+            message += '\n\n' + summary
         if skipped:
             message += ('\n\n%d did not answer and were left out:\n%s'
                         % (len(skipped), ', '.join(skipped[:6])))
-            _dialog().ok('Paragon Govee', message)
-        else:
-            utils.notify(message)
+        # Always shown rather than a toast: this is the moment to notice that
+        # every bulb read back as white, or every brightness as 100%.
+        _dialog().ok('Paragon Govee', message)
 
     def manage_scenes(self):
         while True:

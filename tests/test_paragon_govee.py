@@ -345,6 +345,46 @@ class TestSceneCapture(unittest.TestCase):
         self.assertIsNone(scene_lib.state_to_settings({}))
         self.assertIsNone(scene_lib.state_to_settings({'power': 'unknown'}))
 
+    def test_brightness_scale_is_detected_across_the_whole_capture(self):
+        """One reading over 100 proves the 0-254 scale for every bulb."""
+        wide = {'a': {'power': 'on', 'brightness': 203},
+                'b': {'power': 'on', 'brightness': 51}}
+        self.assertEqual(scene_lib.detect_brightness_scale(wide), 254)
+
+        narrow = {'a': {'power': 'on', 'brightness': 80},
+                  'b': {'power': 'on', 'brightness': 20}}
+        self.assertEqual(scene_lib.detect_brightness_scale(narrow), 100)
+
+        # Unreadable and absent entries must not confuse the detection.
+        self.assertEqual(scene_lib.detect_brightness_scale(
+            {'a': None, 'b': {'power': 'on'}, 'c': {'brightness': 'x'}}), 100)
+        self.assertEqual(scene_lib.detect_brightness_scale({}), 100)
+
+    def test_capture_rescales_every_bulb_once_the_scale_is_known(self):
+        """The clamp symptom: two different levels both captured at 100%."""
+        low = Device('AA:BB', name='Low', lan=True)
+        high = Device('CC:DD', name='High', lan=True)
+        states = {
+            'AA:BB': {'power': 'on', 'brightness': 51, 'colorTem': 2700},
+            'CC:DD': {'power': 'on', 'brightness': 203, 'colorTem': 2700},
+        }
+        scene, _c, _s = scene_lib.capture_scene('Wide', [low, high], states)
+
+        self.assertEqual(scene['devices']['AA:BB']['brightness'], 20)
+        self.assertEqual(scene['devices']['CC:DD']['brightness'], 80)
+
+    def test_capture_leaves_documented_scale_readings_alone(self):
+        low = Device('AA:BB', name='Low', lan=True)
+        high = Device('CC:DD', name='High', lan=True)
+        states = {
+            'AA:BB': {'power': 'on', 'brightness': 20, 'colorTem': 2700},
+            'CC:DD': {'power': 'on', 'brightness': 80, 'colorTem': 2700},
+        }
+        scene, _c, _s = scene_lib.capture_scene('Narrow', [low, high], states)
+
+        self.assertEqual(scene['devices']['AA:BB']['brightness'], 20)
+        self.assertEqual(scene['devices']['CC:DD']['brightness'], 80)
+
     def test_capture_skips_devices_that_did_not_answer(self):
         devices = [Device('AA:BB', name='One', lan=True),
                    Device('CC:DD', name='Two', lan=True)]
@@ -688,6 +728,34 @@ class TestLANTransport(unittest.TestCase):
         self.assertEqual(states['AA:BB:CC:DD']['power'], 'on')
         self.assertEqual(states['AA:BB:CC:DD']['brightness'], 42)
         self.assertIsNone(states['99:99'])
+
+    def test_silent_lan_devices_do_not_trigger_a_serial_retry_storm(self):
+        """Each fallback read re-binds port 4002 and sits out a timeout.
+
+        With 25 bulbs, retrying every miss individually is half a minute of
+        the UI apparently hung. status_many already retries internally.
+        """
+        calls = []
+        real_status = self.transport.status
+
+        def counting_status(ip, timeout=2.0):
+            calls.append(ip)
+            return real_status(ip, timeout=timeout)
+
+        self.transport.status = counting_status
+        controller = GoveeController(lan=self.transport, cloud=None,
+                                     mode=devices_mod.TRANSPORT_LAN)
+        ghosts = [Device('%02d' % i, name='Ghost %d' % i, lan=True,
+                         ip='127.0.0.%d' % (20 + i)) for i in range(5)]
+
+        started = time.time()
+        states = controller.get_states(ghosts, timeout=0.6)
+        elapsed = time.time() - started
+
+        self.assertTrue(all(state is None for state in states.values()))
+        self.assertEqual(calls, [], 'silent LAN devices were re-read serially')
+        # Two bulk rounds at 0.6s, not five sequential 2s reads.
+        self.assertLess(elapsed, 4.0)
 
     def test_controller_discovery_builds_devices(self):
         controller = GoveeController(lan=self.transport, cloud=None,

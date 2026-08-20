@@ -137,9 +137,57 @@ class ParagonGovee(object):
         states = self.controller.get_states(devices, timeout=timeout)
         scene, captured, skipped = scene_lib.capture_scene(
             name, devices, states)
-        utils.log('Captured "%s" from %d of %d light(s)'
+
+        # Logged unconditionally rather than behind verbose logging: capture
+        # is a deliberate one-off action, and when the result looks wrong the
+        # raw reading per bulb is the only thing that says why.
+        utils.log('--- capture "%s": %d of %d light(s) ---'
                   % (name, captured, len(devices)))
+        for device in devices:
+            utils.log('  %s [%s] raw=%s -> %s'
+                      % (device.name, device.ip,
+                         states.get(device.device_id),
+                         (scene.get('devices') or {}).get(device.device_id)))
+        utils.log('--- end capture ---')
         return scene, captured, skipped
+
+    @staticmethod
+    def summarise_capture(scene):
+        """Counts by mode and the brightness range, for the capture dialog.
+
+        Wrong-looking captures have a shape: every bulb reading as white when
+        they are coloured, or every brightness pinned at 100. Showing the
+        spread makes that obvious on screen instead of only in the log.
+        """
+        entries = list((scene.get('devices') or {}).values())
+        counts = {'off': 0, scene_lib.MODE_COLOR: 0, scene_lib.MODE_TEMP: 0,
+                  scene_lib.MODE_NONE: 0}
+        levels = []
+        for entry in entries:
+            if entry.get('power') == scene_lib.POWER_OFF:
+                counts['off'] += 1
+                continue
+            counts[entry.get('mode', scene_lib.MODE_NONE)] += 1
+            if entry.get('brightness') is not None:
+                levels.append(entry['brightness'])
+
+        bits = []
+        if counts[scene_lib.MODE_COLOR]:
+            bits.append('%d colour' % counts[scene_lib.MODE_COLOR])
+        if counts[scene_lib.MODE_TEMP]:
+            bits.append('%d white' % counts[scene_lib.MODE_TEMP])
+        if counts[scene_lib.MODE_NONE]:
+            bits.append('%d with no colour reading'
+                        % counts[scene_lib.MODE_NONE])
+        if counts['off']:
+            bits.append('%d off' % counts['off'])
+        if levels:
+            low, high = min(levels), max(levels)
+            if low == high:
+                bits.append('brightness %d%%' % low)
+            else:
+                bits.append('brightness %d-%d%%' % (low, high))
+        return ', '.join(bits)
 
     def save_scene(self, scene):
         """Add or replace a scene by name. Returns the normalised scene."""

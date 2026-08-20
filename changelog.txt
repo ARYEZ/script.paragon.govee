@@ -1,3 +1,15 @@
+v1.1.4
+- New "Check status reporting..." on a single light's menu, also reachable as
+  RunScript(script.paragon.govee,action=verifystatus). It sets the bulb to a
+  known colour, reads the status back, reports whether the two agree, and puts
+  the bulb back. Capture, Toggle and Show status all trust devStatus, so
+  whether a model keeps it up to date decides whether those features can work
+  at all -- and no single capture can tell a stale reading apart from a light
+  that something else had set.
+- The probe uses a second colour when the bulb already shows the first, since
+  probing with the colour already displayed could not distinguish a stale
+  reading from a correct one.
+
 v1.1.3
 - Fixed a coloured bulb being captured as white. Govee reports both a colour
   and a colour temperature, and they can disagree; taking the temperature

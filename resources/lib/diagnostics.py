@@ -137,3 +137,158 @@ def run(app, timeout=4.0):
     for line in format_lines(report):
         utils.log(line)
     return summary(report), report
+
+
+# ---------------------------------------------------------------------------
+# Status round-trip
+# ---------------------------------------------------------------------------
+
+# Distinctive probe colours. The alternate is used when the bulb already
+# happens to be showing something close to the first, which would make a
+# stale reading indistinguishable from a correct one.
+PROBE_COLOR = (255, 0, 255)
+PROBE_ALT = (0, 255, 0)
+PROBE_BRIGHTNESS = 40
+PROBE_TOLERANCE = 40
+
+VERDICT_TRACKS = 'tracks'
+VERDICT_STALE = 'stale'
+VERDICT_NO_READBACK = 'no_readback'
+VERDICT_CONTROL_FAILED = 'control_failed'
+
+
+def _rgb_of(state):
+    """Pull an (r, g, b) tuple out of a state reading, or None."""
+    if not state:
+        return None
+    color = state.get('color')
+    if not isinstance(color, dict):
+        return None
+    try:
+        return tuple(int(color.get(k) or 0) for k in ('r', 'g', 'b'))
+    except (TypeError, ValueError):
+        return None
+
+
+def _close_to(rgb, wanted):
+    if not rgb:
+        return False
+    return all(abs(a - b) <= PROBE_TOLERANCE for a, b in zip(rgb, wanted))
+
+
+def verify_status(app, device, settle=1.5, sleep_func=None):
+    """Set a known colour on one bulb, read it back, and see if it matches.
+
+    Capture, toggle and "Show status" all trust devStatus. On some models it
+    reports a fixed or long-stale payload no matter what the bulb is actually
+    doing, which makes every one of those features quietly wrong. Guessing
+    from a single capture cannot tell that apart from a bulb that was simply
+    set by something else -- driving the bulb ourselves and reading it back
+    can.
+
+    The bulb's previous state is restored afterwards on a best-effort basis.
+    """
+    import time as _time
+    from devices import ControlError
+    import scenes as scene_lib
+
+    sleep = sleep_func or _time.sleep
+    controller = app.controller
+    report = {'device': device.name, 'model': device.model, 'ip': device.ip,
+              'before': None, 'probe': None, 'readback': None,
+              'verdict': None, 'error': None}
+
+    before = controller.get_state(device)
+    report['before'] = before
+
+    probe = PROBE_COLOR
+    if _close_to(_rgb_of(before), probe):
+        probe = PROBE_ALT
+    report['probe'] = probe
+
+    try:
+        controller.turn(device, True)
+        controller.set_brightness(device, PROBE_BRIGHTNESS)
+        controller.set_color(device, probe[0], probe[1], probe[2])
+    except ControlError as exc:
+        report['verdict'] = VERDICT_CONTROL_FAILED
+        report['error'] = str(exc)
+        return report
+
+    sleep(settle)
+    readback = controller.get_state(device)
+    report['readback'] = readback
+
+    if not readback:
+        report['verdict'] = VERDICT_NO_READBACK
+    elif _close_to(_rgb_of(readback), probe):
+        report['verdict'] = VERDICT_TRACKS
+    else:
+        report['verdict'] = VERDICT_STALE
+
+    # Put the bulb back roughly where it was. Best effort only: if the state
+    # could not be read going in, there is nothing to restore to.
+    restore = scene_lib.state_to_settings(before)
+    if restore:
+        try:
+            if restore['power'] == scene_lib.POWER_OFF:
+                controller.turn(device, False)
+            else:
+                if restore['brightness'] is not None:
+                    controller.set_brightness(device, restore['brightness'])
+                if restore['mode'] == scene_lib.MODE_COLOR:
+                    controller.set_color(device, *restore['color'])
+                elif restore['mode'] == scene_lib.MODE_TEMP:
+                    controller.set_color_temp(device, restore['kelvin'])
+        except ControlError as exc:
+            utils.log('Could not restore %s after probe: %s'
+                      % (device.name, exc))
+
+    for line in format_verify_lines(report):
+        utils.log(line)
+    return report
+
+
+def format_verify_lines(report):
+    return [
+        '--- Paragon Govee status round-trip ---',
+        'Device: %s (%s) at %s' % (report.get('device'), report.get('model'),
+                                   report.get('ip')),
+        'Before: %s' % (report.get('before'),),
+        'Set to: RGB %s at %d%%' % (report.get('probe'), PROBE_BRIGHTNESS),
+        'Read back: %s' % (report.get('readback'),),
+        'Verdict: %s' % report.get('verdict'),
+        '--- end round-trip ---',
+    ]
+
+
+def verify_summary(report):
+    """On-screen wording for each round-trip verdict."""
+    verdict = report.get('verdict')
+    name = report.get('device')
+    probe = report.get('probe') or ()
+
+    if verdict == VERDICT_TRACKS:
+        return ('%s reports back what it was set to.\n\n'
+                'Status reporting works on this model, so Capture, Toggle and '
+                'Show status are trustworthy. A capture that disagrees with '
+                'the room means those lights were set by a Govee app scene, '
+                'which the LAN protocol cannot see.' % name)
+
+    if verdict == VERDICT_STALE:
+        readback = _rgb_of(report.get('readback'))
+        return ('%s did NOT report back what it was set to.\n\n'
+                'Set to RGB %s, reported %s.\n\n'
+                'This model does not keep its LAN status up to date, so '
+                'Capture cannot work on it and Toggle cannot tell whether a '
+                'light is already on. Build scenes by hand instead '
+                '(Scenes - Manage scenes - Add).'
+                % (name, probe, readback))
+
+    if verdict == VERDICT_NO_READBACK:
+        return ('%s accepted the command but never answered a status '
+                'request.\n\nStatus replies arrive on UDP 4002 -- close the '
+                'Govee Desktop app and try again.' % name)
+
+    return ('Could not drive %s at all:\n\n%s'
+            % (name, report.get('error') or 'unknown error'))

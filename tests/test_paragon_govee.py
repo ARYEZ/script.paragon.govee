@@ -1497,6 +1497,122 @@ class TestDiagnostics(unittest.TestCase):
         self.assertIn('Paragon Govee LAN diagnostics', logged)
 
 
+class TestStatusRoundTrip(unittest.TestCase):
+    """Does this model report back what it was set to?
+
+    Capture, Toggle and Show status all trust devStatus. When a model reports
+    a fixed or long-stale payload, all three are quietly wrong, and no single
+    capture can tell that apart from a light something else had set.
+    """
+
+    def setUp(self):
+        clean_profile()
+        xbmcaddon.reset()
+        xbmcgui.reset()
+        for name in ('addon_utils', 'paragon_govee', 'diagnostics'):
+            if name in sys.modules:
+                del sys.modules[name]
+
+        from paragon_govee import ParagonGovee
+        self.app = ParagonGovee()
+        self.device = Device('AA:BB', name='Lamp', model='H6008', lan=True,
+                             ip='10.0.0.11')
+        self.app._devices = [self.device]
+
+    def tearDown(self):
+        clean_profile()
+
+    def _controller(self, readback):
+        recorder = RecordingController()
+        states = [{'power': 'on', 'brightness': 1, 'colorTem': 3800,
+                   'color': {'r': 0, 'g': 0, 'b': 0}}, readback]
+
+        def get_state(device):
+            return states.pop(0) if states else readback
+
+        recorder.get_state = get_state
+        self.app.controller = recorder
+        return recorder
+
+    def test_a_bulb_that_reports_the_probe_back_is_trustworthy(self):
+        import diagnostics
+
+        self._controller({'power': 'on', 'brightness': 40, 'colorTem': 0,
+                          'color': {'r': 255, 'g': 0, 'b': 255}})
+        report = diagnostics.verify_status(self.app, self.device,
+                                           sleep_func=lambda _s: None)
+
+        self.assertEqual(report['verdict'], diagnostics.VERDICT_TRACKS)
+        self.assertIn('reports back what it was set to',
+                      diagnostics.verify_summary(report))
+
+    def test_a_bulb_stuck_on_a_stale_payload_is_called_out(self):
+        import diagnostics
+
+        # The real H6008 behaviour under investigation: set to magenta, still
+        # reporting 0,0,0 at 3800K.
+        self._controller({'power': 'on', 'brightness': 1, 'colorTem': 3800,
+                          'color': {'r': 0, 'g': 0, 'b': 0}})
+        report = diagnostics.verify_status(self.app, self.device,
+                                           sleep_func=lambda _s: None)
+
+        self.assertEqual(report['verdict'], diagnostics.VERDICT_STALE)
+        text = diagnostics.verify_summary(report)
+        self.assertIn('did NOT report back', text)
+        self.assertIn('Capture cannot work', text)
+
+    def test_no_readback_is_its_own_verdict(self):
+        import diagnostics
+
+        self._controller(None)
+        report = diagnostics.verify_status(self.app, self.device,
+                                           sleep_func=lambda _s: None)
+        self.assertEqual(report['verdict'], diagnostics.VERDICT_NO_READBACK)
+        self.assertIn('4002', diagnostics.verify_summary(report))
+
+    def test_a_bulb_that_cannot_be_driven_is_distinguished(self):
+        import diagnostics
+
+        recorder = RecordingController(fail_on={'AA:BB'})
+        recorder.get_state = lambda device: None
+        self.app.controller = recorder
+
+        report = diagnostics.verify_status(self.app, self.device,
+                                           sleep_func=lambda _s: None)
+        self.assertEqual(report['verdict'],
+                         diagnostics.VERDICT_CONTROL_FAILED)
+        self.assertIn('Could not drive', diagnostics.verify_summary(report))
+
+    def test_probe_avoids_the_colour_the_bulb_already_shows(self):
+        """Probing with the current colour could not tell stale from correct."""
+        import diagnostics
+
+        already = {'power': 'on', 'brightness': 40, 'colorTem': 0,
+                   'color': {'r': 255, 'g': 0, 'b': 255}}
+        recorder = RecordingController()
+        recorder.get_state = lambda device: already
+        self.app.controller = recorder
+
+        report = diagnostics.verify_status(self.app, self.device,
+                                           sleep_func=lambda _s: None)
+        self.assertEqual(report['probe'], diagnostics.PROBE_ALT)
+
+    def test_the_bulb_is_put_back_after_the_probe(self):
+        import diagnostics
+
+        recorder = self._controller(
+            {'power': 'on', 'brightness': 40, 'colorTem': 0,
+             'color': {'r': 255, 'g': 0, 'b': 255}})
+        diagnostics.verify_status(self.app, self.device,
+                                  sleep_func=lambda _s: None)
+
+        # Last colour-ish command should restore the original 3800K white,
+        # not leave the bulb sitting on the probe colour.
+        temps = [c for c in recorder.calls if c[0] == 'temp']
+        self.assertTrue(temps, 'bulb was not restored')
+        self.assertEqual(temps[-1][2], 3800)
+
+
 # ---------------------------------------------------------------------------
 # Control panel menu walks
 #

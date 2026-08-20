@@ -136,6 +136,12 @@ not what you are looking at.
 The tell is a capture that disagrees with the room. A real example: 25 bulbs
 visibly pink, of which 22 reported `RGB 0,0,0, 3800K, brightness 1`.
 
+To find out whether your model reports its state honestly at all, pick a single
+light and run **Check status reporting…** from its menu. It sets that bulb to a
+known colour, reads the status back, and tells you whether the two agree. If
+they don't, the model never updates its LAN status — capture cannot work on it,
+and Toggle cannot tell whether a light is already on.
+
 So capture is reliable for lights set **through this add-on** (or anything
 else driving plain colour/brightness over the LAN), and unreliable for lights
 set by a Govee app scene or Tap-to-Run.
@@ -178,6 +184,7 @@ RunScript(script.paragon.govee,action=temp,value=2700)           # Kelvin
 RunScript(script.paragon.govee,action=scene,name=Movie Night)
 RunScript(script.paragon.govee,action=refresh)
 RunScript(script.paragon.govee,action=diagnose)                  # why no lights?
+RunScript(script.paragon.govee,action=verifystatus)              # does status work?
 ```
 
 Add `target=<name or device id>` to any of them to hit one light:
@@ -263,7 +270,7 @@ button that appears to do nothing is worse.
 ## Development
 
 ```
-python3 tests/test_paragon_govee.py     # 132 tests
+python3 tests/test_paragon_govee.py     # 138 tests
 python3 tests/check_py2.py              # Python 2.7 syntax gate
 python3 tools/make_assets.py            # regenerate icon.png / fanart.png
 ```

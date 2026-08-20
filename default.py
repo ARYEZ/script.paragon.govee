@@ -143,6 +143,17 @@ def run_action(app, params, utils):
         import diagnostics
         text, _report = diagnostics.run(app)
         xbmcgui.Dialog().ok('Paragon Govee - LAN diagnostics', text)
+    elif action == 'verifystatus':
+        import diagnostics
+        chosen = targets or app.enabled_devices
+        if not chosen:
+            utils.force_notify('No lights to test. Run a device refresh.')
+        else:
+            # Not named `report`: that is the local result-reporting helper
+            # above, and shadowing it here would be a trap for the next edit.
+            outcome = diagnostics.verify_status(app, chosen[0])
+            xbmcgui.Dialog().ok('Paragon Govee - status check',
+                                diagnostics.verify_summary(outcome))
     elif action == 'pick_scene':
         # Fired by the "choose scene" buttons in the add-on settings.
         import gui

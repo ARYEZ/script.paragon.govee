@@ -156,6 +156,30 @@ class ControlPanel(object):
         progress.close()
         _dialog().ok('Paragon Govee - LAN diagnostics', text)
 
+    def verify_status(self, device):
+        """Drive one bulb to a known colour and see if it reports it back."""
+        import diagnostics
+
+        if not _dialog().yesno(
+                'Paragon Govee',
+                'This will briefly set %s to a test colour and then put it '
+                'back, to check whether it reports its state honestly.\n\n'
+                'Continue?' % device.name):
+            return
+
+        progress = xbmcgui.DialogProgressBG()
+        progress.create('Paragon Govee', 'Testing %s...' % device.name)
+        try:
+            report = diagnostics.verify_status(self.app, device)
+        except Exception as exc:
+            utils.log('Status round-trip failed: %s' % exc)
+            progress.close()
+            _dialog().ok('Paragon Govee', 'Test failed:\n\n%s' % exc)
+            return
+        progress.close()
+        _dialog().ok('Paragon Govee - status check',
+                     diagnostics.verify_summary(report))
+
     # -- control ------------------------------------------------------------
 
     def control_menu(self, targets, heading):
@@ -185,6 +209,8 @@ class ControlPanel(object):
             if targets and len(targets) == 1:
                 rows.append(('Show status',
                              lambda: self.show_status(targets[0])))
+                rows.append(('Check status reporting...',
+                             lambda: self.verify_status(targets[0])))
 
             choice = _select(heading, [label for label, _handler in rows])
             if choice == BACK:

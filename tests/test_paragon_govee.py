@@ -335,6 +335,43 @@ class TestSceneCapture(unittest.TestCase):
         self.assertEqual(settings['mode'], scene_lib.MODE_COLOR)
         self.assertEqual(settings['color'], [255, 40, 10])
 
+    def test_a_tinted_bulb_wins_over_a_stale_temperature(self):
+        """Taking kelvin first would capture a pink bulb as white."""
+        settings = scene_lib.state_to_settings(
+            {'power': 'on', 'brightness': 60, 'colorTem': 3800,
+             'color': {'r': 255, 'g': 40, 'b': 150}})
+        self.assertEqual(settings['mode'], scene_lib.MODE_COLOR)
+        self.assertEqual(settings['color'], [255, 40, 150])
+
+    def test_white_rgb_beside_a_temperature_is_read_as_white(self):
+        """A real H610A reading: 255,255,255 next to colorTem 3800."""
+        settings = scene_lib.state_to_settings(
+            {'power': 'on', 'brightness': 35, 'colorTem': 3800,
+             'color': {'r': 255, 'g': 255, 'b': 255}})
+        self.assertEqual(settings['mode'], scene_lib.MODE_TEMP)
+        self.assertEqual(settings['kelvin'], 3800)
+
+    def test_zero_rgb_beside_a_temperature_is_read_as_white(self):
+        """A real H6008 reading: 0,0,0 next to colorTem 3800."""
+        settings = scene_lib.state_to_settings(
+            {'power': 'on', 'brightness': 1, 'colorTem': 3800,
+             'color': {'r': 0, 'g': 0, 'b': 0}})
+        self.assertEqual(settings['mode'], scene_lib.MODE_TEMP)
+
+    def test_colour_with_no_temperature_is_kept(self):
+        """A real H6008 reading: 141,95,255 with colorTem 0."""
+        settings = scene_lib.state_to_settings(
+            {'power': 'on', 'brightness': 1, 'colorTem': 0,
+             'color': {'r': 141, 'g': 95, 'b': 255}})
+        self.assertEqual(settings['mode'], scene_lib.MODE_COLOR)
+        self.assertEqual(settings['color'], [141, 95, 255])
+
+    def test_near_grey_is_not_mistaken_for_a_colour(self):
+        settings = scene_lib.state_to_settings(
+            {'power': 'on', 'brightness': 50, 'colorTem': 4000,
+             'color': {'r': 250, 'g': 255, 'b': 248}})
+        self.assertEqual(settings['mode'], scene_lib.MODE_TEMP)
+
     def test_state_to_settings_treats_off_as_off(self):
         settings = scene_lib.state_to_settings(
             {'power': 'off', 'brightness': 80, 'colorTem': 2700})

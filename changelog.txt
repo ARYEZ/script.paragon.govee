@@ -1,3 +1,14 @@
+v1.1.3
+- Fixed a coloured bulb being captured as white. Govee reports both a colour
+  and a colour temperature, and they can disagree; taking the temperature
+  first meant a bulb showing pink alongside a stale 3800K reading was captured
+  as 3800K white. A tinted colour now wins, and a grey or zero colour -- which
+  carries no colour information -- still defers to the temperature.
+- The capture dialog now says what capture cannot see: the Govee LAN protocol
+  has no scene concept, so a bulb driven into a scene by the Govee app keeps
+  reporting whatever was last set locally. Capture records what the bulb
+  reports, which for an app-set scene is not what you are looking at.
+
 v1.1.2
 - Fixed capture appearing to hang. Any bulb the bulk status sweep missed was
   re-read individually, and each of those re-binds UDP 4002 and waits out its

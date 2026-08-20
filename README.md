@@ -126,10 +126,32 @@ temperature and stores them as a scene that holds a *different setting per
 light*. Replaying it is pure LAN — instant, no account credentials, no cloud,
 no rate limit — which also makes it safe to drive from playback.
 
-The limit: a capture is a snapshot of a static state. A Govee scene that
-animates (a DIY effect, "autoplay", anything that cycles) is captured as
-whatever frame the lights happened to be showing. For static scenes on plain
-colour bulbs it reproduces them exactly.
+**The real limit — read this before relying on capture.** The Govee LAN
+protocol reports only power, brightness, RGB and colour temperature. It has no
+concept of a *scene*. When the Govee app drives a bulb into one of its scenes,
+that happens through the cloud and the bulb's LAN status keeps reporting
+whatever was last set locally — so capture faithfully records a state that is
+not what you are looking at.
+
+The tell is a capture that disagrees with the room. A real example: 25 bulbs
+visibly pink, of which 22 reported `RGB 0,0,0, 3800K, brightness 1`.
+
+So capture is reliable for lights set **through this add-on** (or anything
+else driving plain colour/brightness over the LAN), and unreliable for lights
+set by a Govee app scene or Tap-to-Run.
+
+What works instead:
+
+1. Build the look in Kodi — **Scenes… → Manage scenes… → Add**, set colour and
+   brightness, and use **Test this scene** until it looks right. Once the
+   add-on has set it over the LAN, the bulbs report it correctly and a capture
+   round-trips.
+2. Or capture a Tap-to-Run and then correct the entries by hand in
+   `scenes.json` in the add-on's profile directory.
+
+A capture is also a snapshot of a *static* state: an animated Govee scene
+(a DIY effect, "autoplay", anything that cycles) is captured as whatever frame
+the lights happened to be on.
 
 ### Playback lighting
 
@@ -241,7 +263,7 @@ button that appears to do nothing is worse.
 ## Development
 
 ```
-python3 tests/test_paragon_govee.py     # 123 tests
+python3 tests/test_paragon_govee.py     # 132 tests
 python3 tests/check_py2.py              # Python 2.7 syntax gate
 python3 tools/make_assets.py            # regenerate icon.png / fanart.png
 ```

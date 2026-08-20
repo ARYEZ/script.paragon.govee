@@ -32,6 +32,11 @@ MODE_NONE = 'none'
 
 SCENE_FILE = 'scenes.json'
 
+# How far apart the RGB channels must be before a reading counts as a real
+# colour rather than a shade of white. Govee bulbs report white either as
+# 0,0,0 or as an equal-channel value alongside a colour temperature.
+GREY_TOLERANCE = 12
+
 
 def make_scene(name, power=POWER_ON, brightness=None, mode=MODE_NONE,
                color=None, kelvin=None, targets=None, devices=None):
@@ -165,20 +170,39 @@ def state_to_settings(state, brightness_scale=100):
             brightness = int(round(brightness * 100.0 / brightness_scale))
         settings['brightness'] = max(1, min(100, brightness))
 
-    kelvin = state.get('colorTem')
-    color = state.get('color') or {}
     try:
-        kelvin = int(kelvin or 0)
+        kelvin = int(state.get('colorTem') or 0)
     except (TypeError, ValueError):
         kelvin = 0
 
-    if kelvin > 0:
+    rgb = None
+    color = state.get('color')
+    if isinstance(color, dict):
+        try:
+            rgb = [max(0, min(255, int(color.get(k) or 0)))
+                   for k in ('r', 'g', 'b')]
+        except (TypeError, ValueError):
+            rgb = None
+
+    # Which mode a bulb is in has to be inferred, and the two fields can
+    # disagree. A bulb showing white reports either 0,0,0 or the white
+    # equivalent next to its temperature; a bulb showing an actual colour
+    # reports that colour. So a *tinted* RGB is the live value even when a
+    # stale temperature sits beside it -- taking kelvin first would capture a
+    # pink bulb as white. A grey or zero RGB carries no colour information,
+    # so there the temperature wins.
+    lit = bool(rgb) and any(rgb)
+    tinted = lit and (max(rgb) - min(rgb)) > GREY_TOLERANCE
+
+    if tinted:
+        settings['mode'] = MODE_COLOR
+        settings['color'] = rgb
+    elif kelvin > 0:
         settings['mode'] = MODE_TEMP
         settings['kelvin'] = max(1500, min(12000, kelvin))
-    elif isinstance(color, dict) and any(color.get(k) for k in ('r', 'g', 'b')):
+    elif lit:
         settings['mode'] = MODE_COLOR
-        settings['color'] = [max(0, min(255, int(color.get(k) or 0)))
-                             for k in ('r', 'g', 'b')]
+        settings['color'] = rgb
 
     return settings
 

@@ -343,6 +343,14 @@ class ControlPanel(object):
         if skipped:
             message += ('\n\n%d did not answer and were left out:\n%s'
                         % (len(skipped), ', '.join(skipped[:6])))
+        # The LAN protocol has no scene concept, so a bulb driven into a
+        # Govee app scene keeps reporting whatever was last set locally.
+        # Saying so here is the difference between the user trusting a wrong
+        # capture and knowing to set the look from Kodi first.
+        message += ('\n\nIf that does not match what you see, the bulbs '
+                    'reported a stale state: Govee app scenes are invisible '
+                    'over the LAN. Set the look from Kodi first, then '
+                    'capture.')
         # Always shown rather than a toast: this is the moment to notice that
         # every bulb read back as white, or every brightness as 100%.
         _dialog().ok('Paragon Govee', message)

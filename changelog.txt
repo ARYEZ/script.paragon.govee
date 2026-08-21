@@ -1,3 +1,15 @@
+v1.7.1
+- A cycle step now sends only the colour. Power and brightness are already
+  where the previous step left them, so re-sending them was two thirds of the
+  traffic for no visible effect -- with 25 lights and retries, roughly 150
+  datagrams a step rather than 50.
+- Scene application paces its sends a few milliseconds apart. A burst of
+  datagrams to every light at once is the shape of traffic consumer access
+  points drop, which was already measured to cost status replies on this
+  hardware. Over 25 lights the whole pause is about a tenth of a second, and
+  a dropped colour command during a cycle leaves a bulb visibly stuck until
+  the next tick.
+
 v1.7.0
 - Mix scenes can cycle. In the scene editor, "Cycle colours" sets how often
   every light moves along to the next colour in the mix: 15 seconds up to 15

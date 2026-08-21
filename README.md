@@ -216,6 +216,11 @@ Applying any other scene **stops** a running cycle, so dimming for a film is
 not overwritten a minute later. While one is running the main menu shows a
 **Stop cycling (…)** row.
 
+A cycle step sends only the colour — power and brightness are already where
+the previous step left them — and sends are paced a few milliseconds apart, so
+a step is a manageable trickle rather than a burst of datagrams to every light
+at once.
+
 **Cycling is a LAN feature.** Every step drives every light, which is free over
 the LAN and metered over the cloud. 25 cloud-driven lights on a one-minute
 cycle is roughly 36,000 API calls a day against a Govee limit near 10,000 — the
@@ -425,7 +430,7 @@ button that appears to do nothing is worse.
 ## Development
 
 ```
-python3 tests/test_paragon_govee.py     # 212 tests
+python3 tests/test_paragon_govee.py     # 217 tests
 python3 tests/check_py2.py              # Python 2.7 syntax gate
 python3 tools/make_assets.py            # regenerate icon.png / fanart.png
 ```

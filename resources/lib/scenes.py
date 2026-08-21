@@ -365,13 +365,26 @@ def capture_scene(name, devices, states):
     return scene, len(per_device), skipped
 
 
-def apply_settings(controller, device, settings):
+def apply_settings(controller, device, settings, colors_only=False):
     """Drive one device to one settings dict. Raises ControlError on failure.
 
     Shared by scene application, the status round-trip's restore step, and the
     naming walkthrough's highlight-and-put-back, so the ordering rules live in
     one place rather than being re-derived at each call site.
+
+    `colors_only` sends just the colour, for a cycle step where power and
+    brightness are already where the previous step left them. That is a third
+    of the datagrams -- worth having when a step means talking to every light
+    at once and a dropped packet leaves a bulb visibly stuck on the last
+    colour until the next tick.
     """
+    if colors_only:
+        if settings['mode'] == MODE_COLOR and device.supports_cmd('color'):
+            controller.set_color(device, *settings['color'])
+        elif settings['mode'] == MODE_TEMP and device.supports_cmd('colorTem'):
+            controller.set_color_temp(device, settings['kelvin'])
+        return
+
     if settings['power'] == POWER_OFF:
         controller.turn(device, False)
         return
@@ -541,7 +554,8 @@ def scene_targets(scene, devices):
 
 
 def apply_scene(controller, scene, devices, log_func=None,
-                shuffle_func=None, assignment=None):
+                shuffle_func=None, assignment=None, colors_only=False,
+                gap=0.004, sleep_func=None):
     """Apply `scene` and return (applied_count, [error strings]).
 
     Every device is attempted even if an earlier one failed, so one
@@ -571,10 +585,20 @@ def apply_scene(controller, scene, devices, log_func=None,
                                     [d.device_id for d in targets],
                                     shuffle_func)
 
+    import time as _time
+    sleep = sleep_func or _time.sleep
+
     applied = 0
     errors = []
     per_device_map = scene.get('devices') or {}
     for index, device in enumerate(targets):
+        # A few milliseconds between lights. Sending 25 lights' worth of
+        # datagrams as fast as the loop runs is the shape of traffic consumer
+        # access points drop, which was already measured to cost replies on
+        # this hardware; the whole pause is a tenth of a second over 25
+        # lights and buys a far better chance every command lands.
+        if index and gap:
+            sleep(gap)
         # A captured scene carries this device's own recorded settings; every
         # other scene falls back to its single uniform set.
         settings = settings_for(scene, device.device_id)
@@ -589,7 +613,8 @@ def apply_scene(controller, scene, devices, log_func=None,
                 settings['color'] = list(
                     scene['colors'][slot % len(scene['colors'])]['color'])
         try:
-            apply_settings(controller, device, settings)
+            apply_settings(controller, device, settings,
+                           colors_only=colors_only)
             applied += 1
         except ControlError as exc:
             log('Scene "%s" failed on %s: %s' % (scene['name'], device.name, exc))

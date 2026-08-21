@@ -629,6 +629,70 @@ class TestCycling(unittest.TestCase):
         colors = [c for c in recorder.calls if c[0] == 'color']
         self.assertEqual(len(colors), 4)
 
+    def test_a_step_sends_only_the_colour(self):
+        """Power and brightness are already where the last step left them."""
+        app, recorder, _lib = self.build()
+        app.apply_scene(app.scene_by_name('Party'))
+        del recorder.calls[:]
+
+        app.cycle_step(now=1000.0)
+
+        kinds = set(c[0] for c in recorder.calls)
+        self.assertEqual(kinds, set(['color']))
+        self.assertEqual(len(recorder.calls), 4)
+
+    def test_the_first_apply_still_sets_power_and_brightness(self):
+        app, recorder, lib = self.build()
+        scene = app.scene_by_name('Party')
+        scene['brightness'] = 60
+        app.save_scene(scene)
+        del recorder.calls[:]
+
+        app.apply_scene(app.scene_by_name('Party'))
+
+        kinds = set(c[0] for c in recorder.calls)
+        self.assertEqual(kinds, set(['turn', 'brightness', 'color']))
+
+    def test_sends_are_paced_across_the_lights(self):
+        """A burst of datagrams to every bulb at once gets dropped."""
+        import scenes as fresh_scenes
+
+        devices = [Device('%02X' % i, name='L%d' % i, lan=True)
+                   for i in range(6)]
+        gaps = []
+        fresh_scenes.apply_scene(
+            RecordingController(),
+            fresh_scenes.make_scene('Solid', mode=fresh_scenes.MODE_COLOR,
+                                    color=[1, 2, 3]),
+            devices, sleep_func=lambda s: gaps.append(s))
+
+        # One pause between each pair of lights, none before the first.
+        self.assertEqual(len(gaps), 5)
+        self.assertTrue(all(g > 0 for g in gaps))
+
+    def test_pacing_can_be_switched_off(self):
+        import scenes as fresh_scenes
+
+        gaps = []
+        fresh_scenes.apply_scene(
+            RecordingController(),
+            fresh_scenes.make_scene('Solid', mode=fresh_scenes.MODE_COLOR),
+            [Device('AA', name='L', lan=True), Device('BB', name='M', lan=True)],
+            gap=0, sleep_func=lambda s: gaps.append(s))
+        self.assertEqual(gaps, [])
+
+    def test_colours_only_still_honours_temperature_entries(self):
+        import scenes as fresh_scenes
+
+        controller = RecordingController()
+        device = Device('AA', name='L', lan=True)
+        fresh_scenes.apply_settings(
+            controller, device,
+            {'power': 'on', 'brightness': 50, 'mode': fresh_scenes.MODE_TEMP,
+             'kelvin': 2700, 'color': [255, 255, 255]},
+            colors_only=True)
+        self.assertEqual(controller.calls, [('temp', 'AA', 2700)])
+
     def test_not_due_yet_means_no_step(self):
         app, _recorder, _lib = self.build()
         app.apply_scene(app.scene_by_name('Party'))

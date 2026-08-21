@@ -285,9 +285,12 @@ class ParagonGovee(object):
 
         assignment = scene_lib.rotate_assignment(assignment,
                                                  len(scene['colors']))
+        # Colour only: power and brightness are already where the previous
+        # step left them, so re-sending them is two thirds of the traffic for
+        # no visible effect.
         applied, errors = scene_lib.apply_scene(
             self.controller, scene, self.devices, log_func=utils.debug,
-            assignment=assignment)
+            assignment=assignment, colors_only=True)
 
         now = time.time() if now is None else now
         state['assignment'] = assignment

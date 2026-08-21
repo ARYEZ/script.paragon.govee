@@ -72,15 +72,15 @@ def _parse_int(value, low, high):
 
 
 def _parse_hex(value):
-    text = (value or '').strip().lstrip('#')
-    if len(text) == 3:
-        text = ''.join(char * 2 for char in text)
-    if len(text) != 6:
-        return None
-    try:
-        return (int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16))
-    except ValueError:
-        return None
+    """Parse a hex colour for action=color. Returns (r, g, b) or None.
+
+    Shares the add-on's colour parser so a RunScript() binding accepts the
+    same 8-digit codes the Govee app produces as the control panel does.
+    """
+    import scenes as scene_lib
+
+    rgb, _note = scene_lib.parse_hex_color(value)
+    return rgb
 
 
 def run_action(app, params, utils):
@@ -118,7 +118,7 @@ def run_action(app, params, utils):
     elif action == 'color':
         rgb = _parse_hex(params.get('value'))
         if rgb is None:
-            utils.force_notify('color needs value=RRGGBB')
+            utils.force_notify('color needs value=RRGGBB or AARRGGBB')
         else:
             report(app.color_all(rgb, targets), 'Colour set')
     elif action == 'temp':

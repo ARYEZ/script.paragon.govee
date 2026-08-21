@@ -38,6 +38,53 @@ SCENE_FILE = 'scenes.json'
 GREY_TOLERANCE = 12
 
 
+def parse_hex_color(text):
+    """Parse a hex colour string. Returns ((r, g, b), note) or (None, reason).
+
+    Accepts 3, 6 and 8 digit forms. The Govee app shows 8-digit codes, which
+    carry an alpha byte the LAN protocol has no use for -- but which end the
+    alpha sits on is not consistent between tools: Android writes AARRGGBB,
+    CSS Color 4 writes RRGGBBAA, and Govee documents neither.
+
+    So it is inferred rather than assumed. An alpha byte in a colour picker is
+    almost always FF (opaque), so whichever end is FF is taken as the alpha.
+    When both ends are FF, or neither is, the two readings are genuinely
+    indistinguishable and alpha-first wins, since the Govee app is a mobile
+    app and that is the Android convention. `note` always says which reading
+    was used so a wrong guess is visible rather than silently applied.
+    """
+    if not text:
+        return None, 'No colour entered'
+
+    cleaned = text.strip().lstrip('#').replace(' ', '')
+    for char in cleaned:
+        if char not in '0123456789abcdefABCDEF':
+            return None, 'That is not a hex colour'
+
+    if len(cleaned) == 3:
+        cleaned = ''.join(char * 2 for char in cleaned)
+        note = ''
+    elif len(cleaned) == 6:
+        note = ''
+    elif len(cleaned) == 8:
+        head, tail = cleaned[0:2].upper(), cleaned[6:8].upper()
+        if head == 'FF' and tail != 'FF':
+            cleaned, note = cleaned[2:], 'read as AARRGGBB'
+        elif tail == 'FF' and head != 'FF':
+            cleaned, note = cleaned[:6], 'read as RRGGBBAA'
+        else:
+            cleaned, note = cleaned[2:], 'read as AARRGGBB (ambiguous)'
+    else:
+        return None, 'Enter 6 or 8 hex digits, e.g. FF8800 or FFFF8800'
+
+    try:
+        rgb = (int(cleaned[0:2], 16), int(cleaned[2:4], 16),
+               int(cleaned[4:6], 16))
+    except ValueError:
+        return None, 'That is not a hex colour'
+    return rgb, note
+
+
 def make_scene(name, power=POWER_ON, brightness=None, mode=MODE_NONE,
                color=None, kelvin=None, targets=None, devices=None):
     return {

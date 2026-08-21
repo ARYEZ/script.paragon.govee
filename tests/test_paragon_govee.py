@@ -317,6 +317,51 @@ class TestScenes(unittest.TestCase):
         self.assertTrue(errors)
 
 
+class TestHexColours(unittest.TestCase):
+    """The Govee app hands out 8-digit codes, so pasting one must work."""
+
+    def test_six_and_three_digit_forms(self):
+        self.assertEqual(scene_lib.parse_hex_color('FF8800')[0], (255, 136, 0))
+        self.assertEqual(scene_lib.parse_hex_color('#FF8800')[0], (255, 136, 0))
+        self.assertEqual(scene_lib.parse_hex_color('f80')[0], (255, 136, 0))
+        self.assertEqual(scene_lib.parse_hex_color(' ff 88 00 ')[0],
+                         (255, 136, 0))
+
+    def test_leading_ff_is_read_as_alpha_first(self):
+        rgb, note = scene_lib.parse_hex_color('FFFF2896')
+        self.assertEqual(rgb, (255, 40, 150))
+        self.assertIn('AARRGGBB', note)
+
+    def test_trailing_ff_is_read_as_alpha_last(self):
+        rgb, note = scene_lib.parse_hex_color('2896FFFF')
+        self.assertEqual(rgb, (40, 150, 255))
+        self.assertIn('RRGGBBAA', note)
+
+    def test_ambiguous_codes_default_to_alpha_first_and_say_so(self):
+        """FF at both ends, or neither, cannot be told apart."""
+        rgb, note = scene_lib.parse_hex_color('FF00FFFF')
+        self.assertEqual(rgb, (0, 255, 255))
+        self.assertIn('ambiguous', note)
+
+        rgb, note = scene_lib.parse_hex_color('8000FF80')
+        self.assertEqual(rgb, (0, 255, 128))
+        self.assertIn('ambiguous', note)
+
+    def test_six_digit_codes_carry_no_note(self):
+        """Nothing was inferred, so there is nothing to warn about."""
+        self.assertEqual(scene_lib.parse_hex_color('FF8800')[1], '')
+
+    def test_rubbish_is_rejected_with_a_reason(self):
+        for bad in ('nope', 'FF88', '', None, 'GGGGGG', 'FF8800AABB'):
+            rgb, reason = scene_lib.parse_hex_color(bad)
+            self.assertIsNone(rgb, bad)
+            self.assertTrue(reason)
+
+    def test_the_error_mentions_both_accepted_lengths(self):
+        _rgb, reason = scene_lib.parse_hex_color('FF88')
+        self.assertIn('6 or 8', reason)
+
+
 class TestSceneCapture(unittest.TestCase):
     """Snapshotting the lights -- how a Govee Tap-to-Run gets into Kodi."""
 
@@ -1773,6 +1818,29 @@ class TestControlPanel(unittest.TestCase):
         xbmcgui.INPUT_QUEUE.append('#00FF00')
         self.panel().color_menu(None, 'All Lights')
         self.assertEqual(self.recorder.calls, [('color', 'AA:BB', 0, 255, 0)])
+
+    def test_eight_digit_govee_code_reaches_the_lights(self):
+        import gui
+
+        xbmcgui.SELECT_QUEUE.extend([len(gui.COLOR_PRESETS)])
+        xbmcgui.INPUT_QUEUE.append('FFFF2896')
+        self.panel().color_menu(None, 'All Lights')
+
+        self.assertEqual(self.recorder.calls,
+                         [('color', 'AA:BB', 255, 40, 150)])
+        shown = ' '.join(message for _h, message in xbmcgui.NOTIFICATIONS)
+        self.assertIn('AARRGGBB', shown)
+
+    def test_an_eight_digit_code_can_be_saved_into_a_scene(self):
+        panel = self.panel()
+        # Appearance -> Colour -> Custom hex, then Save.
+        xbmcgui.SELECT_QUEUE.extend([3, 1, 9, 0, 6])
+        xbmcgui.INPUT_QUEUE.extend(['FFFF2896', 'Pink'])
+        panel.edit_scene(None)
+
+        scene = self.app.scene_by_name('Pink')
+        self.assertIsNotNone(scene)
+        self.assertEqual(scene['color'], [255, 40, 150])
 
     def test_temperature_preset_index_matches_its_label(self):
         import gui

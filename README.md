@@ -155,6 +155,8 @@ What works instead — **build the look in Kodi**:
 
 1. **Scenes… → Manage scenes… → Add a new scene…**
 2. Set **Appearance** (colour or colour temperature) and **Brightness**.
+   Under **Colour → Custom hex…** you can paste a code straight out of the
+   Govee app — 8-digit codes are accepted as well as 6-digit ones.
 3. Leave **Lights** as *all lights* for a uniform look, or pick a subset.
 4. **Test this scene** until the room is right, then **Save**.
 
@@ -169,6 +171,24 @@ reported back correctly.
 A capture is also a snapshot of a *static* state: an animated Govee scene
 (a DIY effect, "autoplay", anything that cycles) is captured as whatever frame
 the lights happened to be on.
+
+### Colour codes
+
+Colour entry takes `RRGGBB`, the `RGB` shorthand, and the 8-digit codes the
+Govee app produces.
+
+An 8-digit code carries an alpha byte that the lights have no use for, and
+which end it sits on is not consistent between tools — Android writes
+`AARRGGBB`, CSS Color 4 writes `RRGGBBAA`, and Govee documents neither. The
+add-on infers it: an alpha in a colour picker is almost always `FF`, so
+whichever end is `FF` is taken as the alpha. When both ends are `FF` or
+neither is, the two readings are genuinely indistinguishable and alpha-first
+wins.
+
+The confirmation always says how a code was read — `#FF2896 (read as
+AARRGGBB)` — because dropping the alpha off the wrong end produces a
+different colour, and that should be visible rather than a surprise on the
+wall. If a code comes out wrong, re-enter it with the byte order swapped.
 
 ### Playback lighting
 
@@ -190,7 +210,7 @@ RunScript(script.paragon.govee,action=toggle)
 RunScript(script.paragon.govee,action=on)
 RunScript(script.paragon.govee,action=off)
 RunScript(script.paragon.govee,action=brightness,value=20)       # 1-100
-RunScript(script.paragon.govee,action=color,value=FF8800)        # RRGGBB
+RunScript(script.paragon.govee,action=color,value=FF8800)        # RRGGBB or AARRGGBB
 RunScript(script.paragon.govee,action=temp,value=2700)           # Kelvin
 RunScript(script.paragon.govee,action=scene,name=Movie Night)
 RunScript(script.paragon.govee,action=refresh)
@@ -281,7 +301,7 @@ button that appears to do nothing is worse.
 ## Development
 
 ```
-python3 tests/test_paragon_govee.py     # 138 tests
+python3 tests/test_paragon_govee.py     # 147 tests
 python3 tests/check_py2.py              # Python 2.7 syntax gate
 python3 tools/make_assets.py            # regenerate icon.png / fanart.png
 ```

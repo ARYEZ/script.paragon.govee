@@ -1,3 +1,17 @@
+v1.2.0
+- Colour entry now accepts the 8-digit hex codes the Govee app uses, not just
+  6-digit ones. Pasting a Govee code used to be rejected outright.
+- Which end the alpha byte sits on is inferred rather than assumed: Android
+  writes AARRGGBB, CSS writes RRGGBBAA, and Govee documents neither. An alpha
+  in a colour picker is almost always FF, so whichever end is FF is taken as
+  the alpha; when both ends are FF or neither is, the readings are genuinely
+  indistinguishable and alpha-first wins.
+- The confirmation says how a code was read ("read as AARRGGBB"), because
+  dropping the alpha off the wrong end silently produces a different colour
+  and that should be visible, not a surprise on the wall.
+- RunScript(action=color) shares the same parser, so keymaps and favourites
+  accept Govee codes too.
+
 v1.1.5
 - Documentation only. The status round-trip has now been run on real hardware:
   an H6008 set to RGB 255,0,255 at 40% over the LAN reported back exactly that.

@@ -243,10 +243,10 @@ class ControlPanel(object):
             return
 
         if choice == len(COLOR_PRESETS):
-            rgb = self._ask_hex()
-            if rgb is None:
+            entered = self._ask_hex()
+            if entered is None:
                 return
-            label = '#%02X%02X%02X' % rgb
+            rgb, label = entered
         else:
             label, rgb = COLOR_PRESETS[choice]
 
@@ -527,10 +527,10 @@ class ControlPanel(object):
             if pick == BACK:
                 return
             if pick == len(COLOR_PRESETS):
-                rgb = self._ask_hex()
-                if rgb is None:
+                entered = self._ask_hex()
+                if entered is None:
                     return
-                scene['color'] = list(rgb)
+                scene['color'] = list(entered[0])
             else:
                 scene['color'] = list(COLOR_PRESETS[pick][1])
             scene['mode'] = scene_lib.MODE_COLOR
@@ -673,21 +673,26 @@ class ControlPanel(object):
 
     @staticmethod
     def _ask_hex():
-        """Prompt for an RGB hex colour, returning an (r, g, b) tuple."""
-        value = _dialog().input('Colour as hex, e.g. FF8800', '')
+        """Prompt for a hex colour, returning ((r, g, b), label) or None.
+
+        The Govee app hands out 8-digit codes, so pasting one straight in has
+        to work. The returned label carries how it was read, because dropping
+        the alpha off the wrong end silently produces a different colour.
+        """
+        value = _dialog().input('Colour as hex - 6 or 8 digits, e.g. FF8800 '
+                                'or FFFF8800', '')
         if not value:
             return None
-        text = value.strip().lstrip('#')
-        if len(text) == 3:
-            text = ''.join(char * 2 for char in text)
-        if len(text) != 6:
-            utils.force_notify('Enter six hex digits, e.g. FF8800')
+
+        rgb, note = scene_lib.parse_hex_color(value)
+        if rgb is None:
+            utils.force_notify(note)
             return None
-        try:
-            return (int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16))
-        except ValueError:
-            utils.force_notify('That is not a valid hex colour')
-            return None
+
+        label = '#%02X%02X%02X' % rgb
+        if note:
+            label = '%s (%s)' % (label, note)
+        return rgb, label
 
 
 def pick_scene_for_setting(app, setting_id):

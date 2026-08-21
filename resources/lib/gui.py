@@ -52,6 +52,12 @@ BACK = -1
 HIGHLIGHT_COLOR = (255, 0, 255)
 HIGHLIGHT_BRIGHTNESS = 100
 
+# How many times "Identify" blinks a light, and the gap between each change.
+# Ten blinks is about eight seconds -- long enough to walk into the next room
+# and still be looking when it is flashing.
+IDENTIFY_FLASHES = 10
+IDENTIFY_GAP = 0.4
+
 
 def _dialog():
     return xbmcgui.Dialog()
@@ -752,19 +758,40 @@ class ControlPanel(object):
         elif choice == 2:
             self._identify(device)
 
-    def _identify(self, device):
-        """Blink a light so the user can tell which physical unit it is."""
+    def _identify(self, device, sleep_func=None):
+        """Blink a light so the user can tell which physical unit it is.
+
+        Long enough to walk into the next room, and cancellable so it can be
+        stopped the moment the light is spotted rather than standing there
+        waiting for it to finish. The bulb is put back to the state it was in,
+        which matters when it started out switched off -- otherwise
+        identifying a light silently turns it on and leaves it on.
+        """
         import time
 
+        sleep = sleep_func or time.sleep
+        before = self.app.controller.get_state(device)
+
+        progress = xbmcgui.DialogProgress()
+        progress.create('Paragon Govee', 'Flashing %s' % device.name,
+                        'Cancel once you have spotted it.')
         try:
-            for _ in range(3):
-                self.app.controller.turn(device, False)
-                time.sleep(0.4)
-                self.app.controller.turn(device, True)
-                time.sleep(0.4)
+            try:
+                for index in range(IDENTIFY_FLASHES):
+                    progress.update(int(index * 100.0 / IDENTIFY_FLASHES))
+                    if progress.iscanceled():
+                        break
+                    self.app.controller.turn(device, False)
+                    sleep(IDENTIFY_GAP)
+                    self.app.controller.turn(device, True)
+                    sleep(IDENTIFY_GAP)
+            finally:
+                progress.close()
         except ControlError as exc:
             utils.force_notify(str(exc))
             return
+
+        self._restore(device, before)
         utils.notify('Flashed %s' % device.name)
 
     # -- input helpers ------------------------------------------------------

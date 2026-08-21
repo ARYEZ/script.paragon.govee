@@ -21,6 +21,11 @@ YESNO_QUEUE = []
 NOTIFICATIONS = []
 OK_DIALOGS = []
 SELECT_CALLS = []
+PROGRESS_CALLS = []
+
+# When non-empty, DialogProgress.iscanceled() returns True once this many
+# update() calls have been made.
+CANCEL_AFTER = []
 
 
 def reset():
@@ -30,6 +35,8 @@ def reset():
     del NOTIFICATIONS[:]
     del OK_DIALOGS[:]
     del SELECT_CALLS[:]
+    del PROGRESS_CALLS[:]
+    del CANCEL_AFTER[:]
 
 
 def getCurrentWindowId():
@@ -60,6 +67,27 @@ class Dialog(object):
 
     def notification(self, heading, message, icon='', time=5000, sound=True):
         NOTIFICATIONS.append((heading, message))
+
+
+class DialogProgress(object):
+    """Foreground progress dialog. Tests set CANCEL_AFTER to cancel early."""
+
+    def __init__(self):
+        self._updates = 0
+
+    def create(self, heading, line1='', line2='', line3=''):
+        PROGRESS_CALLS.append((heading, line1))
+
+    def update(self, percent=0, line1='', line2='', line3=''):
+        self._updates += 1
+
+    def iscanceled(self):
+        if CANCEL_AFTER and self._updates >= CANCEL_AFTER[0]:
+            return True
+        return False
+
+    def close(self):
+        pass
 
 
 class DialogProgressBG(object):

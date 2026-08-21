@@ -2149,6 +2149,60 @@ class TestControlPanel(unittest.TestCase):
         self.assertEqual(self.recorder.calls, [])
         self.assertEqual(self.app.devices[0].name, 'Lamp')
 
+    def test_identify_flashes_the_configured_number_of_times(self):
+        import gui
+
+        device = self.app.devices[0]
+        self.recorder.get_state = lambda d: None
+        self.panel()._identify(device, sleep_func=lambda _s: None)
+
+        # One off and one on per flash.
+        turns = [c for c in self.recorder.calls if c[0] == 'turn']
+        self.assertEqual(len(turns), gui.IDENTIFY_FLASHES * 2)
+        self.assertEqual(gui.IDENTIFY_FLASHES, 10)
+        self.assertEqual(turns[0], ('turn', 'AA:BB', False))
+        self.assertEqual(turns[1], ('turn', 'AA:BB', True))
+
+    def test_identify_can_be_cancelled_early(self):
+        device = self.app.devices[0]
+        self.recorder.get_state = lambda d: None
+        xbmcgui.CANCEL_AFTER.append(3)   # cancel on the third update
+
+        self.panel()._identify(device, sleep_func=lambda _s: None)
+
+        turns = [c for c in self.recorder.calls if c[0] == 'turn']
+        self.assertEqual(len(turns), 4)  # two full flashes, then stopped
+
+    def test_identify_puts_a_light_that_was_off_back_off(self):
+        """Otherwise identifying a light silently switches it on for good."""
+        device = self.app.devices[0]
+        self.recorder.get_state = lambda d: {'power': 'off'}
+
+        self.panel()._identify(device, sleep_func=lambda _s: None)
+
+        self.assertEqual(self.recorder.calls[-1], ('turn', 'AA:BB', False))
+
+    def test_identify_restores_the_previous_colour(self):
+        device = self.app.devices[0]
+        self.recorder.get_state = lambda d: {
+            'power': 'on', 'brightness': 25, 'colorTem': 0,
+            'color': {'r': 255, 'g': 40, 'b': 150}}
+
+        self.panel()._identify(device, sleep_func=lambda _s: None)
+
+        self.assertIn(('brightness', 'AA:BB', 25), self.recorder.calls)
+        self.assertEqual(self.recorder.calls[-1],
+                         ('color', 'AA:BB', 255, 40, 150))
+
+    def test_identify_reports_a_light_it_cannot_reach(self):
+        device = self.app.devices[0]
+        recorder = RecordingController(fail_on={'AA:BB'})
+        recorder.get_state = lambda d: None
+        self.app.controller = recorder
+
+        self.panel()._identify(device, sleep_func=lambda _s: None)
+        self.assertTrue(xbmcgui.NOTIFICATIONS)
+
     def test_pick_scene_writes_the_setting(self):
         import gui
 

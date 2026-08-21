@@ -1,3 +1,12 @@
+v1.3.1
+- Identify now flashes 10 times rather than 3 -- about eight seconds, long
+  enough to walk into the next room and still catch it.
+- Identify shows a progress dialog and can be cancelled, so it stops the
+  moment the light is spotted instead of having to be waited out.
+- Identify puts the light back to the state it was in. It used to leave the
+  bulb switched on regardless, so identifying a light that was off silently
+  turned it on for good.
+
 v1.3.0
 - New "Name lights one by one..." at the top of Manage devices. Each light
   comes on bright magenta in turn and stays lit while the keyboard is up, so

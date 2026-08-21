@@ -96,7 +96,8 @@ a `git pull` took effect.
 
 Pick a light (or **All Lights**) for power, brightness, colour and colour
 temperature. **Manage devices** lets you rename a light, exclude one from
-"All Lights", or flash it to work out which physical unit it is.
+"All Lights", or flash it to work out which physical unit it is
+(ten flashes, cancellable, and the light is put back as it was).
 
 ### Naming your lights
 
@@ -331,7 +332,7 @@ button that appears to do nothing is worse.
 ## Development
 
 ```
-python3 tests/test_paragon_govee.py     # 154 tests
+python3 tests/test_paragon_govee.py     # 159 tests
 python3 tests/check_py2.py              # Python 2.7 syntax gate
 python3 tools/make_assets.py            # regenerate icon.png / fanart.png
 ```

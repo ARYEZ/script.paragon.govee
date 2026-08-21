@@ -606,6 +606,11 @@ class ControlPanel(object):
         lan_count = len([d for d in devices if d.lan])
         summary = 'Found %d light(s), %d on the LAN.' % (len(devices),
                                                          lan_count)
+        missing = getattr(self.app, 'last_refresh_missing', 0)
+        if missing:
+            summary += ('\n\n%d known light(s) did not answer and were kept '
+                        'as they were. Their names are safe; they will pick '
+                        'up again on the next search.' % missing)
         if warnings:
             _dialog().ok('Paragon Govee',
                          summary + '\n\n' + '\n'.join(warnings[:2]))
@@ -739,6 +744,7 @@ class ControlPanel(object):
             'Rename (currently "%s")' % device.name,
             'Disable' if device.enabled else 'Enable',
             'Identify (flash this light)',
+            'Forget this light',
         ]
         choice = _select(device.name, options)
         if choice == BACK:
@@ -757,6 +763,14 @@ class ControlPanel(object):
                                     'enabled' if device.enabled else 'disabled'))
         elif choice == 2:
             self._identify(device)
+        elif choice == 3:
+            if _dialog().yesno(
+                    'Paragon Govee',
+                    'Forget "%s"?\n\nIts name and settings are removed. A '
+                    'later search will find it again as an unnamed light.'
+                    % device.name):
+                self.app.forget_device(device)
+                utils.notify('Forgot %s' % device.name)
 
     def _identify(self, device, sleep_func=None):
         """Blink a light so the user can tell which physical unit it is.

@@ -117,8 +117,31 @@ previous state before the walk moves on. Cancel the keyboard to stop; names
 entered up to that point are kept, and the walk offers to cover only the
 lights still on placeholder names.
 
-Names you set by hand survive a **Refresh devices**, so re-running discovery
-after a DHCP change will not undo them.
+### Where names live, and keeping them
+
+Names are stored in `devices.json` in the add-on's profile directory:
+
+```
+Windows   %APPDATA%\Kodi\userdata\addon_data\script.paragon.govee\
+          (portable: <kodi>\portable_data\userdata\addon_data\...)
+Linux     ~/.kodi/userdata/addon_data/script.paragon.govee/
+LibreELEC /storage/.kodi/userdata/addon_data/script.paragon.govee/
+```
+
+They are written every time a light is renamed or a search completes, so
+there is no "save" step. Copy that file somewhere if you want a backup — it
+is also how you move your names to another Kodi box.
+
+**Switching transports does not affect names.** Any name that is not the
+model-plus-id placeholder is carried across every refresh, so names pulled in
+from the Govee cloud stay put after switching to **LAN only** — you can drop
+the API key afterwards and keep them. The same is true of names typed by hand
+and of the enabled/disabled flag.
+
+A light that does not answer a search keeps its entry rather than being
+dropped, so one sleeping bulb cannot erase its own name. The refresh summary
+says how many did not answer. For a light that is genuinely gone, use
+**Forget this light** in its Manage devices menu.
 
 ### Scenes
 
@@ -332,7 +355,7 @@ button that appears to do nothing is worse.
 ## Development
 
 ```
-python3 tests/test_paragon_govee.py     # 159 tests
+python3 tests/test_paragon_govee.py     # 163 tests
 python3 tests/check_py2.py              # Python 2.7 syntax gate
 python3 tools/make_assets.py            # regenerate icon.png / fanart.png
 ```

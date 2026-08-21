@@ -1,3 +1,16 @@
+v1.4.0
+- A light that does not answer a search is no longer dropped from the device
+  list. It used to be erased along with its name and its enabled flag, so one
+  sleeping WiFi bulb during a refresh could undo a trip around the house. Its
+  entry is now kept as it was, and the refresh summary says how many lights
+  did not answer.
+- New "Forget this light" in a light's Manage devices menu, for one that has
+  genuinely been removed rather than being temporarily quiet.
+- Names are unaffected by switching transports: a name that is not the
+  model-plus-id placeholder is carried across every refresh, so names picked
+  up from the Govee cloud stay after switching to LAN only. Now covered by a
+  test that walks that exact round trip.
+
 v1.3.1
 - Identify now flashes 10 times rather than 3 -- about eight seconds, long
   enough to walk into the next room and still catch it.

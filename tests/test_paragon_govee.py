@@ -1102,6 +1102,108 @@ class TestSession(unittest.TestCase):
         self.assertFalse(found[0].enabled)
         self.assertEqual(found[0].ip, '10.0.0.7')
 
+    def test_cloud_names_survive_switching_to_lan_only(self):
+        """The exact round trip: name via cloud, then go LAN-only."""
+        from paragon_govee import ParagonGovee
+
+        app = ParagonGovee()
+
+        # First refresh with the API key set: the cloud supplies real names.
+        class CloudAndLan(object):
+            def discover(self, timeout=3.0):
+                device = Device('AA:BB', model='H6008', ip='10.0.0.11',
+                                lan=True)
+                device.merge(Device('AA:BB', name='KITCHEN RIGHT LOW',
+                                    model='H6008', cloud=True))
+                return [device], []
+
+        app.controller = CloudAndLan()
+        app.refresh_devices()
+        self.assertEqual(app.devices[0].name, 'KITCHEN RIGHT LOW')
+
+        # Now LAN only: discovery has no names and offers the placeholder.
+        class LanOnly(object):
+            def discover(self, timeout=3.0):
+                return [Device('AA:BB', model='H6008', ip='10.0.0.11',
+                               lan=True)], []
+
+        reopened = ParagonGovee()          # reloads devices.json from disk
+        reopened.controller = LanOnly()
+        reopened.refresh_devices()
+
+        self.assertEqual(reopened.devices[0].name, 'KITCHEN RIGHT LOW')
+        self.assertFalse(reopened.devices[0].cloud)
+        self.assertTrue(reopened.devices[0].lan)
+
+        saved = json.load(open(os.path.join(PROFILE, 'devices.json')))
+        self.assertEqual(saved[0]['name'], 'KITCHEN RIGHT LOW')
+
+    def test_a_light_that_misses_one_search_keeps_its_name(self):
+        """A sleeping bulb used to be erased along with its name."""
+        from paragon_govee import ParagonGovee
+
+        app = ParagonGovee()
+        app._devices = [
+            Device('AA:BB', name='KITCHEN RIGHT LOW', model='H6008',
+                   ip='10.0.0.11', lan=True),
+            Device('CC:DD', name='BEDROOM FRONT TOP', model='H6008',
+                   ip='10.0.0.12', lan=True, enabled=False),
+        ]
+        app.save_devices()
+
+        class OnlyOneAnswers(object):
+            def discover(self, timeout=3.0):
+                return [Device('AA:BB', model='H6008', ip='10.0.0.11',
+                               lan=True)], []
+
+        app.controller = OnlyOneAnswers()
+        devices, _warnings = app.refresh_devices()
+
+        self.assertEqual(len(devices), 2)
+        names = sorted(d.name for d in devices)
+        self.assertEqual(names, ['BEDROOM FRONT TOP', 'KITCHEN RIGHT LOW'])
+        self.assertEqual(app.last_refresh_missing, 1)
+
+        # The absent one keeps everything, including being disabled.
+        absent = app.device_by_id('CC:DD')
+        self.assertFalse(absent.enabled)
+        self.assertEqual(absent.ip, '10.0.0.12')
+
+    def test_a_forgotten_light_is_gone_from_disk(self):
+        from paragon_govee import ParagonGovee
+
+        app = ParagonGovee()
+        keep = Device('AA:BB', name='Keep', lan=True)
+        drop = Device('CC:DD', name='Drop', lan=True)
+        app._devices = [keep, drop]
+        app.save_devices()
+
+        self.assertTrue(app.forget_device(drop))
+        self.assertEqual([d.name for d in app.devices], ['Keep'])
+        saved = json.load(open(os.path.join(PROFILE, 'devices.json')))
+        self.assertEqual([d['name'] for d in saved], ['Keep'])
+
+        # Forgetting something already gone is a no-op, not an error.
+        self.assertFalse(app.forget_device(drop))
+
+    def test_placeholder_names_are_still_replaced_by_discovery(self):
+        """Preserving names must not freeze a light on its placeholder."""
+        from paragon_govee import ParagonGovee
+
+        app = ParagonGovee()
+        app._devices = [Device('AA:BB', model='H6008', lan=True)]
+        self.assertEqual(app.devices[0].name, 'H6008 (AABB)')
+        app.save_devices()
+
+        class CloudNames(object):
+            def discover(self, timeout=3.0):
+                return [Device('AA:BB', name='GREATROOM BACK TOP',
+                               model='H6008', cloud=True)], []
+
+        app.controller = CloudNames()
+        app.refresh_devices()
+        self.assertEqual(app.devices[0].name, 'GREATROOM BACK TOP')
+
     def test_apply_scene_by_name_reports_a_missing_scene(self):
         from paragon_govee import ParagonGovee
 

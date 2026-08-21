@@ -29,6 +29,9 @@ class ParagonGovee(object):
         self.controller = build_controller(self.read_settings())
         self._devices = None
         self._scenes = None
+        # How many known lights failed to answer the last refresh, so the
+        # control panel can say so rather than silently showing a short list.
+        self.last_refresh_missing = 0
 
     # -- settings ----------------------------------------------------------
 
@@ -69,6 +72,15 @@ class ParagonGovee(object):
     def save_devices(self):
         utils.write_json(DEVICE_CACHE, [d.to_dict() for d in self.devices])
 
+    def forget_device(self, device):
+        """Remove a light from the cache for good."""
+        if device in self.devices:
+            self._devices.remove(device)
+            self.save_devices()
+            utils.log('Forgot %s' % device.name)
+            return True
+        return False
+
     def device_by_id(self, device_id):
         wanted = (device_id or '').upper()
         for device in self.devices:
@@ -100,10 +112,24 @@ class ParagonGovee(object):
             if old.name and not old.name.startswith(old.model + ' ('):
                 device.name = old.name
 
-        self._devices = found
+        # Keep lights that did not answer this time rather than dropping
+        # them. A WiFi bulb asleep, powered off at the switch, or missed by a
+        # single UDP sweep would otherwise be erased along with its name and
+        # its enabled flag -- work that can represent 25 trips around the
+        # house. Anything genuinely gone can be removed with "Forget this
+        # light" in Manage devices.
+        found_ids = set(d.device_id for d in found)
+        missing = [d for d in self.devices if d.device_id not in found_ids]
+        for device in missing:
+            utils.log('%s did not answer this search; keeping its entry'
+                      % device.name)
+
+        self._devices = sorted(found + missing, key=lambda d: d.name.lower())
         self.save_devices()
-        utils.log('Device refresh stored %d device(s)' % len(found))
-        return found, warnings
+        utils.log('Device refresh: %d found, %d kept unseen, %d total'
+                  % (len(found), len(missing), len(self._devices)))
+        self.last_refresh_missing = len(missing)
+        return self._devices, warnings
 
     # -- scenes ------------------------------------------------------------
 

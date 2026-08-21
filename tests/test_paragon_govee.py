@@ -204,11 +204,26 @@ class FakeCloud(object):
 
 
 class RecordingController(object):
-    """Stands in for GoveeController so scene ordering can be asserted."""
+    """Stands in for the Hub so scene ordering can be asserted.
+
+    Presents the same surface the Hub does, which is what the menus and the
+    scene engine talk to.
+    """
 
     def __init__(self, fail_on=None):
         self.calls = []
         self.fail_on = fail_on or set()
+
+    @staticmethod
+    def capabilities(device):
+        return set(['power', 'brightness', 'color', 'color_temp', 'state'])
+
+    @staticmethod
+    def commands(device):
+        return []
+
+    def driver_for(self, device):
+        return None
 
     def _record(self, name, device, *args):
         if device.device_id in self.fail_on:
@@ -982,6 +997,415 @@ class TestSceneCapture(unittest.TestCase):
         self.assertIn('captured', text)
         self.assertIn('2 light(s)', text)
         self.assertIn('1 on', text)
+
+
+class FakeRM(object):
+    """A UDP socket that answers like a real Broadlink RM.
+
+    Speaks the actual protocol -- checksums, AES, the auth key swap -- so the
+    client is exercised against the wire format rather than against a mock of
+    itself.
+    """
+
+    LEARNED = b'\x26\x00\x28\x00' + b'\x10' * 36
+
+    def __init__(self, devtype=0x27c2, name='Lounge RM'):
+        import broadlink_lan as bl
+
+        self.bl = bl
+        self.devtype = devtype
+        self.name = name
+        self.mac = bytearray([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF])
+        self.session_key = bytearray(range(0x10, 0x20))
+        self.device_id = bytearray([1, 2, 3, 4])
+        self.sent_codes = []
+        self.learning = False
+
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind(('127.0.0.1', 0))
+        self.port = self.sock.getsockname()[1]
+        self.sock.settimeout(0.2)
+        self._stop = threading.Event()
+        self.thread = threading.Thread(target=self._serve)
+        self.thread.daemon = True
+        self.thread.start()
+
+    def close(self):
+        self._stop.set()
+        self.thread.join(timeout=2)
+        self.sock.close()
+
+    def _hello_reply(self):
+        reply = bytearray(0x40 + len(self.name) + 1)
+        reply[0x34] = self.devtype & 0xFF
+        reply[0x35] = (self.devtype >> 8) & 0xFF
+        reply[0x3A:0x40] = self.mac
+        reply[0x40:0x40 + len(self.name)] = bytearray(self.name.encode())
+        return bytes(reply)
+
+    def _wrap(self, payload, key):
+        from aes import AES
+
+        payload = bytearray(payload)
+        if len(payload) % 16:
+            payload.extend(bytearray(16 - len(payload) % 16))
+        packet = bytearray(0x38)
+        packet.extend(bytearray(AES(key, self.bl.INITIAL_IV).encrypt(payload)))
+        return bytes(packet)
+
+    def _serve(self):
+        from aes import AES
+
+        while not self._stop.is_set():
+            try:
+                data, sender = self.sock.recvfrom(2048)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+
+            raw = bytearray(data)
+            if len(raw) == 0x30:                      # discovery hello
+                self.sock.sendto(self._hello_reply(), sender)
+                continue
+            if len(raw) < 0x38:
+                continue
+
+            command = raw[0x26] | (raw[0x27] << 8)
+            if command == self.bl.CMD_AUTH:
+                key = self.bl.INITIAL_KEY
+                payload = bytearray(0x40)
+                payload[0x00:0x04] = self.device_id
+                payload[0x04:0x14] = self.session_key
+                self.sock.sendto(self._wrap(payload, key), sender)
+                continue
+
+            body = bytes(raw[0x38:])
+            request = bytearray(
+                AES(self.session_key, self.bl.INITIAL_IV).decrypt(body))
+            verb = request[0]
+
+            if verb == self.bl.DATA_SEND:
+                self.sent_codes.append(bytes(request[4:]))
+                self.sock.sendto(self._wrap(bytearray(16),
+                                            self.session_key), sender)
+            elif verb == self.bl.DATA_LEARN:
+                self.learning = True
+                self.sock.sendto(self._wrap(bytearray(16),
+                                            self.session_key), sender)
+            elif verb == self.bl.DATA_CHECK:
+                if not self.learning:
+                    error = bytearray(0x38)
+                    error[0x22] = 0xF9      # "nothing learned yet"
+                    error[0x23] = 0xFF
+                    self.sock.sendto(bytes(error), sender)
+                else:
+                    payload = bytearray(4) + bytearray(self.LEARNED)
+                    self.sock.sendto(self._wrap(payload, self.session_key),
+                                     sender)
+
+
+class TestBroadlinkProtocol(unittest.TestCase):
+    """The RM client, against a device speaking the real wire format."""
+
+    def setUp(self):
+        self.device = FakeRM()
+        self.addCleanup(self.device.close)
+        import broadlink_lan as bl
+        self.bl = bl
+        # The fake listens on an ephemeral port; the real one is always 80.
+        self._saved_port = bl.DEVICE_PORT
+        bl.DEVICE_PORT = self.device.port
+
+    def tearDown(self):
+        self.bl.DEVICE_PORT = self._saved_port
+
+    def session(self):
+        session = self.bl.Session('127.0.0.1', self.device.mac,
+                                  self.device.devtype, timeout=2.0)
+        session.authenticate()
+        return session
+
+    def test_checksum_is_seeded_at_beaf(self):
+        self.assertEqual(self.bl.checksum(b''), 0xBEAF)
+        self.assertEqual(self.bl.checksum(b'\x01'), 0xBEB0)
+        # Wraps at 16 bits rather than growing.
+        self.assertEqual(self.bl.checksum(b'\xff' * 1000),
+                         (0xBEAF + 255 * 1000) & 0xFFFF)
+
+    def test_hello_is_48_bytes_with_a_valid_checksum(self):
+        packet = bytearray(self.bl.build_hello('192.168.1.50', 4321))
+        self.assertEqual(len(packet), 0x30)
+
+        stored = packet[0x20] | (packet[0x21] << 8)
+        packet[0x20] = packet[0x21] = 0
+        self.assertEqual(self.bl.checksum(packet), stored)
+
+    def test_hello_carries_the_local_address_and_port(self):
+        packet = bytearray(self.bl.build_hello('192.168.1.50', 0x1234))
+        self.assertEqual(list(packet[0x18:0x1c]), [192, 168, 1, 50])
+        self.assertEqual(packet[0x1c], 0x34)
+        self.assertEqual(packet[0x1d], 0x12)
+
+    def test_a_packet_carries_the_magic_header_and_both_checksums(self):
+        session = self.bl.Session('10.0.0.1', b'\x01\x02\x03\x04\x05\x06',
+                                  0x27c2)
+        packet = bytearray(session.build_packet(self.bl.CMD_DATA,
+                                                bytearray([2, 0, 0, 0])))
+
+        self.assertEqual(list(packet[0:4]), [0x5A, 0xA5, 0xAA, 0x55])
+        self.assertEqual(packet[0x26], self.bl.CMD_DATA & 0xFF)
+        stored = packet[0x20] | (packet[0x21] << 8)
+        packet[0x20] = packet[0x21] = 0
+        self.assertEqual(self.bl.checksum(packet), stored)
+
+    def test_the_counter_advances_between_packets(self):
+        session = self.bl.Session('10.0.0.1', b'\x01\x02\x03\x04\x05\x06',
+                                  0x27c2)
+        first = bytearray(session.build_packet(self.bl.CMD_DATA, b'\x02'))
+        second = bytearray(session.build_packet(self.bl.CMD_DATA, b'\x02'))
+        self.assertNotEqual(first[0x28:0x2a], second[0x28:0x2a])
+
+    def test_discovery_finds_the_device(self):
+        transport = self.bl.BroadlinkTransport(timeout=2.0)
+        # The fake is bound to loopback, which a real 255.255.255.255
+        # broadcast would never reach, so the hello is aimed there instead.
+        saved = (self.bl.BROADCAST_ADDRESS, self.bl.BROADCAST_PORT)
+        self.bl.BROADCAST_ADDRESS = '127.0.0.1'
+        self.bl.BROADCAST_PORT = self.device.port
+        try:
+            found = [d for d in transport.discover(
+                timeout=1.5, local_addresses=['127.0.0.1'])
+                if d['mac'].startswith('FF:EE')]
+        finally:
+            (self.bl.BROADCAST_ADDRESS, self.bl.BROADCAST_PORT) = saved
+
+        self.assertTrue(found, 'no Broadlink device discovered')
+        self.assertEqual(found[0]['devtype'], 0x27c2)
+        self.assertEqual(found[0]['label'], 'RM Mini 3')
+        self.assertEqual(found[0]['name'], 'Lounge RM')
+
+    def test_authentication_swaps_in_the_session_key(self):
+        session = self.session()
+
+        self.assertTrue(session.authenticated)
+        self.assertEqual(bytearray(session.key), self.device.session_key)
+        self.assertEqual(bytearray(session.device_id), self.device.device_id)
+        self.assertNotEqual(bytearray(session.key),
+                            bytearray(self.bl.INITIAL_KEY))
+
+    def test_sending_a_code_reaches_the_device_intact(self):
+        session = self.session()
+        code = b'\x26\x00\x20\x00' + b'\x33' * 28
+
+        session.send_code(code)
+        self.assertEqual(len(self.device.sent_codes), 1)
+        self.assertTrue(self.device.sent_codes[0].startswith(code))
+
+    def test_learning_returns_the_captured_code(self):
+        session = self.session()
+
+        self.assertIsNone(session.check_learned())   # nothing pressed yet
+        session.enter_learning()
+        learned = session.check_learned()
+
+        self.assertIsNotNone(learned)
+        self.assertTrue(learned.startswith(b'\x26\x00'))
+
+    def test_a_device_error_is_raised_not_swallowed(self):
+        session = self.session()
+        error = bytearray(0x38)
+        error[0x22] = 0x0B
+        with self.assertRaises(self.bl.BroadlinkError):
+            session.parse_response(error)
+
+    def test_a_short_reply_is_rejected(self):
+        session = self.session()
+        with self.assertRaises(self.bl.BroadlinkError):
+            session.parse_response(bytearray(4))
+
+    def test_an_unreachable_device_reports_clearly(self):
+        session = self.bl.Session('127.0.0.1', self.device.mac,
+                                  self.device.devtype, timeout=0.3)
+        saved = self.bl.DEVICE_PORT
+        self.bl.DEVICE_PORT = 1        # nothing listening
+        try:
+            with self.assertRaises(self.bl.BroadlinkError) as caught:
+                session.authenticate()
+        finally:
+            self.bl.DEVICE_PORT = saved
+        self.assertIn('127.0.0.1', str(caught.exception))
+
+    def test_unknown_device_types_still_get_a_label(self):
+        self.assertEqual(self.bl.device_label(0x27c2), 'RM Mini 3')
+        self.assertEqual(self.bl.device_label(0xABCD), 'Broadlink abcd')
+
+
+class TestBroadlinkDriver(unittest.TestCase):
+    """The driver, against the fake RM speaking the real protocol."""
+
+    def setUp(self):
+        clean_profile()
+        xbmcaddon.reset()
+        xbmcgui.reset()
+        for name in ('addon_utils', 'paragon_govee', 'broadlink_driver',
+                     'broadlink_lan', 'hub'):
+            if name in sys.modules:
+                del sys.modules[name]
+
+        self.rm = FakeRM()
+        self.addCleanup(self.rm.close)
+        import broadlink_lan as bl
+        self.bl = bl
+        self._saved = bl.DEVICE_PORT
+        bl.DEVICE_PORT = self.rm.port
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        self.bl.DEVICE_PORT = self._saved
+        clean_profile()
+
+    def driver(self, codes=None):
+        from broadlink_driver import BroadlinkDriver
+
+        self.saved = []
+        return BroadlinkDriver(
+            transport=self.bl.BroadlinkTransport(timeout=2.0),
+            codes=codes if codes is not None else {},
+            save_codes=lambda: self.saved.append(True))
+
+    def device(self):
+        return Device('FF:EE:DD:CC:BB:AA', name='Lounge RM',
+                      driver='broadlink', ip='127.0.0.1', lan=True,
+                      devtype=0x27c2)
+
+    def test_an_rm_claims_commands_and_nothing_else(self):
+        from devices import CAP_COLOR, CAP_COMMANDS, CAP_POWER
+
+        caps = self.driver().capabilities(self.device())
+        self.assertEqual(caps, set([CAP_COMMANDS]))
+        self.assertNotIn(CAP_POWER, caps)
+        self.assertNotIn(CAP_COLOR, caps)
+
+    def test_the_state_verbs_refuse_rather_than_pretend(self):
+        driver, device = self.driver(), self.device()
+        for call in (lambda: driver.turn(device, True),
+                     lambda: driver.set_brightness(device, 50),
+                     lambda: driver.set_color(device, 1, 2, 3),
+                     lambda: driver.set_color_temp(device, 2700)):
+            self.assertRaises(ControlError, call)
+        self.assertIsNone(driver.get_state(device))
+
+    def test_learning_captures_a_code_and_saves_it(self):
+        driver, device = self.driver(), self.device()
+
+        driver.start_learning(device)
+        code = driver.collect_learned(device)
+        self.assertIsNotNone(code)
+        self.assertTrue(code.startswith('2600'))
+
+        self.assertTrue(driver.save_command(device, 'AVR Power', code))
+        self.assertEqual(driver.commands(device), ['AVR Power'])
+        self.assertTrue(self.saved, 'codes were not persisted')
+
+    def test_nothing_learned_yet_reads_as_still_waiting(self):
+        driver, device = self.driver(), self.device()
+        self.assertIsNone(driver.collect_learned(device))
+
+    def test_a_learned_code_can_be_fired_back(self):
+        driver, device = self.driver(), self.device()
+
+        driver.start_learning(device)
+        driver.save_command(device, 'AVR Power',
+                            driver.collect_learned(device))
+        driver.send_command(device, 'AVR Power')
+
+        self.assertEqual(len(self.rm.sent_codes), 1)
+        self.assertTrue(self.rm.sent_codes[0].startswith(b'\x26\x00'))
+
+    def test_an_unknown_command_is_refused_clearly(self):
+        driver, device = self.driver(), self.device()
+        with self.assertRaises(ControlError) as caught:
+            driver.send_command(device, 'Nope')
+        self.assertIn('Nope', str(caught.exception))
+
+    def test_a_corrupt_saved_code_is_reported_not_sent(self):
+        driver = self.driver(codes={'FF:EE:DD:CC:BB:AA':
+                                    {'Bad': 'not hex at all'}})
+        with self.assertRaises(ControlError):
+            driver.send_command(self.device(), 'Bad')
+        self.assertEqual(self.rm.sent_codes, [])
+
+    def test_forgetting_a_command_persists(self):
+        driver, device = self.driver(codes={'FF:EE:DD:CC:BB:AA':
+                                            {'Old': '2600'}}), self.device()
+        self.assertTrue(driver.forget_command(device, 'Old'))
+        self.assertEqual(driver.commands(device), [])
+        self.assertFalse(driver.forget_command(device, 'Old'))
+
+    def test_mac_bytes_are_rebuilt_from_the_device_id_after_a_restart(self):
+        """Nothing but device_id and devtype survives to disk."""
+        driver = self.driver()
+        restored = Device.from_dict(self.device().to_dict())
+        self.assertFalse(hasattr(restored, 'mac_bytes'))
+        self.assertEqual(restored.devtype, 0x27c2)
+
+        session = driver._session(restored)
+        self.assertEqual(bytearray(session.mac), self.rm.mac)
+
+    def test_a_scene_action_fires_a_learned_code(self):
+        """End to end: a scene reaching real protocol code."""
+        import hub as hub_mod
+        import scenes as fresh_scenes
+
+        driver, device = self.driver(), self.device()
+        driver.start_learning(device)
+        driver.save_command(device, 'AVR Power',
+                            driver.collect_learned(device))
+
+        hub = hub_mod.Hub(drivers=[driver])
+        scene = fresh_scenes.make_scene(
+            'Movie Night', targets=['NOBODY'],
+            actions=[{'device': 'FF:EE:DD:CC:BB:AA',
+                      'command': 'AVR Power'}])
+
+        _applied, errors = fresh_scenes.apply_scene(hub, scene, [device])
+        self.assertEqual(errors, [])
+        self.assertEqual(len(self.rm.sent_codes), 1)
+
+    def test_discovery_builds_devices_the_registry_can_store(self):
+        driver = self.driver()
+        saved = (self.bl.BROADCAST_ADDRESS, self.bl.BROADCAST_PORT)
+        self.bl.BROADCAST_ADDRESS = '127.0.0.1'
+        self.bl.BROADCAST_PORT = self.rm.port
+        try:
+            found, warnings = driver.discover(timeout=1.5)
+        finally:
+            (self.bl.BROADCAST_ADDRESS, self.bl.BROADCAST_PORT) = saved
+
+        self.assertEqual(warnings, [])
+        rm = [d for d in found if d.device_id.startswith('FF:EE')]
+        self.assertTrue(rm, 'RM not discovered')
+        self.assertEqual(rm[0].driver, 'broadlink')
+        self.assertEqual(rm[0].model, 'RM Mini 3')
+        self.assertEqual(rm[0].devtype, 0x27c2)
+
+        # And it round-trips through the device cache unchanged.
+        restored = Device.from_dict(json.loads(json.dumps(rm[0].to_dict())))
+        self.assertEqual(restored.driver, 'broadlink')
+        self.assertEqual(restored.devtype, 0x27c2)
+
+    def test_a_failed_search_becomes_a_warning_not_an_exception(self):
+        from broadlink_driver import BroadlinkDriver
+
+        class Broken(object):
+            def discover(self, timeout=3.0):
+                raise RuntimeError('no network')
+
+        found, warnings = BroadlinkDriver(transport=Broken()).discover()
+        self.assertEqual(found, [])
+        self.assertTrue(any('no network' in w for w in warnings))
 
 
 class FakeBlaster(object):

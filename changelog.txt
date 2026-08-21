@@ -1,3 +1,23 @@
+v2.1.0
+- Broadlink RM support, as the second driver. Discovery, authentication, IR
+  learning and sending, all over the LAN with no Broadlink account and no
+  cloud.
+- Ships a pure-Python AES-128-CBC, because the Broadlink protocol encrypts
+  every packet and Kodi 17.6's Python 2.7 has no crypto library. Verified
+  against the FIPS-197 AES-128 vector and the NIST SP 800-38A CBC vector.
+- An RM appears in Manage devices with a Commands entry rather than
+  Identify: it has no light to flash. From there you can learn a code, send
+  one, or delete one.
+- Learning puts the device into learning mode and polls for up to 30 seconds
+  while you press the button on your remote; it can be cancelled.
+- Learned codes are stored in broadlink_codes.json in the add-on profile,
+  alongside scenes, devices and colours.
+- Scene actions can now fire a learned code, so one scene dims the lights and
+  switches the amp on.
+- The device type code is persisted with the device. Broadlink puts it in
+  every packet header, so guessing it after a restart would build packets the
+  device silently ignores.
+
 v2.0.0
 - Restructured around a driver interface, so vendors other than Govee can be
   added without touching the device registry, the scene engine or the menus.

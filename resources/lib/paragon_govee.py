@@ -28,8 +28,17 @@ _TRANSPORT_MODES = [TRANSPORT_AUTO, TRANSPORT_LAN, TRANSPORT_CLOUD]
 class ParagonGovee(object):
     """Everything the add-on needs, assembled from the user's settings."""
 
+    CODE_FILE = 'broadlink_codes.json'
+
     def __init__(self):
-        self.controller = build_hub(self.read_settings())
+        # Learned IR/RF codes are loaded before the hub is built: the
+        # Broadlink driver holds the same dict, so a code learned through the
+        # driver is saved by this session without a round trip.
+        self._codes = utils.read_json(self.CODE_FILE, default={}) or {}
+        settings = self.read_settings()
+        settings['broadlink_codes'] = self._codes
+        settings['save_broadlink_codes'] = self.save_codes
+        self.controller = build_hub(settings)
         self._devices = None
         self._scenes = None
         self._palette = None
@@ -53,6 +62,34 @@ class ParagonGovee(object):
             'command_retries': utils.get_int('command_retries', 2) or 2,
             'log_func': utils.debug,
         }
+
+    def save_codes(self):
+        utils.write_json(self.CODE_FILE, self._codes or {})
+
+    # -- learned commands ---------------------------------------------------
+    #
+    # Routed through the owning driver rather than assuming Broadlink, so a
+    # second kind of emitter needs no change here.
+
+    def _emitter(self, device):
+        from devices import ControlError
+
+        driver = self.controller.driver_for(device)
+        if driver is None or not hasattr(driver, 'start_learning'):
+            raise ControlError('%s cannot learn commands' % device.name)
+        return driver
+
+    def start_learning(self, device):
+        return self._emitter(device).start_learning(device)
+
+    def collect_learned(self, device):
+        return self._emitter(device).collect_learned(device)
+
+    def save_command(self, device, name, hex_code):
+        return self._emitter(device).save_command(device, name, hex_code)
+
+    def forget_command(self, device, name):
+        return self._emitter(device).forget_command(device, name)
 
     @property
     def discovery_timeout(self):

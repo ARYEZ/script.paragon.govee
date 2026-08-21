@@ -57,7 +57,7 @@ class Device(object):
 
     def __init__(self, device_id, name='', model='', ip='', lan=False,
                  cloud=False, supports=None, temp_range=None, enabled=True,
-                 driver=DEFAULT_DRIVER):
+                 driver=DEFAULT_DRIVER, devtype=None):
         self.device_id = (device_id or '').upper()
         self.driver = driver or DEFAULT_DRIVER
         self.model = model or ''
@@ -67,6 +67,10 @@ class Device(object):
         self.supports = list(supports or [])
         self.temp_range = temp_range or [DEFAULT_TEMP_MIN, DEFAULT_TEMP_MAX]
         self.enabled = bool(enabled)
+        # Vendor type code, when the driver needs one on the wire. Broadlink
+        # puts it in every packet header, so it has to survive a restart --
+        # guessing it would build packets the device ignores.
+        self.devtype = devtype
         self.name = name or self._fallback_name()
 
     def _fallback_name(self):
@@ -109,6 +113,7 @@ class Device(object):
             'supports': self.supports,
             'temp_range': self.temp_range,
             'enabled': self.enabled,
+            'devtype': self.devtype,
         }
 
     @classmethod
@@ -124,6 +129,7 @@ class Device(object):
             supports=data.get('supports'),
             temp_range=data.get('temp_range'),
             enabled=data.get('enabled', True),
+            devtype=data.get('devtype'),
         )
 
     def merge(self, other):
@@ -443,7 +449,20 @@ def build_hub(settings):
     Govee is the only driver today. A second vendor is added here and nowhere
     else -- the registry, the scene engine and the menus go through the Hub.
     """
+    from broadlink_driver import BroadlinkDriver
+    from broadlink_lan import BroadlinkTransport
     from hub import Hub
 
-    return Hub(drivers=[build_controller(settings)],
-               log_func=settings.get('log_func'))
+    drivers = [build_controller(settings)]
+
+    if settings.get('broadlink_enabled', True):
+        drivers.append(BroadlinkDriver(
+            transport=BroadlinkTransport(
+                bind_address=settings.get('bind_address', ''),
+                timeout=settings.get('broadlink_timeout', 5),
+                log_func=settings.get('log_func')),
+            codes=settings.get('broadlink_codes'),
+            save_codes=settings.get('save_broadlink_codes'),
+            log_func=settings.get('log_func')))
+
+    return Hub(drivers=drivers, log_func=settings.get('log_func'))

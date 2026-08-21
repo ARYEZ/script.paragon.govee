@@ -47,6 +47,11 @@ HIGHLIGHT_BRIGHTNESS = 100
 IDENTIFY_FLASHES = 10
 IDENTIFY_GAP = 0.4
 
+# How long to wait for a remote button press when learning a code. Thirty
+# seconds is long enough to find the right button on an unfamiliar remote.
+LEARN_ATTEMPTS = 30
+LEARN_POLL = 1.0
+
 # Offered when setting how often a mix scene moves the colours along.
 CYCLE_STEPS = [
     ('Off - hold the arrangement', 0),
@@ -976,14 +981,29 @@ class ControlPanel(object):
                       % (device.name, exc))
 
     def _edit_device(self, device):
+        from devices import CAP_COMMANDS
+
+        capabilities = self.app.controller.capabilities(device)
+        emitter = CAP_COMMANDS in capabilities
+
         options = [
             'Rename (currently "%s")' % device.name,
             'Disable' if device.enabled else 'Enable',
-            'Identify (flash this light)',
-            'Forget this light',
         ]
+        if emitter:
+            # An IR blaster has no light to flash and nothing to identify by,
+            # so its menu is about the codes it knows instead.
+            options.append('Commands (%d learned)...'
+                           % len(self.app.controller.commands(device)))
+        else:
+            options.append('Identify (flash this light)')
+        options.append('Forget this light')
+
         choice = _select(device.name, options)
         if choice == BACK:
+            return
+        if choice == 2 and emitter:
+            self.command_menu(device)
             return
 
         if choice == 0:
@@ -1007,6 +1027,85 @@ class ControlPanel(object):
                     % device.name):
                 self.app.forget_device(device)
                 utils.notify('Forgot %s' % device.name)
+
+    # -- learned commands ---------------------------------------------------
+
+    def command_menu(self, device):
+        """The codes a blaster knows: fire one, learn another, delete one."""
+        while True:
+            names = self.app.controller.commands(device)
+            rows = list(names)
+            rows.append('Learn a new command...')
+
+            choice = _select('%s - commands' % device.name, rows)
+            if choice == BACK:
+                return
+            if choice == len(names):
+                self.learn_command(device)
+                continue
+
+            name = names[choice]
+            action = _select(name, ['Send it now', 'Delete'])
+            if action == 0:
+                try:
+                    self.app.controller.send_command(device, name)
+                    utils.notify('Sent %s' % name)
+                except ControlError as exc:
+                    utils.force_notify(str(exc))
+            elif action == 1 and _dialog().yesno(
+                    'Paragon Home', 'Delete the command "%s"?' % name):
+                self.app.forget_command(device, name)
+                utils.notify('Deleted %s' % name)
+
+    def learn_command(self, device, sleep_func=None):
+        """Put the blaster into learning mode and wait for a remote press.
+
+        The device has to be polled: it does not push the captured code, and
+        it answers an error while it is still waiting, which is why a failed
+        check means "keep waiting" rather than "give up".
+        """
+        import time
+
+        sleep = sleep_func or time.sleep
+
+        try:
+            self.app.start_learning(device)
+        except ControlError as exc:
+            utils.force_notify(str(exc))
+            return
+
+        progress = xbmcgui.DialogProgress()
+        progress.create('Paragon Home',
+                        'Point your remote at %s and press the button.'
+                        % device.name,
+                        'Cancel to give up.')
+        code = None
+        try:
+            for step in range(LEARN_ATTEMPTS):
+                progress.update(int(step * 100.0 / LEARN_ATTEMPTS))
+                if progress.iscanceled():
+                    break
+                code = self.app.collect_learned(device)
+                if code:
+                    break
+                sleep(LEARN_POLL)
+        finally:
+            progress.close()
+
+        if not code:
+            _dialog().ok('Paragon Home',
+                         'No code was captured.\n\nHold the remote close to '
+                         '%s and press the button firmly while the dialog is '
+                         'open.' % device.name)
+            return
+
+        name = _dialog().input('Name for this command', '')
+        if not name or not name.strip():
+            return
+        if self.app.save_command(device, name.strip(), code):
+            utils.notify('Learned %s' % name.strip())
+        else:
+            utils.force_notify('That command could not be saved')
 
     def _identify(self, device, sleep_func=None):
         """Blink a light so the user can tell which physical unit it is.

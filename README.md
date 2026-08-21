@@ -175,6 +175,29 @@ light or just a few. The starter set is `Movie Night`, `Paused`, `Lights Up`,
 Scenes live in `scenes.json` in the add-on's profile directory, so they survive
 upgrades and can be hand-edited or copied between boxes.
 
+### Mixing several colours over the lights
+
+A scene can hold a *set* of colours rather than one. In the scene editor:
+
+**Appearance → Mix of colours (spread over the lights)…** then tick as many
+saved colours as you like.
+
+Applying the scene deals those colours across the target lights:
+
+* **Evenly** — each colour is used `floor(n/k)` or `ceil(n/k)` times. With 25
+  lights and 3 colours that is 9/8/8, not whatever chance produces.
+* **Randomly** — which light gets which is shuffled, so the same scene
+  arranges differently every time you apply it. Re-apply for a new pattern.
+* Which colour gets the spare light is randomised too, so no colour is
+  systematically favoured over repeated applications.
+
+Brightness and power apply to every light as usual; only the colour varies.
+
+Mix colours are **copied into the scene**, not referenced by name, so editing
+or deleting a palette colour later cannot silently change a scene you already
+built. A per-light entry from a **capture** still wins over the mix, so the
+two compose.
+
 ### Govee Tap-to-Run scenes
 
 Tap-to-Run scenes cannot be triggered through the Govee API. They are not part
@@ -378,7 +401,7 @@ button that appears to do nothing is worse.
 ## Development
 
 ```
-python3 tests/test_paragon_govee.py     # 182 tests
+python3 tests/test_paragon_govee.py     # 199 tests
 python3 tests/check_py2.py              # Python 2.7 syntax gate
 python3 tools/make_assets.py            # regenerate icon.png / fanart.png
 ```

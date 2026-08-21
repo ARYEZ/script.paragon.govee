@@ -22,12 +22,15 @@ Fields:
     targets     list of device ids; empty means every enabled device
 """
 
+import random
+
 POWER_ON = 'on'
 POWER_OFF = 'off'
 POWER_KEEP = 'keep'
 
 MODE_COLOR = 'color'
 MODE_TEMP = 'temp'
+MODE_MIX = 'mix'
 MODE_NONE = 'none'
 
 SCENE_FILE = 'scenes.json'
@@ -90,8 +93,55 @@ def parse_hex_color(text):
     return rgb, note
 
 
+def _normalise_mix_entry(entry):
+    """One colour of a mix: {'name':..., 'color':[r,g,b]} or a bare [r,g,b]."""
+    if isinstance(entry, dict):
+        name = entry.get('name') or ''
+        rgb = entry.get('color')
+    else:
+        name, rgb = '', entry
+
+    try:
+        rgb = [max(0, min(255, int(c))) for c in rgb][:3]
+    except (TypeError, ValueError):
+        return None
+    if len(rgb) != 3:
+        return None
+
+    name = (name or '').strip() or '#%02X%02X%02X' % (rgb[0], rgb[1], rgb[2])
+    return {'name': name, 'color': rgb}
+
+
+def deal_colors(colors, count, shuffle_func=None):
+    """Spread `colors` over `count` lights: evenly, in a random arrangement.
+
+    Even means each colour is used floor(count/n) or ceil(count/n) times --
+    with 25 lights and 3 colours that is 9/8/8, not whatever chance happens
+    to produce. Random means which light gets which is shuffled, so the same
+    scene applied twice arranges differently.
+
+    The colour order is shuffled before the pool is built as well as after.
+    Building the pool by repeating and truncating always hands the spare
+    light to whichever colour comes first, so without that the same colour
+    would win the extra every single time.
+    """
+    if not colors or count <= 0:
+        return []
+
+    shuffle = shuffle_func or random.shuffle
+
+    order = list(colors)
+    shuffle(order)
+
+    repeats = (count // len(order)) + 1
+    pool = (order * repeats)[:count]
+    shuffle(pool)
+    return pool
+
+
 def make_scene(name, power=POWER_ON, brightness=None, mode=MODE_NONE,
-               color=None, kelvin=None, targets=None, devices=None):
+               color=None, kelvin=None, targets=None, devices=None,
+               colors=None):
     return {
         'name': name,
         'power': power,
@@ -101,6 +151,7 @@ def make_scene(name, power=POWER_ON, brightness=None, mode=MODE_NONE,
         'kelvin': kelvin or 2700,
         'targets': list(targets or []),
         'devices': dict(devices or {}),
+        'colors': list(colors or []),
     }
 
 
@@ -121,7 +172,7 @@ def _normalise_settings(raw, fallback_power=POWER_ON):
             brightness = None
 
     mode = raw.get('mode', MODE_NONE)
-    if mode not in (MODE_COLOR, MODE_TEMP, MODE_NONE):
+    if mode not in (MODE_COLOR, MODE_TEMP, MODE_MIX, MODE_NONE):
         mode = MODE_NONE
 
     color = raw.get('color') or [255, 255, 255]
@@ -360,15 +411,29 @@ def normalise(scene):
             if cleaned is not None and device_id:
                 per_device[str(device_id).upper()] = cleaned
 
+    colors = []
+    raw_colors = scene.get('colors')
+    if isinstance(raw_colors, list):
+        for entry in raw_colors:
+            item = _normalise_mix_entry(entry)
+            if item is not None:
+                colors.append(item)
+
+    mode = settings['mode']
+    if mode == MODE_MIX and not colors:
+        # A mix with nothing in it would silently do nothing to the colour.
+        mode = MODE_NONE
+
     return {
         'name': name,
         'power': settings['power'],
         'brightness': settings['brightness'],
-        'mode': settings['mode'],
+        'mode': mode,
         'color': settings['color'],
         'kelvin': settings['kelvin'],
         'targets': targets,
         'devices': per_device,
+        'colors': colors,
     }
 
 
@@ -419,6 +484,8 @@ def describe(scene):
     if scene.get('mode') == MODE_COLOR:
         color = scene.get('color') or [255, 255, 255]
         bits.append('RGB %d,%d,%d' % tuple(color[:3]))
+    elif scene.get('mode') == MODE_MIX:
+        bits.append('mix of %d colours' % len(scene.get('colors') or []))
     elif scene.get('mode') == MODE_TEMP:
         bits.append('%dK' % scene.get('kelvin', 2700))
     targets = scene.get('targets') or []
@@ -436,7 +503,8 @@ def scene_targets(scene, devices):
     return [d for d in enabled if d.device_id in wanted]
 
 
-def apply_scene(controller, scene, devices, log_func=None):
+def apply_scene(controller, scene, devices, log_func=None,
+                shuffle_func=None):
     """Apply `scene` and return (applied_count, [error strings]).
 
     Every device is attempted even if an earlier one failed, so one
@@ -453,12 +521,28 @@ def apply_scene(controller, scene, devices, log_func=None):
     if not targets:
         return 0, ['No lights matched that scene']
 
+    # A mix is dealt once, here, rather than per device: spreading colours
+    # evenly is a property of the whole set of lights, so it cannot be decided
+    # one light at a time.
+    dealt = None
+    if scene['mode'] == MODE_MIX and scene['colors']:
+        dealt = deal_colors([entry['color'] for entry in scene['colors']],
+                            len(targets), shuffle_func)
+
     applied = 0
     errors = []
-    for device in targets:
+    per_device_map = scene.get('devices') or {}
+    for index, device in enumerate(targets):
         # A captured scene carries this device's own recorded settings; every
         # other scene falls back to its single uniform set.
         settings = settings_for(scene, device.device_id)
+        if dealt is not None and device.device_id not in per_device_map:
+            # Copy before editing: settings_for hands back the scene's own
+            # dict when there is a per-device entry, and this must not write
+            # a dealt colour back into the saved scene.
+            settings = dict(settings)
+            settings['mode'] = MODE_COLOR
+            settings['color'] = list(dealt[index])
         try:
             apply_settings(controller, device, settings)
             applied += 1

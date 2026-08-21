@@ -396,6 +396,135 @@ class TestHexColours(unittest.TestCase):
         self.assertIn('6 or 8', reason)
 
 
+class TestColourMix(unittest.TestCase):
+    """Several colours spread evenly but randomly over the lights."""
+
+    @staticmethod
+    def devices(count):
+        return [Device('%02X' % i, name='Light %d' % i, lan=True)
+                for i in range(count)]
+
+    def test_even_split_over_many_lights(self):
+        """25 lights and 3 colours must be 9/8/8, not whatever chance gives."""
+        dealt = scene_lib.deal_colors(['R', 'G', 'B'], 25)
+        counts = sorted([dealt.count(c) for c in ('R', 'G', 'B')])
+        self.assertEqual(counts, [8, 8, 9])
+        self.assertEqual(len(dealt), 25)
+
+    def test_even_split_when_it_divides_exactly(self):
+        dealt = scene_lib.deal_colors(['R', 'G'], 10)
+        self.assertEqual(dealt.count('R'), 5)
+        self.assertEqual(dealt.count('G'), 5)
+
+    def test_more_colours_than_lights_uses_a_subset_once_each(self):
+        dealt = scene_lib.deal_colors(['R', 'G', 'B', 'Y'], 2)
+        self.assertEqual(len(dealt), 2)
+        self.assertEqual(len(set(dealt)), 2)
+
+    def test_the_spare_light_does_not_always_go_to_the_same_colour(self):
+        """Repeat-and-truncate alone would hand it to the first colour every
+        time, which is a visible bias over repeated applications."""
+        winners = set()
+        for _ in range(60):
+            dealt = scene_lib.deal_colors(['R', 'G', 'B'], 25)
+            winners.add([c for c in ('R', 'G', 'B') if dealt.count(c) == 9][0])
+        self.assertEqual(winners, {'R', 'G', 'B'})
+
+    def test_the_arrangement_changes_between_applications(self):
+        first = scene_lib.deal_colors(['R', 'G', 'B'], 25)
+        self.assertTrue(any(scene_lib.deal_colors(['R', 'G', 'B'], 25) != first
+                            for _ in range(40)))
+
+    def test_empty_inputs_are_handled(self):
+        self.assertEqual(scene_lib.deal_colors([], 5), [])
+        self.assertEqual(scene_lib.deal_colors(['R'], 0), [])
+
+    def test_applying_a_mix_gives_every_light_one_of_the_colours(self):
+        devices = self.devices(7)
+        scene = scene_lib.make_scene(
+            'Party', brightness=60, mode=scene_lib.MODE_MIX,
+            colors=[{'name': 'Red', 'color': [255, 0, 0]},
+                    {'name': 'Blue', 'color': [0, 0, 255]}])
+
+        controller = RecordingController()
+        applied, errors = scene_lib.apply_scene(controller, scene, devices)
+
+        self.assertEqual(applied, 7)
+        self.assertEqual(errors, [])
+        colors = [c[2:] for c in controller.calls if c[0] == 'color']
+        self.assertEqual(len(colors), 7)
+        self.assertEqual(set(colors), {(255, 0, 0), (0, 0, 255)})
+        # Even: 4 and 3, in some order.
+        self.assertEqual(sorted([colors.count((255, 0, 0)),
+                                 colors.count((0, 0, 255))]), [3, 4])
+
+        # Brightness still applies to all of them.
+        self.assertEqual(len([c for c in controller.calls
+                              if c[0] == 'brightness']), 7)
+
+    def test_applying_a_mix_does_not_write_back_into_the_scene(self):
+        """The dealt colour is per-application, not a scene edit."""
+        devices = self.devices(4)
+        scene = scene_lib.make_scene(
+            'Party', mode=scene_lib.MODE_MIX,
+            colors=[{'name': 'Red', 'color': [255, 0, 0]},
+                    {'name': 'Blue', 'color': [0, 0, 255]}])
+        before = json.dumps(scene, sort_keys=True)
+
+        scene_lib.apply_scene(RecordingController(), scene, devices)
+        self.assertEqual(json.dumps(scene, sort_keys=True), before)
+
+    def test_a_captured_per_light_entry_wins_over_the_mix(self):
+        one, two = self.devices(2)
+        scene = scene_lib.make_scene(
+            'Party', mode=scene_lib.MODE_MIX,
+            colors=[{'name': 'Red', 'color': [255, 0, 0]}],
+            devices={one.device_id: {'power': 'on', 'brightness': 10,
+                                     'mode': scene_lib.MODE_TEMP,
+                                     'kelvin': 2200,
+                                     'color': [255, 255, 255]}})
+
+        controller = RecordingController()
+        scene_lib.apply_scene(controller, scene, [one, two])
+
+        self.assertIn(('temp', one.device_id, 2200), controller.calls)
+        self.assertIn(('color', two.device_id, 255, 0, 0), controller.calls)
+
+    def test_a_mix_survives_a_json_round_trip(self):
+        scene = scene_lib.make_scene(
+            'Party', mode=scene_lib.MODE_MIX,
+            colors=[{'name': 'Red', 'color': [255, 0, 0]},
+                    {'name': 'Blue', 'color': [0, 0, 255]}])
+        restored = scene_lib.normalise(json.loads(json.dumps(scene)))
+
+        self.assertEqual(restored['mode'], scene_lib.MODE_MIX)
+        self.assertEqual([e['name'] for e in restored['colors']],
+                         ['Red', 'Blue'])
+
+    def test_a_mix_with_no_colours_degrades_to_leaving_colour_alone(self):
+        scene = scene_lib.normalise({'name': 'Empty',
+                                     'mode': scene_lib.MODE_MIX,
+                                     'colors': []})
+        self.assertEqual(scene['mode'], scene_lib.MODE_NONE)
+
+    def test_bare_rgb_entries_are_accepted_and_named_by_hex(self):
+        scene = scene_lib.normalise({'name': 'Hand edited',
+                                     'mode': scene_lib.MODE_MIX,
+                                     'colors': [[255, 40, 150], 'junk',
+                                                {'color': [0, 255, 0]}]})
+        self.assertEqual([e['name'] for e in scene['colors']],
+                         ['#FF2896', '#00FF00'])
+
+    def test_describe_mentions_the_mix(self):
+        scene = scene_lib.make_scene(
+            'Party', brightness=60, mode=scene_lib.MODE_MIX,
+            colors=[{'name': 'Red', 'color': [255, 0, 0]},
+                    {'name': 'Blue', 'color': [0, 0, 255]}])
+        text = scene_lib.describe(scene)
+        self.assertIn('mix of 2 colours', text)
+        self.assertIn('60%', text)
+
+
 class TestSceneCapture(unittest.TestCase):
     """Snapshotting the lights -- how a Govee Tap-to-Run gets into Kodi."""
 
@@ -2211,6 +2340,66 @@ class TestControlPanel(unittest.TestCase):
         self.assertIsNotNone(entry)
         self.assertEqual(entry['color'], original)
         self.assertEqual(palette_row(panel, 'Sunset'), index)
+
+    def test_building_a_mix_scene_from_the_editor(self):
+        panel = self.panel()
+        red = palette_row(panel, 'Deep Red')
+        blue = palette_row(panel, 'Ocean Blue')
+        done = len(panel.app.palette)
+
+        # Appearance -> "Mix of colours..." -> tick two -> Done -> Name -> Save
+        xbmcgui.SELECT_QUEUE.extend([3, 2, red, blue, done, 0, 6])
+        xbmcgui.INPUT_QUEUE.append('Party')
+        panel.edit_scene(None)
+
+        scene = panel.app.scene_by_name('Party')
+        self.assertIsNotNone(scene)
+        self.assertEqual(scene['mode'], scene_lib.MODE_MIX)
+        self.assertEqual(sorted(e['name'] for e in scene['colors']),
+                         ['Deep Red', 'Ocean Blue'])
+
+    def test_ticking_a_mix_colour_twice_removes_it(self):
+        panel = self.panel()
+        red = palette_row(panel, 'Deep Red')
+        done = len(panel.app.palette)
+        scene = scene_lib.make_scene('Test')
+
+        xbmcgui.SELECT_QUEUE.extend([red, red, done])
+        panel._edit_mix(scene)
+        # Nothing ticked at Done, so it refuses and stays in the picker.
+        self.assertEqual(scene.get('colors'), [])
+
+    def test_a_mix_scene_spreads_colours_over_the_real_lights(self):
+        panel = self.panel()
+        panel.app._devices = [
+            Device('AA:BB', name='One', lan=True, ip='10.0.0.1'),
+            Device('CC:DD', name='Two', lan=True, ip='10.0.0.2'),
+            Device('EE:FF', name='Three', lan=True, ip='10.0.0.3'),
+            Device('11:22', name='Four', lan=True, ip='10.0.0.4'),
+        ]
+        panel.app.save_scene(scene_lib.make_scene(
+            'Party', mode=scene_lib.MODE_MIX,
+            colors=[{'name': 'Red', 'color': [255, 0, 0]},
+                    {'name': 'Blue', 'color': [0, 0, 255]}]))
+
+        panel.app.apply_scene(panel.app.scene_by_name('Party'))
+
+        colors = [c[2:] for c in self.recorder.calls if c[0] == 'color']
+        self.assertEqual(len(colors), 4)
+        self.assertEqual(sorted([colors.count((255, 0, 0)),
+                                 colors.count((0, 0, 255))]), [2, 2])
+
+    def test_deleting_a_palette_colour_does_not_change_a_saved_mix(self):
+        """Mix colours are copied into the scene, not referenced by name."""
+        panel = self.panel()
+        entry = panel.app.color_by_name('Deep Red')
+        panel.app.save_scene(scene_lib.make_scene(
+            'Party', mode=scene_lib.MODE_MIX, colors=[dict(entry)]))
+
+        panel.app.remove_color(panel.app.color_by_name('Deep Red'))
+
+        scene = panel.app.scene_by_name('Party')
+        self.assertEqual(scene['colors'][0]['color'], entry['color'])
 
     def test_a_custom_colour_is_usable_from_the_scene_editor(self):
         panel = self.panel()

@@ -1,3 +1,20 @@
+v1.6.0
+- Scenes can now hold a mix of colours. In the scene editor choose
+  Appearance -> "Mix of colours (spread over the lights)..." and tick as many
+  saved colours as you like; applying the scene deals them across the lights.
+- The spread is even, not merely random: each colour is used floor(n/k) or
+  ceil(n/k) times, so 25 lights and 3 colours is 9/8/8 rather than whatever
+  chance produces. Which light gets which is shuffled, so the same scene
+  arranges differently every time it is applied.
+- Which colour gets the spare light is also randomised. Repeating and
+  truncating the colour list alone would hand it to the first colour every
+  single time, which shows up as a bias over repeated applications.
+- Mix colours are copied into the scene rather than referenced by name, so
+  editing or deleting a palette colour later cannot silently change or empty
+  a scene that was already built and tested.
+- A per-light entry from a capture still wins over the mix, so the two
+  features compose rather than fighting.
+
 v1.5.0
 - The colour list is now editable. "Manage colours..." at the bottom of any
   colour menu lets you add a colour by hex code and name it, rename it,

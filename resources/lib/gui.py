@@ -513,6 +513,10 @@ class ControlPanel(object):
                           else '%d%%' % scene['brightness'])
             if scene['mode'] == scene_lib.MODE_COLOR:
                 appearance = 'RGB %d, %d, %d' % tuple(scene['color'][:3])
+            elif scene['mode'] == scene_lib.MODE_MIX:
+                names = [e['name'] for e in scene.get('colors') or []]
+                appearance = 'mix: %s' % (', '.join(names[:3])
+                                          + (', ...' if len(names) > 3 else ''))
             elif scene['mode'] == scene_lib.MODE_TEMP:
                 appearance = '%dK' % scene['kelvin']
             else:
@@ -608,11 +612,15 @@ class ControlPanel(object):
 
     def _edit_appearance(self, scene):
         choice = _select('Scene appearance',
-                         ['Colour temperature', 'Colour', 'Leave alone'])
+                         ['Colour temperature', 'Colour',
+                          'Mix of colours (spread over the lights)...',
+                          'Leave alone'])
         if choice == BACK:
             return
-        if choice == 2:
+        if choice == 3:
             scene['mode'] = scene_lib.MODE_NONE
+        elif choice == 2:
+            self._edit_mix(scene)
         elif choice == 0:
             options = [name for name, _k in TEMP_PRESETS] + ['Custom...']
             pick = _select('Colour temperature', options)
@@ -640,6 +648,51 @@ class ControlPanel(object):
             else:
                 scene['color'] = list(entries[pick]['color'])
             scene['mode'] = scene_lib.MODE_COLOR
+
+    def _edit_mix(self, scene):
+        """Tick which saved colours go into the mix.
+
+        Colours are copied into the scene rather than referenced by name, so
+        editing or deleting a palette entry later cannot silently change or
+        empty a scene that was already built and tested.
+        """
+        entries = self.app.palette
+        if not entries:
+            utils.force_notify('No colours defined yet')
+            return
+
+        chosen = [dict(e) for e in (scene.get('colors') or [])]
+        chosen_rgb = [tuple(e['color']) for e in chosen]
+
+        while True:
+            rows = []
+            for entry in entries:
+                mark = '[x]' if tuple(entry['color']) in chosen_rgb else '[ ]'
+                rows.append('%s %s  %s'
+                            % (mark, entry['name'],
+                               palette_lib.to_hex(entry['color'])))
+            rows.append('Done (%d in the mix)' % len(chosen))
+
+            choice = _select('Colours to spread over the lights', rows)
+            if choice == BACK:
+                return
+            if choice == len(entries):
+                if not chosen:
+                    utils.force_notify('Pick at least one colour')
+                    continue
+                scene['colors'] = chosen
+                scene['mode'] = scene_lib.MODE_MIX
+                return
+
+            entry = entries[choice]
+            rgb = tuple(entry['color'])
+            if rgb in chosen_rgb:
+                position = chosen_rgb.index(rgb)
+                del chosen[position]
+                del chosen_rgb[position]
+            else:
+                chosen.append(dict(entry))
+                chosen_rgb.append(rgb)
 
     def _edit_targets(self, scene):
         """Pick which lights a scene touches, one at a time.

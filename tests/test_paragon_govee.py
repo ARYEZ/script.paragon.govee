@@ -332,6 +332,30 @@ class TestHexColours(unittest.TestCase):
         self.assertEqual(rgb, (255, 40, 150))
         self.assertIn('AARRGGBB', note)
 
+    def test_real_govee_codes(self):
+        """Straight out of the Govee app.
+
+        The RRGGBBAA reading of these would mean alphas of 7F and 3C -- bulbs
+        at 50% and 23% transparency -- so AARRGGBB is the only sensible one.
+        """
+        rgb, note = scene_lib.parse_hex_color('FF3C447F')
+        self.assertEqual(rgb, (60, 68, 127))     # deep slate blue
+        self.assertIn('AARRGGBB', note)
+
+        rgb, note = scene_lib.parse_hex_color('FF7F3C3C')
+        self.assertEqual(rgb, (127, 60, 60))     # deep brick red
+        self.assertIn('AARRGGBB', note)
+
+    def test_a_govee_code_whose_last_byte_is_ff_still_reads_as_argb(self):
+        """The ambiguous default has to match Govee, not just be a coin flip.
+
+        A Govee colour with blue at full lands on FF at both ends, and the
+        alpha-first default is what keeps that correct.
+        """
+        rgb, note = scene_lib.parse_hex_color('FF3C44FF')
+        self.assertEqual(rgb, (60, 68, 255))
+        self.assertIn('ambiguous', note)
+
     def test_trailing_ff_is_read_as_alpha_last(self):
         rgb, note = scene_lib.parse_hex_color('2896FFFF')
         self.assertEqual(rgb, (40, 150, 255))

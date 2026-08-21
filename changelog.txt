@@ -1,3 +1,12 @@
+v1.2.1
+- Confirmed the Govee colour format from real codes out of the app
+  (FF3C447F, FF7F3C3C): it is AARRGGBB with the alpha always FF. Read the
+  other way round those would mean alphas of 7F and 3C -- bulbs at 50% and 23%
+  transparency -- so AARRGGBB is the only sensible reading. No behaviour
+  change; the inference already produced this. Both codes are now test cases,
+  along with the case where a Govee colour ends in FF and the ambiguous
+  alpha-first default is what keeps it correct.
+
 v1.2.0
 - Colour entry now accepts the 8-digit hex codes the Govee app uses, not just
   6-digit ones. Pasting a Govee code used to be rejected outright.

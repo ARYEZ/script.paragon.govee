@@ -177,13 +177,22 @@ the lights happened to be on.
 Colour entry takes `RRGGBB`, the `RGB` shorthand, and the 8-digit codes the
 Govee app produces.
 
-An 8-digit code carries an alpha byte that the lights have no use for, and
-which end it sits on is not consistent between tools — Android writes
-`AARRGGBB`, CSS Color 4 writes `RRGGBBAA`, and Govee documents neither. The
-add-on infers it: an alpha in a colour picker is almost always `FF`, so
-whichever end is `FF` is taken as the alpha. When both ends are `FF` or
-neither is, the two readings are genuinely indistinguishable and alpha-first
-wins.
+**Govee emits `AARRGGBB` with the alpha always `FF`** — confirmed from real
+codes out of the app:
+
+| Govee code | Colour |
+|---|---|
+| `FF3C447F` | `#3C447F` — deep slate blue |
+| `FF7F3C3C` | `#7F3C3C` — deep brick red |
+
+Read the other way round those would mean alphas of `7F` and `3C`, i.e. bulbs
+at 50% and 23% transparency, which is meaningless for a light.
+
+The end is still inferred rather than hardcoded, because other sources differ
+— Android writes `AARRGGBB`, CSS Color 4 writes `RRGGBBAA`. An alpha in a
+colour picker is almost always `FF`, so whichever end reads `FF` is taken as
+the alpha; when both ends are `FF` or neither is, alpha-first wins, which is
+also the right answer for Govee.
 
 The confirmation always says how a code was read — `#FF2896 (read as
 AARRGGBB)` — because dropping the alpha off the wrong end produces a
@@ -301,7 +310,7 @@ button that appears to do nothing is worse.
 ## Development
 
 ```
-python3 tests/test_paragon_govee.py     # 147 tests
+python3 tests/test_paragon_govee.py     # 149 tests
 python3 tests/check_py2.py              # Python 2.7 syntax gate
 python3 tools/make_assets.py            # regenerate icon.png / fanart.png
 ```

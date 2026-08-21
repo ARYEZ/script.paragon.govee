@@ -42,16 +42,21 @@ def parse_hex_color(text):
     """Parse a hex colour string. Returns ((r, g, b), note) or (None, reason).
 
     Accepts 3, 6 and 8 digit forms. The Govee app shows 8-digit codes, which
-    carry an alpha byte the LAN protocol has no use for -- but which end the
-    alpha sits on is not consistent between tools: Android writes AARRGGBB,
-    CSS Color 4 writes RRGGBBAA, and Govee documents neither.
+    carry an alpha byte the LAN protocol has no use for.
 
-    So it is inferred rather than assumed. An alpha byte in a colour picker is
-    almost always FF (opaque), so whichever end is FF is taken as the alpha.
-    When both ends are FF, or neither is, the two readings are genuinely
-    indistinguishable and alpha-first wins, since the Govee app is a mobile
-    app and that is the Android convention. `note` always says which reading
-    was used so a wrong guess is visible rather than silently applied.
+    Govee emits AARRGGBB with the alpha always FF. That is confirmed from real
+    codes out of the app -- FF3C447F and FF7F3C3C -- where the alternative
+    RRGGBBAA reading would mean alphas of 7F and 3C, i.e. bulbs at 50% and 23%
+    transparency, which is meaningless for a light. Read as AARRGGBB they are
+    a deep slate blue and a deep brick red, which is what the app showed.
+
+    Other sources are not consistent, though: Android writes AARRGGBB and CSS
+    Color 4 writes RRGGBBAA, so the end is inferred rather than hardcoded. An
+    alpha in a colour picker is almost always FF, so whichever end reads FF is
+    taken as the alpha; when both ends are FF or neither is, the two readings
+    are indistinguishable and alpha-first wins, which is also the right answer
+    for Govee. `note` always says which reading was used, so a wrong inference
+    shows up in the dialog rather than only on the wall.
     """
     if not text:
         return None, 'No colour entered'

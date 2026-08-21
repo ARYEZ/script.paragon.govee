@@ -984,6 +984,243 @@ class TestSceneCapture(unittest.TestCase):
         self.assertIn('1 on', text)
 
 
+class FakeBlaster(object):
+    """A stand-in for a second vendor: emits commands, has no colour.
+
+    Deliberately shaped like an IR blaster rather than a light. If the driver
+    seam is real, this needs no changes anywhere else to work -- the registry,
+    the Hub and the scene engine should route to it without knowing what it is.
+    """
+
+    DRIVER_ID = 'blaster'
+    DRIVER_LABEL = 'Test Blaster'
+
+    def __init__(self, devices=None, codes=None):
+        self._devices = devices or []
+        self._codes = codes or ['AVR Power', 'TV Input']
+        self.sent = []
+
+    def discover(self, timeout=3.0):
+        return list(self._devices), []
+
+    def capabilities(self, device):
+        from devices import CAP_COMMANDS
+        return set([CAP_COMMANDS])
+
+    def commands(self, device):
+        return list(self._codes)
+
+    def send_command(self, device, name):
+        from devices import ControlError
+        if name not in self._codes:
+            raise ControlError('%s has no code called "%s"'
+                               % (device.name, name))
+        self.sent.append((device.device_id, name))
+        return True
+
+    # State verbs exist but do nothing: this device has no state to set.
+    def turn(self, device, on):
+        from devices import ControlError
+        raise ControlError('%s cannot be switched' % device.name)
+
+    set_brightness = set_color = set_color_temp = turn
+
+    def get_state(self, device):
+        return None
+
+    def get_states(self, devices, timeout=3.0):
+        return dict((d.device_id, None) for d in devices)
+
+
+class TestDriverSeam(unittest.TestCase):
+    """A second vendor should need no changes outside its own driver."""
+
+    def setUp(self):
+        clean_profile()
+        xbmcaddon.reset()
+        xbmcgui.reset()
+        for name in ('addon_utils', 'paragon_govee', 'hub', 'scenes'):
+            if name in sys.modules:
+                del sys.modules[name]
+
+    def tearDown(self):
+        clean_profile()
+
+    def build(self):
+        import hub as hub_mod
+
+        blaster_device = Device('RM:01', name='Lounge Blaster',
+                                driver='blaster')
+        blaster = FakeBlaster(devices=[blaster_device])
+        lights = RecordingController()
+        lights.DRIVER_ID = 'govee'
+        lights.DRIVER_LABEL = 'Govee'
+        lights.discover = lambda timeout=3.0: (
+            [Device('AA:BB', name='Lamp', lan=True, ip='10.0.0.1')], [])
+        lights.capabilities = lambda device: set(['power', 'brightness',
+                                                  'color'])
+        lights.commands = lambda device: []
+        lights.get_states = lambda devices, timeout=3.0: {}
+        return hub_mod.Hub(drivers=[lights, blaster]), lights, blaster
+
+    def test_discovery_merges_both_drivers_and_tags_ownership(self):
+        hub, _lights, _blaster = self.build()
+        found, warnings = hub.discover()
+
+        self.assertEqual(warnings, [])
+        self.assertEqual(sorted(d.driver for d in found),
+                         ['blaster', 'govee'])
+
+    def test_one_driver_failing_does_not_hide_the_other(self):
+        hub, lights, _blaster = self.build()
+
+        def broken(timeout=3.0):
+            raise RuntimeError('port busy')
+
+        lights.discover = broken
+        found, warnings = hub.discover()
+
+        self.assertEqual([d.driver for d in found], ['blaster'])
+        self.assertTrue(any('port busy' in w for w in warnings))
+
+    def test_commands_route_to_the_owning_driver(self):
+        hub, _lights, blaster = self.build()
+        device = Device('RM:01', name='Lounge Blaster', driver='blaster')
+
+        hub.send_command(device, 'AVR Power')
+        self.assertEqual(blaster.sent, [('RM:01', 'AVR Power')])
+
+    def test_a_light_refuses_commands_it_cannot_emit(self):
+        hub, _lights, _blaster = self.build()
+        lamp = Device('AA:BB', name='Lamp', lan=True)
+
+        with self.assertRaises(ControlError):
+            hub.send_command(lamp, 'AVR Power')
+
+    def test_devices_cached_before_drivers_existed_still_work(self):
+        """An old devices.json records no driver; every entry is Govee."""
+        restored = Device.from_dict({'device_id': 'AA:BB', 'name': 'Old',
+                                     'lan': True})
+        self.assertEqual(restored.driver, 'govee')
+
+        hub, lights, _blaster = self.build()
+        hub.turn(restored, True)
+        self.assertEqual(lights.calls, [('turn', 'AA:BB', True)])
+
+    def test_a_scene_dims_the_lights_and_fires_a_command(self):
+        """The whole point: one scene spanning two vendors."""
+        import scenes as fresh_scenes
+
+        hub, lights, blaster = self.build()
+        lamp = Device('AA:BB', name='Lamp', lan=True, ip='10.0.0.1')
+        blaster_device = Device('RM:01', name='Lounge Blaster',
+                                driver='blaster')
+
+        scene = fresh_scenes.make_scene(
+            'Movie Night', brightness=8, mode=fresh_scenes.MODE_TEMP,
+            kelvin=2000, targets=['AA:BB'],
+            actions=[{'device': 'RM:01', 'command': 'AVR Power'}])
+
+        applied, errors = fresh_scenes.apply_scene(
+            hub, scene, [lamp, blaster_device])
+
+        self.assertEqual(errors, [])
+        self.assertEqual(applied, 2)          # one light, one command
+        self.assertIn(('brightness', 'AA:BB', 8), lights.calls)
+        self.assertEqual(blaster.sent, [('RM:01', 'AVR Power')])
+
+    def test_a_scene_can_be_commands_only(self):
+        """Switch the amp on; no lights involved."""
+        import scenes as fresh_scenes
+
+        hub, lights, blaster = self.build()
+        blaster_device = Device('RM:01', name='Lounge Blaster',
+                                driver='blaster')
+
+        scene = fresh_scenes.make_scene(
+            'Amp On', targets=['RM:01'],
+            actions=[{'device': 'RM:01', 'command': 'AVR Power'}])
+        applied, errors = fresh_scenes.apply_scene(hub, scene,
+                                                   [blaster_device])
+
+        # The blaster has no state, so the state pass reports it and the
+        # command still goes out.
+        self.assertEqual(blaster.sent, [('RM:01', 'AVR Power')])
+        self.assertEqual(lights.calls, [])
+
+    def test_a_missing_command_is_reported_not_silent(self):
+        import scenes as fresh_scenes
+
+        hub, _lights, blaster = self.build()
+        blaster_device = Device('RM:01', name='Lounge Blaster',
+                                driver='blaster')
+
+        scene = fresh_scenes.make_scene(
+            'Bad', targets=['NOBODY'],
+            actions=[{'device': 'RM:01', 'command': 'Nonexistent'}])
+        _applied, errors = fresh_scenes.apply_scene(hub, scene,
+                                                    [blaster_device])
+
+        self.assertEqual(blaster.sent, [])
+        self.assertTrue(any('Nonexistent' in e for e in errors))
+
+    def test_an_action_for_an_unknown_device_is_reported(self):
+        import scenes as fresh_scenes
+
+        hub, _lights, _blaster = self.build()
+        scene = fresh_scenes.make_scene(
+            'Bad', actions=[{'device': 'GONE', 'command': 'AVR Power'}])
+        _applied, errors = fresh_scenes.apply_scene(hub, scene, [])
+        self.assertTrue(any('AVR Power' in e for e in errors))
+
+    def test_actions_survive_a_json_round_trip(self):
+        import scenes as fresh_scenes
+
+        scene = fresh_scenes.make_scene(
+            'Movie Night',
+            actions=[{'device': 'rm:01', 'command': ' AVR Power '}])
+        restored = fresh_scenes.normalise(json.loads(json.dumps(scene)))
+        self.assertEqual(restored['actions'],
+                         [{'device': 'RM:01', 'command': 'AVR Power'}])
+
+    def test_malformed_actions_are_dropped(self):
+        import scenes as fresh_scenes
+
+        scene = fresh_scenes.normalise({
+            'name': 'Hand edited',
+            'actions': ['junk', {'device': 'X'}, {'command': 'Y'},
+                        {'device': 'Z', 'command': '   '},
+                        {'device': 'OK', 'command': 'Fine'}]})
+        self.assertEqual(scene['actions'],
+                         [{'device': 'OK', 'command': 'Fine'}])
+
+    def test_state_reads_are_grouped_per_driver(self):
+        """Each driver keeps its own batching -- Govee's one-socket sweep."""
+        hub, lights, _blaster = self.build()
+        seen = []
+        lights.get_states = lambda devices, timeout=3.0: (
+            seen.append(len(devices)) or
+            dict((d.device_id, {'power': 'on'}) for d in devices))
+
+        states = hub.get_states([
+            Device('AA:BB', name='One', lan=True),
+            Device('CC:DD', name='Two', lan=True),
+            Device('RM:01', name='Blaster', driver='blaster'),
+        ])
+
+        self.assertEqual(seen, [2])          # one call for both lights
+        self.assertEqual(states['AA:BB']['power'], 'on')
+        self.assertIsNone(states['RM:01'])
+
+    def test_describe_mentions_commands(self):
+        import scenes as fresh_scenes
+
+        scene = fresh_scenes.make_scene(
+            'Movie Night', brightness=8,
+            actions=[{'device': 'RM:01', 'command': 'AVR Power'}])
+        self.assertIn('1 command(s)', fresh_scenes.describe(scene))
+
+
 # ---------------------------------------------------------------------------
 # Device model and transport selection
 # ---------------------------------------------------------------------------
@@ -2195,7 +2432,9 @@ class TestDiagnostics(unittest.TestCase):
             def probe(self, timeout=4.0):
                 return TestDiagnostics.report()
 
-        app.controller.lan = StubLAN()
+        # Reach through the Hub to the Govee driver: the LAN probe belongs to
+        # that driver, not to the device layer as a whole.
+        app.controller.driver('govee').lan = StubLAN()
         del xbmc.LOG_LINES[:]
 
         text, report = diagnostics.run(app)

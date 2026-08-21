@@ -139,6 +139,25 @@ def deal_colors(colors, count, shuffle_func=None):
     return pool
 
 
+def _normalise_action(entry):
+    """One command a scene fires: {'device': id, 'command': name}.
+
+    Actions are how a scene reaches a device that has no state to set -- an IR
+    blaster has no colour, it has "AVR Power". A scene holds both, so one
+    "Movie Night" can dim the lights and switch the amp on.
+    """
+    if not isinstance(entry, dict):
+        return None
+    device_id = entry.get('device')
+    command = entry.get('command')
+    if not device_id or not command or not hasattr(command, 'strip'):
+        return None
+    command = command.strip()
+    if not command:
+        return None
+    return {'device': str(device_id).upper(), 'command': command}
+
+
 def deal_assignment(color_count, device_ids, shuffle_func=None):
     """Map each device id to a colour index: evenly spread, randomly arranged.
 
@@ -170,7 +189,7 @@ def rotate_assignment(assignment, color_count):
 
 def make_scene(name, power=POWER_ON, brightness=None, mode=MODE_NONE,
                color=None, kelvin=None, targets=None, devices=None,
-               colors=None, cycle=0):
+               colors=None, cycle=0, actions=None):
     return {
         'name': name,
         'power': power,
@@ -182,6 +201,7 @@ def make_scene(name, power=POWER_ON, brightness=None, mode=MODE_NONE,
         'devices': dict(devices or {}),
         'colors': list(colors or []),
         'cycle': int(cycle or 0),
+        'actions': list(actions or []),
     }
 
 
@@ -462,6 +482,14 @@ def normalise(scene):
             if item is not None:
                 colors.append(item)
 
+    actions = []
+    raw_actions = scene.get('actions')
+    if isinstance(raw_actions, list):
+        for entry in raw_actions:
+            item = _normalise_action(entry)
+            if item is not None:
+                actions.append(item)
+
     try:
         cycle = max(0, int(scene.get('cycle') or 0))
     except (TypeError, ValueError):
@@ -484,6 +512,7 @@ def normalise(scene):
         'colors': colors,
         # Only a mix has anything to cycle through.
         'cycle': cycle if mode == MODE_MIX else 0,
+        'actions': actions,
     }
 
 
@@ -540,6 +569,9 @@ def describe(scene):
         bits.append('%dK' % scene.get('kelvin', 2700))
     targets = scene.get('targets') or []
     bits.append('%d light(s)' % len(targets) if targets else 'all lights')
+    actions = scene.get('actions') or []
+    if actions:
+        bits.append('%d command(s)' % len(actions))
     return ', '.join(bits)
 
 
@@ -570,6 +602,11 @@ def apply_scene(controller, scene, devices, log_func=None,
 
     targets = scene_targets(scene, devices)
     if not targets:
+        # A scene may be nothing but commands -- switch the amp on, no lights
+        # involved -- so an empty target list is only a problem when there is
+        # also nothing to fire.
+        if scene.get('actions'):
+            return fire_actions(controller, scene, devices, log)
         return 0, ['No lights matched that scene']
 
     # A mix is dealt once, here, rather than per device: spreading colours
@@ -620,4 +657,39 @@ def apply_scene(controller, scene, devices, log_func=None,
             log('Scene "%s" failed on %s: %s' % (scene['name'], device.name, exc))
             errors.append(str(exc))
 
-    return applied, errors
+    fired, action_errors = fire_actions(controller, scene, devices, log)
+    return applied + fired, errors + action_errors
+
+
+def fire_actions(controller, scene, devices, log_func=None):
+    """Send a scene's commands. Returns (fired, [error strings]).
+
+    Separate from the state loop because these are not settings: an IR code
+    has no before or after, it either goes out or it does not. Fired after the
+    state changes so the lights are already moving when the amp clicks on.
+    """
+    from devices import ControlError
+
+    log = log_func or (lambda message: None)
+    actions = scene.get('actions') or []
+    if not actions:
+        return 0, []
+
+    by_id = dict((d.device_id, d) for d in devices if d.enabled)
+    fired = 0
+    errors = []
+
+    for action in actions:
+        device = by_id.get(action['device'])
+        if device is None:
+            errors.append('No device for command "%s"' % action['command'])
+            continue
+        try:
+            controller.send_command(device, action['command'])
+            fired += 1
+        except ControlError as exc:
+            log('Scene "%s" command %s failed on %s: %s'
+                % (scene['name'], action['command'], device.name, exc))
+            errors.append(str(exc))
+
+    return fired, errors

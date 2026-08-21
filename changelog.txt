@@ -1,3 +1,23 @@
+v2.0.0
+- Restructured around a driver interface, so vendors other than Govee can be
+  added without touching the device registry, the scene engine or the menus.
+  Govee becomes the first driver. Nothing about your lights, scenes, colours
+  or names changes, and the add-on id is unchanged so your saved data carries
+  over untouched.
+- New Hub layer routes every device operation to the driver that owns it.
+  Devices record which driver found them; a devices.json written before this
+  records none and is read as Govee, which is what it is.
+- Devices now report capabilities (power, brightness, colour, colour
+  temperature, state, commands) rather than the scene engine assuming every
+  device is a colour bulb. Only what a device claims is ever asked of it.
+- Scenes gain actions: {'device': id, 'command': name}. That is how a scene
+  reaches a device with no state to set -- an IR blaster has no colour, it
+  has "AVR Power" -- so one scene can dim the lights and switch the amp on.
+- One driver failing a search no longer hides the others, and state reads are
+  grouped per driver so Govee keeps its single-socket bulk sweep.
+- The add-on is now called Paragon Home. The id stays script.paragon.govee so
+  no reinstall is needed and no saved data moves.
+
 v1.7.1
 - A cycle step now sends only the colour. Power and brightness are already
   where the previous step left them, so re-sending them was two thirds of the

@@ -26,6 +26,21 @@ DEFAULT_TEMP_MAX = 9000
 
 DEVICE_CACHE = 'devices.json'
 
+# What a device can be asked to do. A driver reports these per device, and the
+# scene engine skips anything a device does not claim -- which is how one
+# scene can drive colour bulbs, plain plugs and IR blasters without knowing
+# what any of them are.
+CAP_POWER = 'power'
+CAP_BRIGHTNESS = 'brightness'
+CAP_COLOR = 'color'
+CAP_COLOR_TEMP = 'color_temp'
+CAP_STATE = 'state'        # can report what it is currently doing
+CAP_COMMANDS = 'commands'  # emits named commands, e.g. a learned IR code
+
+# Devices cached before drivers existed have no driver recorded; they are all
+# Govee, because that is all there was.
+DEFAULT_DRIVER = 'govee'
+
 
 class ControlError(Exception):
     """A command could not be delivered to a device."""
@@ -41,8 +56,10 @@ class Device(object):
     """A single Govee light, reachable over LAN, cloud, or both."""
 
     def __init__(self, device_id, name='', model='', ip='', lan=False,
-                 cloud=False, supports=None, temp_range=None, enabled=True):
+                 cloud=False, supports=None, temp_range=None, enabled=True,
+                 driver=DEFAULT_DRIVER):
         self.device_id = (device_id or '').upper()
+        self.driver = driver or DEFAULT_DRIVER
         self.model = model or ''
         self.ip = ip or ''
         self.lan = bool(lan)
@@ -82,6 +99,7 @@ class Device(object):
 
     def to_dict(self):
         return {
+            'driver': self.driver,
             'device_id': self.device_id,
             'name': self.name,
             'model': self.model,
@@ -96,6 +114,7 @@ class Device(object):
     @classmethod
     def from_dict(cls, data):
         return cls(
+            driver=data.get('driver') or DEFAULT_DRIVER,
             device_id=data.get('device_id', ''),
             name=data.get('name', ''),
             model=data.get('model', ''),
@@ -124,12 +143,46 @@ class Device(object):
         return self
 
     def __repr__(self):
-        return '<Device %s %s via %s>' % (
-            self.device_id, self.name, '+'.join(self.transports()) or 'none')
+        return '<Device %s/%s %s via %s>' % (
+            self.driver, self.device_id, self.name,
+            '+'.join(self.transports()) or 'none')
 
 
 class GoveeController(object):
-    """Discovers devices and routes commands to the right transport."""
+    """The Govee driver: discovers Govee devices and drives them.
+
+    This is one implementation of the driver contract the Hub routes to --
+    discover, capabilities, the state verbs, and optionally commands. A second
+    vendor is a second class with the same surface, not a change here.
+    """
+
+    DRIVER_ID = 'govee'
+    DRIVER_LABEL = 'Govee'
+
+    @staticmethod
+    def capabilities(device):
+        """What this device can be asked to do.
+
+        Only the Govee cloud reports a capability list. LAN devices claim
+        everything: the protocol has no discovery for it, and an unsupported
+        command is ignored by the bulb rather than being an error.
+        """
+        caps = set([CAP_STATE])
+        for capability, command in ((CAP_POWER, 'turn'),
+                                    (CAP_BRIGHTNESS, 'brightness'),
+                                    (CAP_COLOR, 'color'),
+                                    (CAP_COLOR_TEMP, 'colorTem')):
+            if device.supports_cmd(command):
+                caps.add(capability)
+        return caps
+
+    @staticmethod
+    def commands(device):
+        """Govee bulbs emit nothing; an IR blaster would list codes here."""
+        return []
+
+    def send_command(self, device, name):
+        raise ControlError('%s does not send commands' % device.name)
 
     def __init__(self, lan=None, cloud=None, mode=TRANSPORT_AUTO,
                  log_func=None):
@@ -154,6 +207,7 @@ class GoveeController(object):
             try:
                 for raw in self.lan.discover(timeout=timeout):
                     device = Device(
+                        driver=self.DRIVER_ID,
                         device_id=raw.get('device', ''),
                         model=raw.get('sku', ''),
                         ip=raw.get('ip', ''),
@@ -172,6 +226,7 @@ class GoveeController(object):
                     properties = raw.get('properties') or {}
                     temp = (properties.get('colorTem') or {}).get('range') or {}
                     device = Device(
+                        driver=self.DRIVER_ID,
                         device_id=raw.get('device', ''),
                         name=raw.get('deviceName', ''),
                         model=raw.get('model', ''),
@@ -358,7 +413,7 @@ class GoveeController(object):
 
 
 def build_controller(settings):
-    """Assemble a controller from a plain settings dict.
+    """Assemble the Govee driver from a plain settings dict.
 
     Kept free of Kodi imports so the whole control path can be exercised in
     tests without a running Kodi.
@@ -380,3 +435,15 @@ def build_controller(settings):
         mode=settings.get('mode', TRANSPORT_AUTO),
         log_func=settings.get('log_func'),
     )
+
+
+def build_hub(settings):
+    """The device layer: every driver, addressed as one.
+
+    Govee is the only driver today. A second vendor is added here and nowhere
+    else -- the registry, the scene engine and the menus go through the Hub.
+    """
+    from hub import Hub
+
+    return Hub(drivers=[build_controller(settings)],
+               log_func=settings.get('log_func'))

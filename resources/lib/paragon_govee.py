@@ -19,7 +19,7 @@ import addon_utils as utils
 import palette as palette_lib
 import scenes as scene_lib
 from devices import (DEVICE_CACHE, Device, TRANSPORT_AUTO, TRANSPORT_CLOUD,
-                     TRANSPORT_LAN, build_controller)
+                     TRANSPORT_LAN, build_hub)
 
 # Order must match the `values` list on the transport_mode setting.
 _TRANSPORT_MODES = [TRANSPORT_AUTO, TRANSPORT_LAN, TRANSPORT_CLOUD]
@@ -29,7 +29,7 @@ class ParagonGovee(object):
     """Everything the add-on needs, assembled from the user's settings."""
 
     def __init__(self):
-        self.controller = build_controller(self.read_settings())
+        self.controller = build_hub(self.read_settings())
         self._devices = None
         self._scenes = None
         self._palette = None

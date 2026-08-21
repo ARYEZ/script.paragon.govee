@@ -53,6 +53,11 @@ def gui_highlight():
     return tuple(gui.HIGHLIGHT_COLOR)
 
 
+def palette_row(panel, name):
+    """Index of the palette row for `name` in a colour menu."""
+    return [e['name'] for e in panel.app.palette].index(name)
+
+
 def clean_profile():
     if os.path.isdir(PROFILE):
         shutil.rmtree(PROFILE)
@@ -1359,6 +1364,36 @@ class TestScriptArguments(unittest.TestCase):
         self.assertEqual(recorder.calls[2][2:], (255, 136, 0))
         self.assertEqual(recorder.calls[3][2], 2700)
 
+    def test_color_action_accepts_a_saved_colour_name(self):
+        import addon_utils
+        import default
+        from paragon_govee import ParagonGovee
+
+        app = ParagonGovee()
+        recorder = RecordingController()
+        app._devices = [Device('AA:BB', name='Lamp', lan=True)]
+        app.controller = recorder
+        app.save_color('Govee Pink', (255, 40, 150))
+
+        default.run_action(app, {'action': 'color', 'value': 'Govee Pink'},
+                           addon_utils)
+        self.assertEqual(recorder.calls, [('color', 'AA:BB', 255, 40, 150)])
+
+    def test_color_action_rejects_a_name_that_is_not_saved(self):
+        import addon_utils
+        import default
+        from paragon_govee import ParagonGovee
+
+        app = ParagonGovee()
+        recorder = RecordingController()
+        app._devices = [Device('AA:BB', name='Lamp', lan=True)]
+        app.controller = recorder
+
+        default.run_action(app, {'action': 'color', 'value': 'Nonexistent'},
+                           addon_utils)
+        self.assertEqual(recorder.calls, [])
+        self.assertTrue(xbmcgui.NOTIFICATIONS)
+
     def test_out_of_range_values_are_clamped(self):
         import addon_utils
         import default
@@ -1545,6 +1580,119 @@ class TestPlaybackService(unittest.TestCase):
         svc.player.service = None
         svc.player.onPlayBackStopped()
         self.assertIsNone(svc._pending)
+
+
+class TestPalette(unittest.TestCase):
+    """The colour speed dial: user-editable, persisted, order-sensitive."""
+
+    def setUp(self):
+        clean_profile()
+        xbmcaddon.reset()
+        xbmcgui.reset()
+        for name in ('addon_utils', 'paragon_govee', 'palette'):
+            if name in sys.modules:
+                del sys.modules[name]
+
+    def tearDown(self):
+        clean_profile()
+
+    def app(self):
+        from paragon_govee import ParagonGovee
+        return ParagonGovee()
+
+    def test_seeded_and_persisted_on_first_read(self):
+        import palette as palette_lib
+
+        app = self.app()
+        self.assertIn('Paragon Purple', [e['name'] for e in app.palette])
+        self.assertTrue(os.path.isfile(os.path.join(PROFILE, 'palette.json')))
+
+        # A second session reads the same list back off disk.
+        self.assertEqual([e['name'] for e in self.app().palette],
+                         [e['name'] for e in palette_lib.default_palette()])
+
+    def test_add_and_remove_round_trip_to_disk(self):
+        app = self.app()
+        before = len(app.palette)
+
+        self.assertIsNotNone(app.save_color('Sunset', (255, 94, 20)))
+        self.assertEqual(len(app.palette), before + 1)
+
+        saved = json.load(open(os.path.join(PROFILE, 'palette.json')))
+        self.assertIn({'name': 'Sunset', 'color': [255, 94, 20]}, saved)
+
+        self.assertTrue(app.remove_color(app.color_by_name('Sunset')))
+        self.assertIsNone(app.color_by_name('Sunset'))
+        saved = json.load(open(os.path.join(PROFILE, 'palette.json')))
+        self.assertNotIn('Sunset', [e['name'] for e in saved])
+
+    def test_saving_an_existing_name_replaces_it_in_place(self):
+        """Editing a colour must not shuffle the menu order."""
+        app = self.app()
+        index = [e['name'] for e in app.palette].index('Amber')
+
+        app.save_color('Amber', (200, 100, 0))
+        self.assertEqual([e['name'] for e in app.palette].index('Amber'),
+                         index)
+        self.assertEqual(app.color_by_name('Amber')['color'], [200, 100, 0])
+        self.assertEqual(len([e for e in app.palette
+                              if e['name'] == 'Amber']), 1)
+
+    def test_name_lookup_is_case_insensitive(self):
+        app = self.app()
+        self.assertIsNotNone(app.color_by_name('  deep RED '))
+        self.assertIsNone(app.color_by_name('nope'))
+
+    def test_moving_reorders_and_persists(self):
+        app = self.app()
+        names = [e['name'] for e in app.palette]
+        moved = app.move_color(2, -2)
+
+        self.assertEqual(moved, 0)
+        self.assertEqual(app.palette[0]['name'], names[2])
+        saved = json.load(open(os.path.join(PROFILE, 'palette.json')))
+        self.assertEqual(saved[0]['name'], names[2])
+
+    def test_moving_past_the_ends_is_a_no_op(self):
+        app = self.app()
+        names = [e['name'] for e in app.palette]
+        self.assertEqual(app.move_color(0, -1), 0)
+        self.assertEqual(app.move_color(len(names) - 1, 1), len(names) - 1)
+        self.assertEqual([e['name'] for e in app.palette], names)
+
+    def test_a_hand_edited_file_degrades_rather_than_throwing(self):
+        os.makedirs(PROFILE)
+        handle = open(os.path.join(PROFILE, 'palette.json'), 'w')
+        handle.write(json.dumps([
+            {'name': 'Good', 'color': [10, 20, 30]},
+            {'name': 'Bad colour', 'color': ['x', 2, 3]},
+            {'name': '   '},
+            'not a dict',
+            {'name': 'good', 'color': [1, 2, 3]},      # duplicate name
+        ]))
+        handle.close()
+
+        app = self.app()
+        self.assertEqual([e['name'] for e in app.palette], ['Good'])
+
+    def test_reset_restores_the_built_in_set(self):
+        import palette as palette_lib
+
+        app = self.app()
+        app.save_color('Sunset', (255, 94, 20))
+        app.reset_palette()
+
+        self.assertEqual([e['name'] for e in app.palette],
+                         [e['name'] for e in palette_lib.default_palette()])
+        saved = json.load(open(os.path.join(PROFILE, 'palette.json')))
+        self.assertNotIn('Sunset', [e['name'] for e in saved])
+
+    def test_to_hex_formatting(self):
+        import palette as palette_lib
+
+        self.assertEqual(palette_lib.to_hex([255, 40, 150]), '#FF2896')
+        self.assertEqual(palette_lib.to_hex([0, 0, 0]), '#000000')
+        self.assertEqual(palette_lib.to_hex('nonsense'), '#FFFFFF')
 
 
 # ---------------------------------------------------------------------------
@@ -1932,28 +2080,31 @@ class TestControlPanel(unittest.TestCase):
         self.panel().brightness_menu(None, 'All Lights')
         self.assertEqual(self.recorder.calls, [('brightness', 'AA:BB', 100)])
 
-    def test_colour_preset_index_matches_its_label(self):
-        import gui
+    def test_colour_row_matches_its_label(self):
+        panel = self.panel()
+        index = palette_row(panel, 'Paragon Purple')
+        expected = tuple(panel.app.palette[index]['color'])
 
-        index = [n for n, _rgb in gui.COLOR_PRESETS].index('Paragon Purple')
         xbmcgui.SELECT_QUEUE.extend([index])
-        self.panel().color_menu(None, 'All Lights')
-        expected = gui.COLOR_PRESETS[index][1]
+        panel.color_menu(None, 'All Lights')
         self.assertEqual(self.recorder.calls,
-                         [('color', 'AA:BB') + tuple(expected)])
+                         [('color', 'AA:BB') + expected])
+
+    def test_colour_rows_show_their_hex(self):
+        xbmcgui.SELECT_QUEUE.extend([-1])
+        self.panel().color_menu(None, 'All Lights')
+        labels = xbmcgui.SELECT_CALLS[-1][1]
+        self.assertIn('Paragon Purple  #963CDC', labels)
 
     def test_colour_custom_hex(self):
-        import gui
-
-        xbmcgui.SELECT_QUEUE.extend([len(gui.COLOR_PRESETS)])
+        panel = self.panel()
+        xbmcgui.SELECT_QUEUE.extend([len(panel.app.palette)])
         xbmcgui.INPUT_QUEUE.append('#00FF00')
-        self.panel().color_menu(None, 'All Lights')
+        panel.color_menu(None, 'All Lights')
         self.assertEqual(self.recorder.calls, [('color', 'AA:BB', 0, 255, 0)])
 
     def test_eight_digit_govee_code_reaches_the_lights(self):
-        import gui
-
-        xbmcgui.SELECT_QUEUE.extend([len(gui.COLOR_PRESETS)])
+        xbmcgui.SELECT_QUEUE.extend([len(self.app.palette)])
         xbmcgui.INPUT_QUEUE.append('FFFF2896')
         self.panel().color_menu(None, 'All Lights')
 
@@ -1964,8 +2115,8 @@ class TestControlPanel(unittest.TestCase):
 
     def test_an_eight_digit_code_can_be_saved_into_a_scene(self):
         panel = self.panel()
-        # Appearance -> Colour -> Custom hex, then Save.
-        xbmcgui.SELECT_QUEUE.extend([3, 1, 9, 0, 6])
+        # Appearance -> Colour -> Custom hex, then Name, then Save.
+        xbmcgui.SELECT_QUEUE.extend([3, 1, len(panel.app.palette), 0, 6])
         xbmcgui.INPUT_QUEUE.extend(['FFFF2896', 'Pink'])
         panel.edit_scene(None)
 
@@ -1988,6 +2139,97 @@ class TestControlPanel(unittest.TestCase):
         xbmcgui.INPUT_QUEUE.append('3300')
         self.panel().temp_menu(None, 'All Lights')
         self.assertEqual(self.recorder.calls, [('temp', 'AA:BB', 3300)])
+
+    def test_adding_a_colour_from_the_menu_puts_it_in_the_list(self):
+        panel = self.panel()
+        before = len(panel.app.palette)
+
+        # Manage colours -> "Add a colour...", hex, then name.
+        xbmcgui.SELECT_QUEUE.extend([before])
+        xbmcgui.INPUT_QUEUE.extend(['FFFF2896', 'Govee Pink'])
+        panel.manage_colors()
+
+        entry = panel.app.color_by_name('Govee Pink')
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry['color'], [255, 40, 150])
+
+        # And it now shows up as a row in the colour menu.
+        xbmcgui.reset()
+        xbmcgui.SELECT_QUEUE.extend([-1])
+        panel.color_menu(None, 'All Lights')
+        self.assertIn('Govee Pink  #FF2896', xbmcgui.SELECT_CALLS[-1][1])
+
+    def test_deleting_a_colour_removes_it_from_the_menu(self):
+        panel = self.panel()
+        index = palette_row(panel, 'Lime')
+
+        # The colour, then "Delete", then confirm.
+        xbmcgui.SELECT_QUEUE.extend([index, 4])
+        xbmcgui.YESNO_QUEUE.append(True)
+        panel.manage_colors()
+
+        self.assertIsNone(panel.app.color_by_name('Lime'))
+        xbmcgui.reset()
+        xbmcgui.SELECT_QUEUE.extend([-1])
+        panel.color_menu(None, 'All Lights')
+        labels = ' '.join(xbmcgui.SELECT_CALLS[-1][1])
+        self.assertNotIn('Lime', labels)
+
+    def test_declining_the_delete_keeps_the_colour(self):
+        panel = self.panel()
+        index = palette_row(panel, 'Lime')
+
+        xbmcgui.SELECT_QUEUE.extend([index, 4])
+        xbmcgui.YESNO_QUEUE.append(False)
+        panel.manage_colors()
+
+        self.assertIsNotNone(panel.app.color_by_name('Lime'))
+
+    def test_changing_a_colours_hex_keeps_its_place(self):
+        panel = self.panel()
+        index = palette_row(panel, 'Teal')
+
+        xbmcgui.SELECT_QUEUE.extend([index, 1])   # the colour, "Change colour"
+        xbmcgui.INPUT_QUEUE.append('112233')
+        panel.manage_colors()
+
+        self.assertEqual(panel.app.color_by_name('Teal')['color'],
+                         [17, 34, 51])
+        self.assertEqual(palette_row(panel, 'Teal'), index)
+
+    def test_renaming_a_colour_keeps_its_place_and_colour(self):
+        panel = self.panel()
+        index = palette_row(panel, 'Amber')
+        original = list(panel.app.color_by_name('Amber')['color'])
+
+        xbmcgui.SELECT_QUEUE.extend([index, 0])   # the colour, "Rename"
+        xbmcgui.INPUT_QUEUE.append('Sunset')
+        panel.manage_colors()
+
+        self.assertIsNone(panel.app.color_by_name('Amber'))
+        entry = panel.app.color_by_name('Sunset')
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry['color'], original)
+        self.assertEqual(palette_row(panel, 'Sunset'), index)
+
+    def test_a_custom_colour_is_usable_from_the_scene_editor(self):
+        panel = self.panel()
+        panel.app.save_color('Govee Pink', (255, 40, 150))
+        index = palette_row(panel, 'Govee Pink')
+
+        # Appearance -> Colour -> the new entry, then Name, then Save.
+        xbmcgui.SELECT_QUEUE.extend([3, 1, index, 0, 6])
+        xbmcgui.INPUT_QUEUE.append('Pink Scene')
+        panel.edit_scene(None)
+
+        scene = panel.app.scene_by_name('Pink Scene')
+        self.assertEqual(scene['color'], [255, 40, 150])
+
+    def test_manage_colours_is_reachable_from_the_colour_menu(self):
+        panel = self.panel()
+        xbmcgui.SELECT_QUEUE.extend([-1])
+        panel.color_menu(None, 'All Lights')
+        self.assertIn('Manage colours...', xbmcgui.SELECT_CALLS[-1][1])
 
     def test_scene_menu_applies_the_selected_scene(self):
         xbmcgui.SELECT_QUEUE.extend([0])  # "Movie Night" is first

@@ -15,6 +15,7 @@ button, a keymap or a favourite:
     RunScript(script.paragon.govee,action=scene,name=Movie Night)
     RunScript(script.paragon.govee,action=brightness,value=20)
     RunScript(script.paragon.govee,action=color,value=FF8800)
+    RunScript(script.paragon.govee,action=color,value=Paragon Purple)
     RunScript(script.paragon.govee,action=temp,value=2700)
     RunScript(script.paragon.govee,action=off,target=Living Room Strip)
 
@@ -116,9 +117,18 @@ def run_action(app, params, utils):
         else:
             report(app.brightness_all(value, targets), 'Brightness %d%%' % value)
     elif action == 'color':
-        rgb = _parse_hex(params.get('value'))
+        value = params.get('value')
+        rgb = _parse_hex(value)
         if rgb is None:
-            utils.force_notify('color needs value=RRGGBB or AARRGGBB')
+            # Fall back to a saved colour name, so a colour added to the
+            # speed dial can be bound to a remote button by name rather than
+            # having its hex copied into the keymap.
+            entry = app.color_by_name(value)
+            if entry:
+                rgb = tuple(entry['color'])
+        if rgb is None:
+            utils.force_notify('color needs value=RRGGBB, AARRGGBB, or the '
+                               'name of a saved colour')
         else:
             report(app.color_all(rgb, targets), 'Colour set')
     elif action == 'temp':

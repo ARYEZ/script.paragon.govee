@@ -17,23 +17,12 @@ whatever else the user has installed.
 import xbmcgui
 
 import addon_utils as utils
+import palette as palette_lib
 import scenes as scene_lib
 from devices import ControlError
 
 # Presets offered before the user has to type anything.
 BRIGHTNESS_STEPS = [5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
-
-COLOR_PRESETS = [
-    ('Warm White', (255, 180, 107)),
-    ('Cool White', (255, 255, 255)),
-    ('Paragon Purple', (150, 60, 220)),
-    ('Deep Red', (255, 0, 0)),
-    ('Amber', (255, 120, 0)),
-    ('Lime', (120, 255, 60)),
-    ('Teal', (0, 200, 180)),
-    ('Ocean Blue', (0, 80, 255)),
-    ('Magenta', (255, 0, 150)),
-]
 
 TEMP_PRESETS = [
     ('Candle - 2000K', 2000),
@@ -247,23 +236,127 @@ class ControlPanel(object):
         _report(self.app.brightness_all(percent, targets),
                 '%s at %d%%' % (heading, percent))
 
+    def _palette_rows(self):
+        """Menu labels for the saved colours, e.g. 'Deep Red  #FF0000'."""
+        return ['%s  %s' % (entry['name'], palette_lib.to_hex(entry['color']))
+                for entry in self.app.palette]
+
     def color_menu(self, targets, heading):
-        options = [name for name, _rgb in COLOR_PRESETS]
-        options.append('Custom hex...')
-        choice = _select('%s - colour' % heading, options)
-        if choice == BACK:
+        while True:
+            entries = self.app.palette
+            options = self._palette_rows()
+            options.append('Custom hex...')
+            options.append('Manage colours...')
+
+            choice = _select('%s - colour' % heading, options)
+            if choice == BACK:
+                return
+
+            if choice == len(entries) + 1:
+                self.manage_colors()
+                continue
+
+            if choice == len(entries):
+                entered = self._ask_hex()
+                if entered is None:
+                    return
+                rgb, label = entered
+            else:
+                entry = entries[choice]
+                rgb, label = entry['color'], entry['name']
+
+            _report(self.app.color_all(rgb, targets),
+                    '%s set to %s' % (heading, label))
             return
 
-        if choice == len(COLOR_PRESETS):
+    # -- colour palette -----------------------------------------------------
+
+    def manage_colors(self):
+        """Add, edit, reorder and delete the saved colours."""
+        while True:
+            entries = self.app.palette
+            options = self._palette_rows()
+            options.append('Add a colour...')
+            options.append('Reset to the built-in colours')
+
+            choice = _select('Manage colours', options)
+            if choice == BACK:
+                return
+            if choice == len(entries):
+                self._add_color()
+            elif choice == len(entries) + 1:
+                if _dialog().yesno(
+                        'Paragon Govee',
+                        'Replace the colour list with the built-in set?\n\n'
+                        'Any colours you added are removed.'):
+                    self.app.reset_palette()
+                    utils.notify('Colours reset')
+            else:
+                self._edit_color(choice)
+
+    def _add_color(self):
+        entered = self._ask_hex()
+        if entered is None:
+            return
+        rgb, _label = entered
+
+        name = _dialog().input('Name for this colour', '')
+        if not name or not name.strip():
+            return
+        name = name.strip()
+
+        if self.app.color_by_name(name) is not None and not _dialog().yesno(
+                'Paragon Govee',
+                'A colour called "%s" already exists.\n\nReplace it?' % name):
+            return
+
+        if self.app.save_color(name, rgb) is None:
+            utils.force_notify('That colour could not be saved')
+            return
+        utils.notify('Added %s  %s' % (name, palette_lib.to_hex(rgb)))
+
+    def _edit_color(self, index):
+        entries = self.app.palette
+        if index < 0 or index >= len(entries):
+            return
+        entry = entries[index]
+
+        rows = [
+            ('Rename (currently "%s")' % entry['name'], 'rename'),
+            ('Change colour (currently %s)'
+             % palette_lib.to_hex(entry['color']), 'recolor'),
+            ('Move up', 'up'),
+            ('Move down', 'down'),
+            ('Delete', 'delete'),
+        ]
+        choice = _select(entry['name'], [label for label, _key in rows])
+        if choice == BACK:
+            return
+        action = rows[choice][1]
+
+        if action == 'rename':
+            name = _dialog().input('Colour name', entry['name'])
+            if name and name.strip() and name.strip() != entry['name']:
+                # Remove first so the rename does not collide with itself.
+                self.app.remove_color(entry)
+                self.app.save_color(name.strip(), entry['color'], index=index)
+                utils.notify('Renamed to %s' % name.strip())
+        elif action == 'recolor':
             entered = self._ask_hex()
             if entered is None:
                 return
-            rgb, label = entered
-        else:
-            label, rgb = COLOR_PRESETS[choice]
-
-        _report(self.app.color_all(rgb, targets),
-                '%s set to %s' % (heading, label))
+            self.app.save_color(entry['name'], entered[0])
+            utils.notify('%s is now %s'
+                         % (entry['name'], palette_lib.to_hex(entered[0])))
+        elif action == 'up':
+            self.app.move_color(index, -1)
+        elif action == 'down':
+            self.app.move_color(index, 1)
+        elif action == 'delete':
+            if _dialog().yesno('Paragon Govee',
+                               'Delete the colour "%s"?' % entry['name']):
+                self.app.remove_color(entry)
+                utils.notify('Deleted %s' % entry['name'])
 
     def temp_menu(self, targets, heading):
         options = [name for name, _k in TEMP_PRESETS]
@@ -534,17 +627,18 @@ class ControlPanel(object):
                 scene['kelvin'] = TEMP_PRESETS[pick][1]
             scene['mode'] = scene_lib.MODE_TEMP
         else:
-            options = [name for name, _rgb in COLOR_PRESETS] + ['Custom hex...']
+            entries = self.app.palette
+            options = self._palette_rows() + ['Custom hex...']
             pick = _select('Colour', options)
             if pick == BACK:
                 return
-            if pick == len(COLOR_PRESETS):
+            if pick == len(entries):
                 entered = self._ask_hex()
                 if entered is None:
                     return
                 scene['color'] = list(entered[0])
             else:
-                scene['color'] = list(COLOR_PRESETS[pick][1])
+                scene['color'] = list(entries[pick]['color'])
             scene['mode'] = scene_lib.MODE_COLOR
 
     def _edit_targets(self, scene):

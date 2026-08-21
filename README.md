@@ -143,6 +143,28 @@ dropped, so one sleeping bulb cannot erase its own name. The refresh summary
 says how many did not answer. For a light that is genuinely gone, use
 **Forget this light** in its Manage devices menu.
 
+### Colours (the speed dial)
+
+The named colours offered whenever you pick a colour. **Manage colours…** at
+the bottom of any colour menu covers the lot:
+
+* **Add a colour…** — enter a hex code (6 or 8 digit), then name it
+* **Rename**, **Change colour**, **Move up/down**, **Delete** on any entry
+* **Reset to the built-in colours**
+
+Rows show their hex, e.g. `Paragon Purple  #963CDC`. Order is the menu order,
+which is what **Move up/down** is for.
+
+The list lives in `palette.json` next to `scenes.json` and `devices.json`, so
+it survives upgrades and can be copied to another box. The same colours are
+offered in the scene editor, so anything added once is available everywhere.
+
+A saved colour can also be driven by name:
+
+```
+RunScript(script.paragon.govee,action=color,value=Govee Pink)
+```
+
 ### Scenes
 
 **Scenes…** applies a preset; **Manage scenes…** edits them. A scene sets any
@@ -264,7 +286,8 @@ RunScript(script.paragon.govee,action=toggle)
 RunScript(script.paragon.govee,action=on)
 RunScript(script.paragon.govee,action=off)
 RunScript(script.paragon.govee,action=brightness,value=20)       # 1-100
-RunScript(script.paragon.govee,action=color,value=FF8800)        # RRGGBB or AARRGGBB
+RunScript(script.paragon.govee,action=color,value=FF8800)        # RRGGBB, AARRGGBB,
+RunScript(script.paragon.govee,action=color,value=Govee Pink)    #   or a saved colour name
 RunScript(script.paragon.govee,action=temp,value=2700)           # Kelvin
 RunScript(script.paragon.govee,action=scene,name=Movie Night)
 RunScript(script.paragon.govee,action=refresh)
@@ -355,7 +378,7 @@ button that appears to do nothing is worse.
 ## Development
 
 ```
-python3 tests/test_paragon_govee.py     # 163 tests
+python3 tests/test_paragon_govee.py     # 182 tests
 python3 tests/check_py2.py              # Python 2.7 syntax gate
 python3 tools/make_assets.py            # regenerate icon.png / fanart.png
 ```

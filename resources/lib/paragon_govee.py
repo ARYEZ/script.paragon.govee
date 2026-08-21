@@ -14,6 +14,7 @@ menu and a silent playback callback.
 """
 
 import addon_utils as utils
+import palette as palette_lib
 import scenes as scene_lib
 from devices import (DEVICE_CACHE, Device, TRANSPORT_AUTO, TRANSPORT_CLOUD,
                      TRANSPORT_LAN, build_controller)
@@ -29,6 +30,7 @@ class ParagonGovee(object):
         self.controller = build_controller(self.read_settings())
         self._devices = None
         self._scenes = None
+        self._palette = None
         # How many known lights failed to answer the last refresh, so the
         # control panel can say so rather than silently showing a short list.
         self.last_refresh_missing = 0
@@ -130,6 +132,63 @@ class ParagonGovee(object):
                   % (len(found), len(missing), len(self._devices)))
         self.last_refresh_missing = len(missing)
         return self._devices, warnings
+
+    # -- colour palette ----------------------------------------------------
+
+    @property
+    def palette(self):
+        """Named colours for the menus, seeded on first read."""
+        if self._palette is None:
+            raw = utils.read_json(palette_lib.PALETTE_FILE, default=None)
+            if raw is None:
+                self._palette = palette_lib.default_palette()
+                self.save_palette()
+            else:
+                self._palette = palette_lib.normalise_all(raw)
+        return self._palette
+
+    def save_palette(self):
+        utils.write_json(palette_lib.PALETTE_FILE, self._palette or [])
+
+    def color_by_name(self, name):
+        return palette_lib.find(self.palette, name)
+
+    def save_color(self, name, rgb, index=None):
+        """Add or update a colour. Returns the stored entry, or None.
+
+        A name that already exists is replaced wherever it sits, so the menu
+        order is not shuffled by an edit.
+        """
+        entry = palette_lib.normalise({'name': name, 'color': list(rgb)})
+        if entry is None:
+            return None
+
+        existing = palette_lib.find(self.palette, entry['name'])
+        if existing is not None:
+            self._palette[self._palette.index(existing)] = entry
+        elif index is not None and 0 <= index < len(self._palette):
+            self._palette[index] = entry
+        else:
+            self._palette.append(entry)
+        self.save_palette()
+        return entry
+
+    def remove_color(self, entry):
+        if entry in self.palette:
+            self._palette.remove(entry)
+            self.save_palette()
+            return True
+        return False
+
+    def move_color(self, index, offset):
+        new_index = palette_lib.move(self.palette, index, offset)
+        if new_index != index:
+            self.save_palette()
+        return new_index
+
+    def reset_palette(self):
+        self._palette = palette_lib.default_palette()
+        self.save_palette()
 
     # -- scenes ------------------------------------------------------------
 

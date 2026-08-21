@@ -1,3 +1,19 @@
+v1.5.0
+- The colour list is now editable. "Manage colours..." at the bottom of any
+  colour menu lets you add a colour by hex code and name it, rename it,
+  change its hex, move it up or down the list, delete it, or reset the whole
+  list to the built-in set.
+- Colours are stored in palette.json in the add-on profile, alongside
+  scenes.json and devices.json, so they survive upgrades and can be
+  hand-edited or copied to another Kodi box.
+- Colour rows now show their hex, e.g. "Paragon Purple  #963CDC".
+- The saved colours are what the scene editor offers too, so a colour added
+  once is available everywhere.
+- RunScript(action=color) accepts a saved colour name as well as a hex code,
+  so a colour on the speed dial can be bound to a remote button by name.
+- The built-in colours were previously a hardcoded list in the code; they are
+  now just the seed for the editable one.
+
 v1.4.0
 - A light that does not answer a search is no longer dropped from the device
   list. It used to be erased along with its name and its enabled flag, so one

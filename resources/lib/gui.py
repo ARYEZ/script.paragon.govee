@@ -46,6 +46,12 @@ TEMP_PRESETS = [
 
 BACK = -1
 
+# What a light is set to while the naming walkthrough is asking about it.
+# Full brightness magenta reads clearly against normal room lighting and
+# against the warm whites these bulbs usually sit at.
+HIGHLIGHT_COLOR = (255, 0, 255)
+HIGHLIGHT_BRIGHTNESS = 100
+
 
 def _dialog():
     return xbmcgui.Dialog()
@@ -606,17 +612,121 @@ class ControlPanel(object):
             if not devices:
                 utils.force_notify('No devices known yet')
                 return
-            options = []
+
+            rows = [('Name lights one by one...', self.name_lights)]
             for device in devices:
                 mark = '[x]' if device.enabled else '[ ]'
-                options.append('%s %s  (%s)'
-                               % (mark, device.name,
-                                  '+'.join(device.transports()) or 'offline'))
+                label = '%s %s  (%s)' % (mark, device.name,
+                                         '+'.join(device.transports())
+                                         or 'offline')
+                rows.append((label,
+                             lambda d=device: self._edit_device(d)))
 
-            choice = _select('Manage devices - select to edit', options)
+            choice = _select('Manage devices', [l for l, _h in rows])
             if choice == BACK:
                 return
-            self._edit_device(devices[choice])
+            rows[choice][1]()
+
+    def name_lights(self):
+        """Walk the lights one at a time, lighting each while asking its name.
+
+        Renaming through the per-device menu means going and looking at the
+        room, coming back, and navigating two menus again -- 25 times. Here
+        the light stays lit while the keyboard is up, so the answer is on the
+        wall in front of you as you type it.
+        """
+        devices = self.app.enabled_devices
+        if not devices:
+            utils.force_notify('No lights to name. Run a device refresh.')
+            return
+
+        unnamed = [d for d in devices if self._is_placeholder_name(d)]
+        if unnamed and len(unnamed) != len(devices):
+            choice = _select(
+                'Which lights?',
+                ['Only the %d still unnamed' % len(unnamed),
+                 'All %d lights' % len(devices)])
+            if choice == BACK:
+                return
+            devices = unnamed if choice == 0 else devices
+
+        if not _dialog().yesno(
+                'Paragon Govee',
+                'Each light will come on bright magenta in turn. Type the '
+                'name of whichever one lights up.\n\n'
+                'Cancel the keyboard to stop; names entered so far are '
+                'kept.\n\nStart?'):
+            return
+
+        # One bulk read up front rather than per light: the lights get put
+        # back from this snapshot as the walk moves on.
+        progress = xbmcgui.DialogProgressBG()
+        progress.create('Paragon Govee', 'Reading the lights...')
+        try:
+            states = self.app.controller.get_states(devices)
+        except Exception as exc:
+            utils.log('Could not read states before naming: %s' % exc)
+            states = {}
+        progress.close()
+
+        named = self._walk_and_name(devices, states)
+
+        self.app.save_devices()
+        if named:
+            _dialog().ok('Paragon Govee', 'Named %d light(s).' % named)
+        else:
+            utils.notify('No lights were renamed')
+
+    @staticmethod
+    def _is_placeholder_name(device):
+        """True when the name is still the model + id one discovery invents."""
+        return device.name.startswith(device.model + ' (')
+
+    def _walk_and_name(self, devices, states):
+        """Light each device in turn and prompt. Returns how many were named."""
+        highlight = {'power': scene_lib.POWER_ON,
+                     'brightness': HIGHLIGHT_BRIGHTNESS,
+                     'mode': scene_lib.MODE_COLOR,
+                     'color': list(HIGHLIGHT_COLOR),
+                     'kelvin': 2700}
+        named = 0
+
+        for index, device in enumerate(devices):
+            try:
+                scene_lib.apply_settings(self.app.controller, device,
+                                         highlight)
+            except ControlError as exc:
+                utils.log('Could not light %s for naming: %s'
+                          % (device.name, exc))
+
+            answer = _dialog().input(
+                'Light %d of %d - which one is lit up?'
+                % (index + 1, len(devices)), device.name)
+
+            # Put it back before doing anything else, so a stop leaves the
+            # room as it was rather than with one bulb stuck on magenta.
+            self._restore(device, states.get(device.device_id))
+
+            if not answer:
+                # Kodi returns an empty string when the keyboard is cancelled,
+                # which is the only signal available for "stop here".
+                break
+            answer = answer.strip()
+            if answer and answer != device.name:
+                device.name = answer
+                named += 1
+
+        return named
+
+    def _restore(self, device, state):
+        settings = scene_lib.state_to_settings(state)
+        if not settings:
+            return
+        try:
+            scene_lib.apply_settings(self.app.controller, device, settings)
+        except ControlError as exc:
+            utils.log('Could not restore %s after naming: %s'
+                      % (device.name, exc))
 
     def _edit_device(self, device):
         options = [

@@ -231,15 +231,7 @@ def verify_status(app, device, settle=1.5, sleep_func=None):
     restore = scene_lib.state_to_settings(before)
     if restore:
         try:
-            if restore['power'] == scene_lib.POWER_OFF:
-                controller.turn(device, False)
-            else:
-                if restore['brightness'] is not None:
-                    controller.set_brightness(device, restore['brightness'])
-                if restore['mode'] == scene_lib.MODE_COLOR:
-                    controller.set_color(device, *restore['color'])
-                elif restore['mode'] == scene_lib.MODE_TEMP:
-                    controller.set_color_temp(device, restore['kelvin'])
+            scene_lib.apply_settings(controller, device, restore)
         except ControlError as exc:
             utils.log('Could not restore %s after probe: %s'
                       % (device.name, exc))

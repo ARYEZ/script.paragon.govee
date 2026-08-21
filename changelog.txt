@@ -1,3 +1,16 @@
+v1.3.0
+- New "Name lights one by one..." at the top of Manage devices. Each light
+  comes on bright magenta in turn and stays lit while the keyboard is up, so
+  the light you are naming is on the wall in front of you as you type. It is
+  put back to its previous state before the walk moves on, and cancelling the
+  keyboard stops the walk keeping every name entered so far.
+- When some lights are already named, the walk offers to cover only the ones
+  still on their placeholder name.
+- Manage devices rows are now (label, handler) pairs like the other menus.
+- Extracted scenes.apply_settings(), now shared by scene application, the
+  status round-trip's restore step and the naming walkthrough, so the
+  brightness-before-colour ordering lives in one place instead of three.
+
 v1.2.1
 - Confirmed the Govee colour format from real codes out of the app
   (FF3C447F, FF7F3C3C): it is AARRGGBB with the alpha always FF. Read the

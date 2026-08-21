@@ -48,6 +48,11 @@ TEST_LISTEN_PORT = 44002
 TEST_COMMAND_PORT = 44003
 
 
+def gui_highlight():
+    import gui
+    return tuple(gui.HIGHLIGHT_COLOR)
+
+
 def clean_profile():
     if os.path.isdir(PROFILE):
         shutil.rmtree(PROFILE)
@@ -2039,23 +2044,110 @@ class TestControlPanel(unittest.TestCase):
         panel._edit_targets(scene)
         self.assertEqual(scene['targets'], [])
 
+    def _manage_row(self, matcher):
+        """Index of the Manage devices row whose label matches."""
+        xbmcgui.SELECT_QUEUE.extend([-1])
+        self.panel().manage_devices()
+        labels = xbmcgui.SELECT_CALLS[-1][1]
+        xbmcgui.reset()
+        return [i for i, label in enumerate(labels) if matcher in label][0]
+
     def test_device_rename_persists(self):
-        panel = self.panel()
-        xbmcgui.SELECT_QUEUE.extend([0, 0])  # first device, then "Rename"
+        row = self._manage_row('Lamp')
+        xbmcgui.SELECT_QUEUE.extend([row, 0])  # the device, then "Rename"
         xbmcgui.INPUT_QUEUE.append('Behind the TV')
-        panel.manage_devices()
+        self.panel().manage_devices()
 
         self.assertEqual(self.app.devices[0].name, 'Behind the TV')
         saved = json.load(open(os.path.join(PROFILE, 'devices.json')))
         self.assertEqual(saved[0]['name'], 'Behind the TV')
 
     def test_device_can_be_disabled_and_drops_out_of_the_group(self):
-        panel = self.panel()
-        xbmcgui.SELECT_QUEUE.extend([0, 1])  # first device, then "Disable"
-        panel.manage_devices()
+        row = self._manage_row('Lamp')
+        xbmcgui.SELECT_QUEUE.extend([row, 1])  # the device, then "Disable"
+        self.panel().manage_devices()
 
         self.assertFalse(self.app.devices[0].enabled)
         self.assertEqual(self.app.enabled_devices, [])
+
+    def test_naming_walkthrough_lights_each_bulb_and_saves_names(self):
+        # Both still on placeholder names, so the walk covers all of them
+        # without the "which lights?" prompt.
+        self.app._devices = [
+            Device('AA:BB', name='H6008 (AABB)', model='H6008', lan=True,
+                   ip='10.0.0.2'),
+            Device('CC:DD', name='H6008 (CCDD)', model='H6008', lan=True,
+                   ip='10.0.0.3'),
+        ]
+        self.recorder.get_states = lambda devices, timeout=3.0: {
+            'AA:BB': {'power': 'on', 'brightness': 40, 'colorTem': 2700},
+            'CC:DD': {'power': 'on', 'brightness': 40, 'colorTem': 2700},
+        }
+
+        xbmcgui.YESNO_QUEUE.append(True)
+        xbmcgui.INPUT_QUEUE.extend(['Kitchen Left', 'Kitchen Right'])
+        self.panel().name_lights()
+
+        self.assertEqual([d.name for d in self.app.devices],
+                         ['Kitchen Left', 'Kitchen Right'])
+        saved = json.load(open(os.path.join(PROFILE, 'devices.json')))
+        self.assertEqual(sorted(d['name'] for d in saved),
+                         ['Kitchen Left', 'Kitchen Right'])
+
+        # Each bulb was driven to the highlight colour while being asked about.
+        highlights = [c for c in self.recorder.calls
+                      if c[0] == 'color' and c[2:] == gui_highlight()]
+        self.assertEqual(len(highlights), 2)
+
+    def test_naming_puts_each_light_back_before_moving_on(self):
+        self.recorder.get_states = lambda devices, timeout=3.0: {
+            'AA:BB': {'power': 'on', 'brightness': 40, 'colorTem': 2700}}
+
+        xbmcgui.YESNO_QUEUE.append(True)
+        xbmcgui.INPUT_QUEUE.append('Kitchen Left')
+        self.panel().name_lights()
+
+        # The last thing done to the bulb is the restore, not the highlight.
+        self.assertEqual(self.recorder.calls[-1], ('temp', 'AA:BB', 2700))
+
+    def test_cancelling_the_keyboard_stops_and_keeps_earlier_names(self):
+        self.app._devices = [
+            Device('AA:BB', name='H6008 (AABB)', model='H6008', lan=True,
+                   ip='10.0.0.2'),
+            Device('CC:DD', name='H6008 (CCDD)', model='H6008', lan=True,
+                   ip='10.0.0.3'),
+        ]
+        self.recorder.get_states = lambda devices, timeout=3.0: {}
+
+        xbmcgui.YESNO_QUEUE.append(True)
+        xbmcgui.INPUT_QUEUE.append('Kitchen Left')  # then the queue runs dry
+        self.panel().name_lights()
+
+        self.assertEqual(self.app.devices[0].name, 'Kitchen Left')
+        self.assertEqual(self.app.devices[1].name, 'H6008 (CCDD)')
+        saved = json.load(open(os.path.join(PROFILE, 'devices.json')))
+        self.assertIn('Kitchen Left', [d['name'] for d in saved])
+
+    def test_naming_offers_to_do_only_the_unnamed_ones(self):
+        named = self.app.devices[0]          # 'Lamp' -- already named
+        unnamed = Device('CC:DD', name='H6008 (CCDD)', model='H6008', lan=True,
+                         ip='10.0.0.3')
+        self.app._devices = [named, unnamed]
+        self.recorder.get_states = lambda devices, timeout=3.0: {}
+
+        xbmcgui.SELECT_QUEUE.extend([0])     # "Only the 1 still unnamed"
+        xbmcgui.YESNO_QUEUE.append(True)
+        xbmcgui.INPUT_QUEUE.append('Kitchen Right')
+        self.panel().name_lights()
+
+        self.assertEqual(named.name, 'Lamp')
+        self.assertEqual(unnamed.name, 'Kitchen Right')
+
+    def test_declining_the_walkthrough_changes_nothing(self):
+        xbmcgui.YESNO_QUEUE.append(False)
+        self.panel().name_lights()
+        self.assertEqual(self.recorder.calls, [])
+        self.assertEqual(self.app.devices[0].name, 'Lamp')
 
     def test_pick_scene_writes_the_setting(self):
         import gui

@@ -98,6 +98,27 @@ Pick a light (or **All Lights**) for power, brightness, colour and colour
 temperature. **Manage devices** lets you rename a light, exclude one from
 "All Lights", or flash it to work out which physical unit it is.
 
+### Naming your lights
+
+LAN discovery has no names to work with, so lights start out as `H6008 (1E3E)`
+— the model plus the last four of the Govee id. Two ways to fix that:
+
+**Set a Govee API key** (*Settings → Govee Cloud*) and run **Refresh
+devices**. The names you already gave the lights in the Govee app are pulled
+in and applied to all of them at once. The key is used only for discovery and
+naming — control still goes over the LAN, so nothing about speed or rate
+limits changes. This is by far the least work.
+
+**Or name them by hand:** **Manage devices → Name lights one by one…** Each
+light comes on bright magenta in turn and stays lit while the keyboard is up,
+so you can look at the room and type what you see. Each one is put back to its
+previous state before the walk moves on. Cancel the keyboard to stop; names
+entered up to that point are kept, and the walk offers to cover only the
+lights still on placeholder names.
+
+Names you set by hand survive a **Refresh devices**, so re-running discovery
+after a DHCP change will not undo them.
+
 ### Scenes
 
 **Scenes…** applies a preset; **Manage scenes…** edits them. A scene sets any
@@ -310,7 +331,7 @@ button that appears to do nothing is worse.
 ## Development
 
 ```
-python3 tests/test_paragon_govee.py     # 149 tests
+python3 tests/test_paragon_govee.py     # 154 tests
 python3 tests/check_py2.py              # Python 2.7 syntax gate
 python3 tools/make_assets.py            # regenerate icon.png / fanart.png
 ```

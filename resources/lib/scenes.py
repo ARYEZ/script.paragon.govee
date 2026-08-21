@@ -284,6 +284,32 @@ def capture_scene(name, devices, states):
     return scene, len(per_device), skipped
 
 
+def apply_settings(controller, device, settings):
+    """Drive one device to one settings dict. Raises ControlError on failure.
+
+    Shared by scene application, the status round-trip's restore step, and the
+    naming walkthrough's highlight-and-put-back, so the ordering rules live in
+    one place rather than being re-derived at each call site.
+    """
+    if settings['power'] == POWER_OFF:
+        controller.turn(device, False)
+        return
+
+    if settings['power'] == POWER_ON:
+        controller.turn(device, True)
+
+    # Brightness before colour: on several Govee models a colour command
+    # re-asserts the previous brightness, so setting colour last keeps the
+    # two from fighting.
+    if settings['brightness'] is not None and device.supports_cmd('brightness'):
+        controller.set_brightness(device, settings['brightness'])
+
+    if settings['mode'] == MODE_COLOR and device.supports_cmd('color'):
+        controller.set_color(device, *settings['color'])
+    elif settings['mode'] == MODE_TEMP and device.supports_cmd('colorTem'):
+        controller.set_color_temp(device, settings['kelvin'])
+
+
 def default_scenes():
     """The starter set, written on first run and editable afterwards."""
     return [
@@ -434,27 +460,7 @@ def apply_scene(controller, scene, devices, log_func=None):
         # other scene falls back to its single uniform set.
         settings = settings_for(scene, device.device_id)
         try:
-            if settings['power'] == POWER_OFF:
-                controller.turn(device, False)
-                applied += 1
-                continue
-
-            if settings['power'] == POWER_ON:
-                controller.turn(device, True)
-
-            # Brightness before colour: on several Govee models a colour
-            # command re-asserts the previous brightness, so setting colour
-            # last keeps the two from fighting.
-            if settings['brightness'] is not None \
-                    and device.supports_cmd('brightness'):
-                controller.set_brightness(device, settings['brightness'])
-
-            if settings['mode'] == MODE_COLOR and device.supports_cmd('color'):
-                controller.set_color(device, *settings['color'])
-            elif settings['mode'] == MODE_TEMP \
-                    and device.supports_cmd('colorTem'):
-                controller.set_color_temp(device, settings['kelvin'])
-
+            apply_settings(controller, device, settings)
             applied += 1
         except ControlError as exc:
             log('Scene "%s" failed on %s: %s' % (scene['name'], device.name, exc))

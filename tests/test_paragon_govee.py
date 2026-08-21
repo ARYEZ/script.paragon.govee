@@ -58,6 +58,20 @@ def palette_row(panel, name):
     return [e['name'] for e in panel.app.palette].index(name)
 
 
+def scene_row(panel, prefix, index=None):
+    """Index of a scene-editor row by its label prefix.
+
+    Looked up rather than hardcoded: the editor has grown rows several times,
+    and every positional index in these tests broke each time it did.
+    """
+    xbmcgui.SELECT_QUEUE.extend([-1])
+    panel.edit_scene(index)
+    labels = xbmcgui.SELECT_CALLS[-1][1]
+    xbmcgui.reset()
+    return [i for i, label in enumerate(labels)
+            if label.startswith(prefix)][0]
+
+
 def clean_profile():
     if os.path.isdir(PROFILE):
         shutil.rmtree(PROFILE)
@@ -523,6 +537,183 @@ class TestColourMix(unittest.TestCase):
         text = scene_lib.describe(scene)
         self.assertIn('mix of 2 colours', text)
         self.assertIn('60%', text)
+
+
+class TestCycling(unittest.TestCase):
+    """Stepping a mix scene through its colours on a timer."""
+
+    def setUp(self):
+        clean_profile()
+        xbmcaddon.reset()
+        xbmcgui.reset()
+        for name in ('addon_utils', 'paragon_govee', 'palette', 'scenes'):
+            if name in sys.modules:
+                del sys.modules[name]
+
+    def tearDown(self):
+        clean_profile()
+
+    def build(self, count=4, interval=60):
+        import scenes as fresh_scenes
+        from paragon_govee import ParagonGovee
+
+        app = ParagonGovee()
+        app._devices = [Device('%02X' % i, name='Light %d' % i, lan=True,
+                               ip='10.0.0.%d' % (i + 1))
+                        for i in range(count)]
+        recorder = RecordingController()
+        app.controller = recorder
+
+        scene = fresh_scenes.make_scene(
+            'Party', mode=fresh_scenes.MODE_MIX, cycle=interval,
+            colors=[{'name': 'Red', 'color': [255, 0, 0]},
+                    {'name': 'Green', 'color': [0, 255, 0]},
+                    {'name': 'Blue', 'color': [0, 0, 255]}])
+        app.save_scene(scene)
+        return app, recorder, fresh_scenes
+
+    def test_rotation_keeps_the_even_spread(self):
+        import scenes as fresh_scenes
+
+        ids = ['%02X' % i for i in range(25)]
+        assignment = fresh_scenes.deal_assignment(3, ids)
+        for _step in range(6):
+            counts = sorted([list(assignment.values()).count(i)
+                             for i in range(3)])
+            self.assertEqual(counts, [8, 8, 9])
+            assignment = fresh_scenes.rotate_assignment(assignment, 3)
+
+    def test_rotation_moves_every_light_to_a_new_colour(self):
+        import scenes as fresh_scenes
+
+        before = fresh_scenes.deal_assignment(3, ['A', 'B', 'C', 'D'])
+        after = fresh_scenes.rotate_assignment(before, 3)
+        for key in before:
+            self.assertNotEqual(before[key], after[key])
+
+    def test_applying_a_cycling_scene_starts_the_cycle(self):
+        app, _recorder, _lib = self.build()
+
+        app.apply_scene(app.scene_by_name('Party'))
+
+        state = app.read_cycle()
+        self.assertIsNotNone(state)
+        self.assertEqual(state['scene'], 'Party')
+        self.assertEqual(state['interval'], 60)
+        self.assertEqual(len(state['assignment']), 4)
+        self.assertTrue(os.path.isfile(os.path.join(PROFILE, 'cycle.json')))
+
+    def test_applying_a_plain_scene_stops_a_running_cycle(self):
+        """Otherwise dimming for a film gets overwritten by the party."""
+        app, _recorder, lib = self.build()
+        app.apply_scene(app.scene_by_name('Party'))
+        self.assertIsNotNone(app.read_cycle())
+
+        app.apply_scene(lib.make_scene('Movie Night', brightness=8,
+                                       mode=lib.MODE_TEMP, kelvin=2000))
+        self.assertIsNone(app.read_cycle())
+
+    def test_a_step_advances_every_light_and_reschedules(self):
+        app, recorder, _lib = self.build()
+        app.apply_scene(app.scene_by_name('Party'))
+        before = dict(app.read_cycle()['assignment'])
+        del recorder.calls[:]
+
+        self.assertTrue(app.cycle_step(now=1000.0))
+
+        after = app.read_cycle()
+        for key in before:
+            self.assertNotEqual(before[key], after['assignment'][key])
+        self.assertEqual(after['next_at'], 1000.0 + 60)
+
+        colors = [c for c in recorder.calls if c[0] == 'color']
+        self.assertEqual(len(colors), 4)
+
+    def test_not_due_yet_means_no_step(self):
+        app, _recorder, _lib = self.build()
+        app.apply_scene(app.scene_by_name('Party'))
+        state = app.read_cycle()
+
+        self.assertIsNone(app.cycle_due(now=state['next_at'] - 1))
+        self.assertIsNotNone(app.cycle_due(now=state['next_at']))
+
+    def test_a_clock_jump_backwards_does_not_stall_for_hours(self):
+        app, _recorder, _lib = self.build(interval=60)
+        app.apply_scene(app.scene_by_name('Party'))
+        state = app.read_cycle()
+
+        # next_at far in the future relative to "now" -- a wrong clock, not a
+        # cycle that genuinely has hours to wait.
+        self.assertIsNotNone(app.cycle_due(now=state['next_at'] - 10000))
+
+    def test_lights_added_after_the_cycle_started_are_dealt_in(self):
+        app, recorder, _lib = self.build(count=3)
+        app.apply_scene(app.scene_by_name('Party'))
+
+        app._devices.append(Device('FF', name='Newcomer', lan=True,
+                                   ip='10.0.0.9'))
+        del recorder.calls[:]
+        app.cycle_step(now=2000.0)
+
+        self.assertIn('FF', app.read_cycle()['assignment'])
+        self.assertEqual(len([c for c in recorder.calls if c[0] == 'color']), 4)
+
+    def test_a_deleted_scene_stops_the_cycle_rather_than_erroring(self):
+        app, _recorder, _lib = self.build()
+        app.apply_scene(app.scene_by_name('Party'))
+
+        app._scenes = [s for s in app.scenes if s['name'] != 'Party']
+        app.save_scenes()
+
+        self.assertFalse(app.cycle_step(now=3000.0))
+        self.assertIsNone(app.read_cycle())
+
+    def test_stopping_leaves_the_lights_where_they_are(self):
+        app, recorder, _lib = self.build()
+        app.apply_scene(app.scene_by_name('Party'))
+        del recorder.calls[:]
+
+        self.assertEqual(app.stop_cycle(), 'Party')
+        self.assertIsNone(app.read_cycle())
+        self.assertEqual(recorder.calls, [])
+        self.assertIsNone(app.stop_cycle())
+
+    def test_a_cycle_survives_being_reloaded_from_disk(self):
+        """The panel starts it; the service is a different process."""
+        app, _recorder, _lib = self.build()
+        app.apply_scene(app.scene_by_name('Party'))
+        expected = dict(app.read_cycle()['assignment'])
+
+        from paragon_govee import ParagonGovee
+        service_side = ParagonGovee()
+        service_side._devices = app._devices
+        service_side.controller = RecordingController()
+
+        state = service_side.read_cycle()
+        self.assertEqual(state['scene'], 'Party')
+        self.assertEqual(state['assignment'], expected)
+
+        service_side.cycle_step(now=4000.0)
+        self.assertEqual(len([c for c in service_side.controller.calls
+                              if c[0] == 'color']), 4)
+
+    def test_cycle_is_only_kept_for_a_mix(self):
+        import scenes as fresh_scenes
+
+        scene = fresh_scenes.normalise({'name': 'Solid', 'cycle': 60,
+                                        'mode': fresh_scenes.MODE_TEMP})
+        self.assertEqual(scene['cycle'], 0)
+
+        scene = fresh_scenes.normalise({
+            'name': 'Party', 'cycle': 60, 'mode': fresh_scenes.MODE_MIX,
+            'colors': [[255, 0, 0], [0, 0, 255]]})
+        self.assertEqual(scene['cycle'], 60)
+
+    def test_a_cycling_scene_survives_a_json_round_trip(self):
+        app, _recorder, _lib = self.build()
+        saved = json.load(open(os.path.join(PROFILE, 'scenes.json')))
+        party = [s for s in saved if s['name'] == 'Party'][0]
+        self.assertEqual(party['cycle'], 60)
 
 
 class TestSceneCapture(unittest.TestCase):
@@ -2245,7 +2436,10 @@ class TestControlPanel(unittest.TestCase):
     def test_an_eight_digit_code_can_be_saved_into_a_scene(self):
         panel = self.panel()
         # Appearance -> Colour -> Custom hex, then Name, then Save.
-        xbmcgui.SELECT_QUEUE.extend([3, 1, len(panel.app.palette), 0, 6])
+        xbmcgui.SELECT_QUEUE.extend([scene_row(panel, 'Appearance:'), 1,
+                                     len(panel.app.palette),
+                                     scene_row(panel, 'Name:'),
+                                     scene_row(panel, 'Save')])
         xbmcgui.INPUT_QUEUE.extend(['FFFF2896', 'Pink'])
         panel.edit_scene(None)
 
@@ -2348,7 +2542,10 @@ class TestControlPanel(unittest.TestCase):
         done = len(panel.app.palette)
 
         # Appearance -> "Mix of colours..." -> tick two -> Done -> Name -> Save
-        xbmcgui.SELECT_QUEUE.extend([3, 2, red, blue, done, 0, 6])
+        xbmcgui.SELECT_QUEUE.extend([scene_row(panel, 'Appearance:'), 2,
+                                     red, blue, done,
+                                     scene_row(panel, 'Name:'),
+                                     scene_row(panel, 'Save')])
         xbmcgui.INPUT_QUEUE.append('Party')
         panel.edit_scene(None)
 
@@ -2407,7 +2604,9 @@ class TestControlPanel(unittest.TestCase):
         index = palette_row(panel, 'Govee Pink')
 
         # Appearance -> Colour -> the new entry, then Name, then Save.
-        xbmcgui.SELECT_QUEUE.extend([3, 1, index, 0, 6])
+        xbmcgui.SELECT_QUEUE.extend([scene_row(panel, 'Appearance:'), 1, index,
+                                     scene_row(panel, 'Name:'),
+                                     scene_row(panel, 'Save')])
         xbmcgui.INPUT_QUEUE.append('Pink Scene')
         panel.edit_scene(None)
 
@@ -2527,9 +2726,9 @@ class TestControlPanel(unittest.TestCase):
     def test_new_scene_can_be_named_and_saved(self):
         panel = self.panel()
         before = len(self.app.scenes)
+        save = scene_row(panel, 'Save')
 
-        # 0 = Name, then 6 = Save.
-        xbmcgui.SELECT_QUEUE.extend([0, 6])
+        xbmcgui.SELECT_QUEUE.extend([scene_row(panel, 'Name:'), save])
         xbmcgui.INPUT_QUEUE.append('Reading')
         panel.edit_scene(None)
 
@@ -2544,7 +2743,8 @@ class TestControlPanel(unittest.TestCase):
         index = 0
         original = self.app.scenes[index]['name']
 
-        xbmcgui.SELECT_QUEUE.extend([0, 6])  # Name, Save
+        xbmcgui.SELECT_QUEUE.extend([scene_row(panel, 'Name:', index),
+                                     scene_row(panel, 'Save', index)])
         xbmcgui.INPUT_QUEUE.append('Cinema')
         panel.edit_scene(index)
 

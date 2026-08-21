@@ -19,7 +19,7 @@ import xbmcgui
 import addon_utils as utils
 import palette as palette_lib
 import scenes as scene_lib
-from devices import ControlError
+from devices import ControlError, TRANSPORT_CLOUD
 
 # Presets offered before the user has to type anything.
 BRIGHTNESS_STEPS = [5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
@@ -47,6 +47,22 @@ HIGHLIGHT_BRIGHTNESS = 100
 IDENTIFY_FLASHES = 10
 IDENTIFY_GAP = 0.4
 
+# Offered when setting how often a mix scene moves the colours along.
+CYCLE_STEPS = [
+    ('Off - hold the arrangement', 0),
+    ('Every 15 seconds', 15),
+    ('Every 30 seconds', 30),
+    ('Every minute', 60),
+    ('Every 2 minutes', 120),
+    ('Every 5 minutes', 300),
+    ('Every 15 minutes', 900),
+]
+
+# Cycling drives every light on every step. Over the cloud that is metered:
+# Govee allows about 10,000 calls a day, so this is the point at which a
+# cycle would eat the lot.
+CLOUD_DAILY_CALLS = 10000
+
 
 def _dialog():
     return xbmcgui.Dialog()
@@ -57,6 +73,18 @@ def _select(heading, options):
     if not options:
         return BACK
     return _dialog().select(heading, options)
+
+
+def _duration(seconds):
+    """'90 seconds' -> 'minute and a half'-ish, in plain words."""
+    seconds = int(seconds)
+    if seconds % 3600 == 0 and seconds >= 3600:
+        hours = seconds // 3600
+        return '%d hour%s' % (hours, '' if hours == 1 else 's')
+    if seconds % 60 == 0 and seconds >= 60:
+        minutes = seconds // 60
+        return 'minute' if minutes == 1 else '%d minutes' % minutes
+    return '%d seconds' % seconds
 
 
 def _report(result, success_message):
@@ -125,6 +153,11 @@ class ControlPanel(object):
             rows.append((label,
                          lambda d=device: self.control_menu([d], d.name)))
 
+        cycle = self.app.read_cycle()
+        if cycle:
+            rows.append(('Stop cycling (%s)' % cycle.get('scene'),
+                         self.stop_cycling))
+
         rows.extend([
             ('Scenes...', self.scene_menu),
             ('Capture lights as a scene...', self.capture_scene),
@@ -140,6 +173,11 @@ class ControlPanel(object):
             return BACK
         rows[choice][1]()
         return None
+
+    def stop_cycling(self):
+        name = self.app.stop_cycle()
+        if name:
+            utils.notify('Stopped cycling %s' % name)
 
     def diagnose(self):
         """Probe the LAN and explain the result on screen and in the log."""
@@ -524,6 +562,9 @@ class ControlPanel(object):
             targets = scene['targets']
             target_label = ('all lights' if not targets
                             else '%d selected' % len(targets))
+            cycle = int(scene.get('cycle') or 0)
+            cycle_label = ('off' if not cycle
+                           else 'every %s' % _duration(cycle))
 
             options = [
                 'Name: %s' % scene['name'],
@@ -531,6 +572,7 @@ class ControlPanel(object):
                 'Brightness: %s' % brightness,
                 'Appearance: %s' % appearance,
                 'Lights: %s' % target_label,
+                'Cycle colours: %s' % cycle_label,
                 'Test this scene',
                 'Save',
             ]
@@ -558,11 +600,13 @@ class ControlPanel(object):
             elif choice == 4:
                 self._edit_targets(scene)
             elif choice == 5:
-                self.app.apply_scene(scene)
+                self._edit_cycle(scene)
             elif choice == 6:
+                self.app.apply_scene(scene)
+            elif choice == 7:
                 self._save_scene(scene, index)
                 return
-            elif choice == 7:
+            elif choice == 8:
                 if _dialog().yesno('Paragon Govee',
                                    'Delete the scene "%s"?' % scene['name']):
                     del scenes[index]
@@ -648,6 +692,51 @@ class ControlPanel(object):
             else:
                 scene['color'] = list(entries[pick]['color'])
             scene['mode'] = scene_lib.MODE_COLOR
+
+    def _edit_cycle(self, scene):
+        """How often a mix moves the colours along, or off."""
+        if scene.get('mode') != scene_lib.MODE_MIX:
+            _dialog().ok('Paragon Govee',
+                         'Cycling moves the lights through a mix of '
+                         'colours.\n\nSet Appearance to "Mix of colours" '
+                         'first.')
+            return
+
+        choice = _select('Cycle colours',
+                         [label for label, _seconds in CYCLE_STEPS])
+        if choice == BACK:
+            return
+
+        seconds = CYCLE_STEPS[choice][1]
+        if seconds and not self._cycle_cost_ok(scene, seconds):
+            return
+        scene['cycle'] = seconds
+
+    def _cycle_cost_ok(self, scene, seconds):
+        """Warn before a cycle that would burn the Govee cloud quota.
+
+        Every step drives every light. Over the LAN that is free; over the
+        cloud it is metered, and 25 lights on a one-minute cycle is 36,000
+        calls a day against a limit of about 10,000.
+        """
+        targets = scene_lib.scene_targets(scene, self.app.devices)
+        cloud = [d for d in targets
+                 if self.app.controller.pick_transport(d) == TRANSPORT_CLOUD]
+        if not cloud:
+            return True
+
+        per_day = len(cloud) * (86400.0 / seconds)
+        if per_day <= CLOUD_DAILY_CALLS:
+            return True
+
+        return _dialog().yesno(
+            'Paragon Govee',
+            '%d of these lights are driven over the Govee cloud, which is '
+            'rate limited.\n\nCycling every %s would use about %d cloud '
+            'calls a day against a limit near %d, so the lights would stop '
+            'responding partway through.\n\nUse it anyway?'
+            % (len(cloud), _duration(seconds), int(per_day),
+               CLOUD_DAILY_CALLS))
 
     def _edit_mix(self, scene):
         """Tick which saved colours go into the mix.

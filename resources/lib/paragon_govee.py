@@ -13,6 +13,8 @@ one of these. Nothing here draws UI, so the same object serves a dialog-driven
 menu and a silent playback callback.
 """
 
+import time
+
 import addon_utils as utils
 import palette as palette_lib
 import scenes as scene_lib
@@ -190,6 +192,112 @@ class ParagonGovee(object):
         self._palette = palette_lib.default_palette()
         self.save_palette()
 
+    # -- cycling -----------------------------------------------------------
+    #
+    # A cycling scene is stepped by the background service, but it is normally
+    # started from the control panel -- a different Kodi process. The two share
+    # a small state file rather than a window property: a file survives a Kodi
+    # restart, so a cycle that was running is picked up again, and the service
+    # can poll it for the price of a stat call.
+
+    CYCLE_FILE = 'cycle.json'
+
+    def read_cycle(self):
+        """The running cycle, or None."""
+        state = utils.read_json(self.CYCLE_FILE, default=None)
+        if not isinstance(state, dict) or not state.get('scene'):
+            return None
+        return state
+
+    def start_cycle(self, scene, assignment, now=None):
+        """Record that `scene` is cycling, with the arrangement now showing."""
+        interval = int(scene.get('cycle') or 0)
+        if interval <= 0 or scene.get('mode') != scene_lib.MODE_MIX:
+            return None
+
+        now = time.time() if now is None else now
+        state = {
+            'scene': scene['name'],
+            'interval': interval,
+            'assignment': dict(assignment or {}),
+            # Absolute rather than a delay, so a service restart does not
+            # reset the clock and make the lights sit still for a full
+            # interval again.
+            'next_at': now + interval,
+        }
+        utils.write_json(self.CYCLE_FILE, state)
+        utils.log('Cycling "%s" every %ds over %d light(s)'
+                  % (scene['name'], interval, len(state['assignment'])))
+        return state
+
+    def stop_cycle(self):
+        """Stop any running cycle. Returns the name that was running, or None."""
+        state = self.read_cycle()
+        if state is None:
+            return None
+        utils.write_json(self.CYCLE_FILE, {})
+        utils.log('Stopped cycling "%s"' % state.get('scene'))
+        return state.get('scene')
+
+    def cycle_due(self, now=None):
+        """The running cycle if it is time to step it, else None."""
+        state = self.read_cycle()
+        if state is None:
+            return None
+        now = time.time() if now is None else now
+        try:
+            next_at = float(state.get('next_at') or 0)
+        except (TypeError, ValueError):
+            return state
+        # A next_at far in the future means the clock moved backwards, or the
+        # file was written by a box with a different time. Step rather than
+        # hang for hours.
+        if now >= next_at or next_at - now > state.get('interval', 60) * 2:
+            return state
+        return None
+
+    def cycle_step(self, now=None, shuffle_func=None):
+        """Advance a cycling scene by one colour. Returns True if it stepped."""
+        state = self.read_cycle()
+        if state is None:
+            return False
+
+        scene = self.scene_by_name(state.get('scene'))
+        if scene is None or scene.get('mode') != scene_lib.MODE_MIX \
+                or not scene.get('colors'):
+            utils.log('Cycling scene "%s" is gone or no longer a mix; stopping'
+                      % state.get('scene'))
+            self.stop_cycle()
+            return False
+
+        targets = scene_lib.scene_targets(scene, self.devices)
+        assignment = state.get('assignment') or {}
+
+        # Lights that joined since the cycle started, or a cycle resumed from
+        # disk with nothing recorded, need dealing in rather than being left
+        # on whatever they happen to be showing.
+        missing = [d.device_id for d in targets
+                   if d.device_id not in assignment]
+        if missing:
+            assignment = dict(assignment)
+            assignment.update(scene_lib.deal_assignment(
+                len(scene['colors']), missing, shuffle_func))
+
+        assignment = scene_lib.rotate_assignment(assignment,
+                                                 len(scene['colors']))
+        applied, errors = scene_lib.apply_scene(
+            self.controller, scene, self.devices, log_func=utils.debug,
+            assignment=assignment)
+
+        now = time.time() if now is None else now
+        state['assignment'] = assignment
+        state['next_at'] = now + int(state.get('interval') or 60)
+        utils.write_json(self.CYCLE_FILE, state)
+
+        utils.debug('Cycle step: %d light(s), %d error(s)'
+                    % (applied, len(errors)))
+        return True
+
     # -- scenes ------------------------------------------------------------
 
     @property
@@ -289,9 +397,26 @@ class ParagonGovee(object):
 
     def apply_scene(self, scene, announce=True):
         """Apply a scene dict and report the outcome. Returns True if any
-        device accepted it."""
+        device accepted it.
+
+        Applying anything stops a running cycle first. Otherwise dimming for a
+        film would be overwritten by the party still stepping in the
+        background, which is a confusing way to discover a cycle is running.
+        """
+        self.stop_cycle()
+
+        assignment = None
+        if scene.get('mode') == scene_lib.MODE_MIX and scene.get('colors'):
+            targets = scene_lib.scene_targets(scene, self.devices)
+            assignment = scene_lib.deal_assignment(
+                len(scene['colors']), [d.device_id for d in targets])
+
         applied, errors = scene_lib.apply_scene(
-            self.controller, scene, self.devices, log_func=utils.log)
+            self.controller, scene, self.devices, log_func=utils.log,
+            assignment=assignment)
+
+        if applied and assignment and int(scene.get('cycle') or 0) > 0:
+            self.start_cycle(scene, assignment)
 
         if applied and announce:
             utils.notify('%s applied to %d light(s)'

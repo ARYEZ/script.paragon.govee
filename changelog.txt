@@ -1,3 +1,23 @@
+v1.7.0
+- Mix scenes can cycle. In the scene editor, "Cycle colours" sets how often
+  every light moves along to the next colour in the mix: 15 seconds up to 15
+  minutes, or off.
+- Stepping rotates the arrangement rather than re-dealing it. That keeps the
+  even spread exactly -- a 9/8/8 split becomes 8/8/9, never 12/7/6 -- and
+  guarantees every light actually changes colour, which a fresh random deal
+  would not.
+- The background service does the stepping, so cycling continues while you
+  browse Kodi, and carries on after a Kodi restart.
+- Applying any other scene stops a running cycle, so dimming for a film is
+  not overwritten a minute later by a party still stepping in the background.
+  The main menu grows a "Stop cycling" row while one is running.
+- Setting a cycle warns first if the lights are driven over the Govee cloud
+  and the interval would exceed the daily call quota. 25 cloud lights on a
+  one-minute cycle is about 36,000 calls a day against a limit near 10,000.
+  Cycling is really a LAN feature.
+- Lights added after a cycle starts are dealt in on the next step rather than
+  being left on whatever they were showing.
+
 v1.6.0
 - Scenes can now hold a mix of colours. In the scene editor choose
   Appearance -> "Mix of colours (spread over the lights)..." and tick as many

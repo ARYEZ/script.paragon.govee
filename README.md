@@ -198,6 +198,30 @@ or deleting a palette colour later cannot silently change a scene you already
 built. A per-light entry from a **capture** still wins over the mix, so the
 two compose.
 
+### Cycling a mix
+
+A mix scene can move the colours along on a timer. In the scene editor:
+
+**Cycle colours →** *Every minute* (or 15s / 30s / 2m / 5m / 15m, or off).
+
+Every light steps to the next colour in the mix on each tick. The background
+service does the stepping, so it keeps going while you browse Kodi and resumes
+after a Kodi restart.
+
+Stepping **rotates** the arrangement rather than re-dealing it. That keeps the
+even spread exactly — 9/8/8 becomes 8/8/9, never 12/7/6 — and guarantees every
+light genuinely changes colour, which a fresh random deal would not.
+
+Applying any other scene **stops** a running cycle, so dimming for a film is
+not overwritten a minute later. While one is running the main menu shows a
+**Stop cycling (…)** row.
+
+**Cycling is a LAN feature.** Every step drives every light, which is free over
+the LAN and metered over the cloud. 25 cloud-driven lights on a one-minute
+cycle is roughly 36,000 API calls a day against a Govee limit near 10,000 — the
+lights would stop responding partway through the day. The add-on warns before
+letting you set an interval that would do this.
+
 ### Govee Tap-to-Run scenes
 
 Tap-to-Run scenes cannot be triggered through the Govee API. They are not part
@@ -401,7 +425,7 @@ button that appears to do nothing is worse.
 ## Development
 
 ```
-python3 tests/test_paragon_govee.py     # 199 tests
+python3 tests/test_paragon_govee.py     # 212 tests
 python3 tests/check_py2.py              # Python 2.7 syntax gate
 python3 tools/make_assets.py            # regenerate icon.png / fanart.png
 ```

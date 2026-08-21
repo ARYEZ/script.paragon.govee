@@ -233,6 +233,15 @@ class GoveeService(xbmc.Monitor):
                 utils.log('Startup discovery failed: %s' % exc, xbmc.LOGERROR)
 
         while not self.abortRequested():
+            # Cycling scenes are stepped here rather than on a timer of their
+            # own: this loop already exists, already stops cleanly on abort,
+            # and a half-second tick is far finer than any sensible cycle.
+            try:
+                if self.app.cycle_due():
+                    self.app.cycle_step()
+            except Exception as exc:
+                utils.log('Cycle step failed: %s' % exc, xbmc.LOGERROR)
+
             event = self._pending
             if event is not None:
                 self._pending = None

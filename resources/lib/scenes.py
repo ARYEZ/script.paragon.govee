@@ -139,9 +139,38 @@ def deal_colors(colors, count, shuffle_func=None):
     return pool
 
 
+def deal_assignment(color_count, device_ids, shuffle_func=None):
+    """Map each device id to a colour index: evenly spread, randomly arranged.
+
+    Kept as indices rather than colours because a cycling scene has to hand
+    this between two Kodi processes -- the control panel that starts it and
+    the service that steps it -- and small integers survive that trip better
+    than colour triples.
+    """
+    if not color_count or not device_ids:
+        return {}
+    indices = deal_colors(list(range(color_count)), len(device_ids),
+                          shuffle_func)
+    return dict(zip(device_ids, indices))
+
+
+def rotate_assignment(assignment, color_count):
+    """Advance every device to the next colour in the mix.
+
+    Rotation is what makes cycling keep its even spread for free: shifting
+    every light by one turns a 9/8/8 split into 8/8/9, never into 12/7/6. It
+    also guarantees each light actually changes colour, which re-dealing at
+    random would not.
+    """
+    if not assignment or not color_count:
+        return dict(assignment or {})
+    return dict((device_id, (index + 1) % color_count)
+                for device_id, index in assignment.items())
+
+
 def make_scene(name, power=POWER_ON, brightness=None, mode=MODE_NONE,
                color=None, kelvin=None, targets=None, devices=None,
-               colors=None):
+               colors=None, cycle=0):
     return {
         'name': name,
         'power': power,
@@ -152,6 +181,7 @@ def make_scene(name, power=POWER_ON, brightness=None, mode=MODE_NONE,
         'targets': list(targets or []),
         'devices': dict(devices or {}),
         'colors': list(colors or []),
+        'cycle': int(cycle or 0),
     }
 
 
@@ -419,6 +449,11 @@ def normalise(scene):
             if item is not None:
                 colors.append(item)
 
+    try:
+        cycle = max(0, int(scene.get('cycle') or 0))
+    except (TypeError, ValueError):
+        cycle = 0
+
     mode = settings['mode']
     if mode == MODE_MIX and not colors:
         # A mix with nothing in it would silently do nothing to the colour.
@@ -434,6 +469,8 @@ def normalise(scene):
         'targets': targets,
         'devices': per_device,
         'colors': colors,
+        # Only a mix has anything to cycle through.
+        'cycle': cycle if mode == MODE_MIX else 0,
     }
 
 
@@ -504,7 +541,7 @@ def scene_targets(scene, devices):
 
 
 def apply_scene(controller, scene, devices, log_func=None,
-                shuffle_func=None):
+                shuffle_func=None, assignment=None):
     """Apply `scene` and return (applied_count, [error strings]).
 
     Every device is attempted even if an earlier one failed, so one
@@ -523,11 +560,16 @@ def apply_scene(controller, scene, devices, log_func=None,
 
     # A mix is dealt once, here, rather than per device: spreading colours
     # evenly is a property of the whole set of lights, so it cannot be decided
-    # one light at a time.
+    # one light at a time. A caller that is cycling passes the assignment in
+    # so each step rotates the arrangement already on the wall instead of
+    # scattering afresh.
     dealt = None
     if scene['mode'] == MODE_MIX and scene['colors']:
-        dealt = deal_colors([entry['color'] for entry in scene['colors']],
-                            len(targets), shuffle_func)
+        dealt = assignment
+        if dealt is None:
+            dealt = deal_assignment(len(scene['colors']),
+                                    [d.device_id for d in targets],
+                                    shuffle_func)
 
     applied = 0
     errors = []
@@ -537,12 +579,15 @@ def apply_scene(controller, scene, devices, log_func=None,
         # other scene falls back to its single uniform set.
         settings = settings_for(scene, device.device_id)
         if dealt is not None and device.device_id not in per_device_map:
-            # Copy before editing: settings_for hands back the scene's own
-            # dict when there is a per-device entry, and this must not write
-            # a dealt colour back into the saved scene.
-            settings = dict(settings)
-            settings['mode'] = MODE_COLOR
-            settings['color'] = list(dealt[index])
+            slot = dealt.get(device.device_id)
+            if slot is not None:
+                # Copy before editing: settings_for hands back the scene's own
+                # dict when there is a per-device entry, and this must not
+                # write a dealt colour back into the saved scene.
+                settings = dict(settings)
+                settings['mode'] = MODE_COLOR
+                settings['color'] = list(
+                    scene['colors'][slot % len(scene['colors'])]['color'])
         try:
             apply_settings(controller, device, settings)
             applied += 1

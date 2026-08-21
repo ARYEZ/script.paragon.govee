@@ -1,3 +1,11 @@
+v1.1.5
+- Documentation only. The status round-trip has now been run on real hardware:
+  an H6008 set to RGB 255,0,255 at 40% over the LAN reported back exactly that.
+  So devStatus on this model is honest -- it reports the last state set over
+  the LAN, and a cloud-applied Govee app scene layered on top is invisible to
+  it. The README said this was unknown; it now says what was measured, and
+  gives the steps for building a scene in Kodi rather than capturing one.
+
 v1.1.4
 - New "Check status reporting..." on a single light's menu, also reachable as
   RunScript(script.paragon.govee,action=verifystatus). It sets the bulb to a

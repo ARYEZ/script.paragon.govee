@@ -136,24 +136,35 @@ not what you are looking at.
 The tell is a capture that disagrees with the room. A real example: 25 bulbs
 visibly pink, of which 22 reported `RGB 0,0,0, 3800K, brightness 1`.
 
-To find out whether your model reports its state honestly at all, pick a single
-light and run **Check status reporting…** from its menu. It sets that bulb to a
-known colour, reads the status back, and tells you whether the two agree. If
-they don't, the model never updates its LAN status — capture cannot work on it,
-and Toggle cannot tell whether a light is already on.
+This has been confirmed on hardware. An H6008 was set to RGB `255,0,255` at
+40% over the LAN and reported back exactly that, so the status is honest — it
+simply reflects the last state set *over the LAN*, and a cloud-applied app
+scene layered on top is invisible to it.
+
+If you suspect a different model behaves worse, pick a single light and run
+**Check status reporting…** from its menu. It sets that bulb to a known colour,
+reads the status back, and tells you whether the two agree. If they don't, that
+model never updates its LAN status — capture cannot work on it, and Toggle
+cannot tell whether a light is already on.
 
 So capture is reliable for lights set **through this add-on** (or anything
 else driving plain colour/brightness over the LAN), and unreliable for lights
 set by a Govee app scene or Tap-to-Run.
 
-What works instead:
+What works instead — **build the look in Kodi**:
 
-1. Build the look in Kodi — **Scenes… → Manage scenes… → Add**, set colour and
-   brightness, and use **Test this scene** until it looks right. Once the
-   add-on has set it over the LAN, the bulbs report it correctly and a capture
-   round-trips.
-2. Or capture a Tap-to-Run and then correct the entries by hand in
-   `scenes.json` in the add-on's profile directory.
+1. **Scenes… → Manage scenes… → Add a new scene…**
+2. Set **Appearance** (colour or colour temperature) and **Brightness**.
+3. Leave **Lights** as *all lights* for a uniform look, or pick a subset.
+4. **Test this scene** until the room is right, then **Save**.
+
+That is the whole thing for a uniform look, and it is a better result than
+capture would give you: it applies over the LAN, so it is instant, needs no
+account credentials, and is safe to drive from playback.
+
+Capture then becomes useful in its own right — a way to snapshot a per-light
+arrangement you built up by hand, since anything set over the LAN *is*
+reported back correctly.
 
 A capture is also a snapshot of a *static* state: an animated Govee scene
 (a DIY effect, "autoplay", anything that cycles) is captured as whatever frame

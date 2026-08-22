@@ -176,6 +176,52 @@ def _as_bytes(data):
     return bytearray(data)
 
 
+class AESECB(object):
+    """AES-128 in ECB mode.
+
+    Tuya uses ECB rather than CBC. ECB is a poor choice in general -- equal
+    plaintext blocks give equal ciphertext blocks -- but the protocol is not
+    ours to design, and it is what the devices speak.
+    """
+
+    def __init__(self, key):
+        self.round_keys = _expand_key(_as_bytes(key))
+
+    def encrypt(self, data, pad=True):
+        data = _as_bytes(data)
+        if pad:
+            padding = BLOCK_SIZE - (len(data) % BLOCK_SIZE)
+            data = data + bytearray([padding] * padding)
+        elif len(data) % BLOCK_SIZE:
+            raise ValueError('ECB input must be a multiple of %d bytes'
+                             % BLOCK_SIZE)
+
+        out = bytearray()
+        for offset in range(0, len(data), BLOCK_SIZE):
+            out.extend(encrypt_block(data[offset:offset + BLOCK_SIZE],
+                                     self.round_keys))
+        return bytes(out)
+
+    def decrypt(self, data, unpad=True):
+        data = _as_bytes(data)
+        if len(data) % BLOCK_SIZE:
+            raise ValueError('ECB input must be a multiple of %d bytes'
+                             % BLOCK_SIZE)
+
+        out = bytearray()
+        for offset in range(0, len(data), BLOCK_SIZE):
+            out.extend(decrypt_block(data[offset:offset + BLOCK_SIZE],
+                                     self.round_keys))
+        if unpad and out:
+            padding = out[-1]
+            # Only strip what is a valid PKCS#7 tail; a device that pads
+            # differently should give a short read, not a corrupted one.
+            if 0 < padding <= BLOCK_SIZE and len(out) >= padding:
+                if all(b == padding for b in out[-padding:]):
+                    out = out[:-padding]
+        return bytes(out)
+
+
 class AES(object):
     """AES-128 in CBC mode.
 

@@ -990,11 +990,17 @@ class ControlPanel(object):
             'Rename (currently "%s")' % device.name,
             'Disable' if device.enabled else 'Enable',
         ]
+        keyed = hasattr(self.app.controller.driver_for(device),
+                        'set_local_key')
         if emitter:
             # An IR blaster has no light to flash and nothing to identify by,
             # so its menu is about the codes it knows instead.
             options.append('Commands (%d learned)...'
                            % len(self.app.controller.commands(device)))
+        elif keyed:
+            options.append('Set local key%s'
+                           % (' (needed)' if self.app.needs_local_key(device)
+                              else ''))
         else:
             options.append('Identify (flash this light)')
         options.append('Forget this light')
@@ -1004,6 +1010,9 @@ class ControlPanel(object):
             return
         if choice == 2 and emitter:
             self.command_menu(device)
+            return
+        if choice == 2 and keyed:
+            self.set_local_key(device)
             return
 
         if choice == 0:
@@ -1027,6 +1036,22 @@ class ControlPanel(object):
                     % device.name):
                 self.app.forget_device(device)
                 utils.notify('Forgot %s' % device.name)
+
+    def set_local_key(self, device):
+        """Paste in the local key a Tuya device needs before it can be used."""
+        value = _dialog().input(
+            'Local key for %s (16 characters)' % device.name,
+            self.app.controller.driver_for(device).local_key(device))
+        if value is None:
+            return
+        if self.app.set_local_key(device, value):
+            utils.notify('Key %s for %s'
+                         % ('cleared' if not value.strip() else 'saved',
+                            device.name))
+        else:
+            _dialog().ok('Paragon Home',
+                         'A Tuya local key is exactly 16 characters.\n\n'
+                         'You gave %d.' % len(value.strip()))
 
     # -- learned commands ---------------------------------------------------
 

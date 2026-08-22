@@ -29,6 +29,7 @@ class ParagonGovee(object):
     """Everything the add-on needs, assembled from the user's settings."""
 
     CODE_FILE = 'broadlink_codes.json'
+    KEY_FILE = 'tuya_keys.json'
 
     def __init__(self):
         # Learned IR/RF codes are loaded before the hub is built: the
@@ -38,6 +39,9 @@ class ParagonGovee(object):
         settings = self.read_settings()
         settings['broadlink_codes'] = self._codes
         settings['save_broadlink_codes'] = self.save_codes
+        self._tuya_keys = utils.read_json(self.KEY_FILE, default={}) or {}
+        settings['tuya_keys'] = self._tuya_keys
+        settings['save_tuya_keys'] = self.save_tuya_keys
         self.controller = build_hub(settings)
         self._devices = None
         self._scenes = None
@@ -65,6 +69,23 @@ class ParagonGovee(object):
 
     def save_codes(self):
         utils.write_json(self.CODE_FILE, self._codes or {})
+
+    def save_tuya_keys(self):
+        utils.write_json(self.KEY_FILE, self._tuya_keys or {})
+
+    def set_local_key(self, device, key):
+        """Store a Tuya local key. Returns False if it is not 16 characters."""
+        from devices import ControlError
+
+        driver = self.controller.driver_for(device)
+        if driver is None or not hasattr(driver, 'set_local_key'):
+            raise ControlError('%s does not use a local key' % device.name)
+        return driver.set_local_key(device, key)
+
+    def needs_local_key(self, device):
+        driver = self.controller.driver_for(device)
+        getter = getattr(driver, 'needs_key', None)
+        return bool(getter and getter(device))
 
     # -- learned commands ---------------------------------------------------
     #

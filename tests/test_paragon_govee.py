@@ -1610,6 +1610,247 @@ class TestBroadlinkDriver(unittest.TestCase):
         self.assertTrue(any('no network' in w for w in warnings))
 
 
+class TestTuyaDiscovery(unittest.TestCase):
+    """Finding Tuya plugs, which announce themselves rather than answer."""
+
+    @staticmethod
+    def frame(payload, return_code=False):
+        import struct as _struct
+        import zlib as _zlib
+        import tuya_lan as t
+
+        if return_code:
+            head = (_struct.pack('>4I', t.PREFIX, 0, 0, len(payload) + 12)
+                    + _struct.pack('>I', 0))
+        else:
+            head = _struct.pack('>4I', t.PREFIX, 0, 0, len(payload) + 8)
+        body = head + payload
+        return (body + _struct.pack('>I', _zlib.crc32(body) & 0xFFFFFFFF)
+                + _struct.pack('>I', t.SUFFIX))
+
+    def test_a_clear_31_broadcast_is_understood(self):
+        import tuya_lan as t
+
+        payload = json.dumps({'gwId': 'wp9abc', 'ip': '10.0.0.55',
+                              'version': '3.1'}).encode()
+        for return_code in (False, True):
+            found = t.parse_broadcast(self.frame(payload, return_code))
+            self.assertEqual(found['device_id'], 'wp9abc')
+            self.assertEqual(found['ip'], '10.0.0.55')
+            self.assertEqual(found['version'], '3.1')
+
+    def test_an_encrypted_33_broadcast_is_understood(self):
+        import tuya_lan as t
+        from aes import AESECB
+
+        payload = AESECB(t.DISCOVERY_KEY).encrypt(json.dumps(
+            {'gwId': 'wp9xyz', 'ip': '10.0.0.71',
+             'version': '3.3'}).encode())
+        for return_code in (False, True):
+            found = t.parse_broadcast(self.frame(payload, return_code))
+            self.assertEqual(found['device_id'], 'wp9xyz')
+            self.assertEqual(found['version'], '3.3')
+
+    def test_both_payload_offsets_are_tried(self):
+        """Neither offset is announced, so guessing one would find nothing."""
+        import tuya_lan as t
+
+        payload = json.dumps({'gwId': 'a', 'ip': '1.2.3.4'}).encode()
+        self.assertIsNotNone(t.parse_broadcast(self.frame(payload, False)))
+        self.assertIsNotNone(t.parse_broadcast(self.frame(payload, True)))
+
+    def test_rubbish_is_ignored(self):
+        import tuya_lan as t
+
+        for junk in (b'', b'short', b'garbage' * 10,
+                     self.frame(b'not json at all')):
+            self.assertIsNone(t.parse_broadcast(junk))
+
+    def test_a_broadcast_without_an_id_is_ignored(self):
+        import tuya_lan as t
+
+        payload = json.dumps({'ip': '10.0.0.9'}).encode()
+        self.assertIsNone(t.parse_broadcast(self.frame(payload)))
+
+    def test_devid_is_accepted_as_well_as_gwid(self):
+        import tuya_lan as t
+
+        payload = json.dumps({'devId': 'alt', 'ip': '10.0.0.9'}).encode()
+        self.assertEqual(t.parse_broadcast(self.frame(payload))['device_id'],
+                         'alt')
+
+
+class TestTuyaDriver(unittest.TestCase):
+    """A plug is discoverable long before it is controllable."""
+
+    def setUp(self):
+        clean_profile()
+        xbmcaddon.reset()
+        xbmcgui.reset()
+        for name in ('addon_utils', 'paragon_govee', 'tuya_driver',
+                     'tuya_lan', 'hub'):
+            if name in sys.modules:
+                del sys.modules[name]
+
+    def tearDown(self):
+        clean_profile()
+
+    def driver(self, keys=None):
+        from tuya_driver import TuyaDriver
+
+        self.saved = []
+        return TuyaDriver(keys=keys if keys is not None else {},
+                          save_keys=lambda: self.saved.append(True))
+
+    def device(self):
+        return Device('wp9abc', name='Lamp Plug', driver='tuya',
+                      ip='10.0.0.55', lan=True, native_id='wp9abc')
+
+    def test_a_plug_claims_power_and_state_only(self):
+        from devices import CAP_COLOR, CAP_COMMANDS, CAP_POWER, CAP_STATE
+
+        caps = self.driver().capabilities(self.device())
+        self.assertEqual(caps, set([CAP_POWER, CAP_STATE]))
+        self.assertNotIn(CAP_COLOR, caps)
+        self.assertNotIn(CAP_COMMANDS, caps)
+
+    def test_a_device_without_a_key_says_so_rather_than_looking_broken(self):
+        driver, device = self.driver(), self.device()
+        self.assertTrue(driver.needs_key(device))
+
+        with self.assertRaises(ControlError) as caught:
+            driver.turn(device, True)
+        self.assertIn(device.name, str(caught.exception))
+
+    def test_a_key_must_be_sixteen_characters(self):
+        driver, device = self.driver(), self.device()
+
+        self.assertFalse(driver.set_local_key(device, 'too short'))
+        self.assertTrue(driver.needs_key(device))
+
+        self.assertTrue(driver.set_local_key(device, 'a' * 16))
+        self.assertFalse(driver.needs_key(device))
+        self.assertTrue(self.saved, 'key was not persisted')
+
+    def test_the_tuya_id_keeps_its_case(self):
+        """Upper-casing a Tuya id would produce one the device disowns."""
+        device = self.device()
+        self.assertEqual(device.device_id, 'WP9ABC')   # for matching
+        self.assertEqual(device.native_id, 'wp9abc')   # for the wire
+
+        restored = Device.from_dict(json.loads(json.dumps(device.to_dict())))
+        self.assertEqual(restored.native_id, 'wp9abc')
+
+    def test_keys_are_stored_under_the_tuya_id(self):
+        driver, device = self.driver(), self.device()
+        driver.set_local_key(device, 'k' * 16)
+        self.assertIn('wp9abc', driver.keys)
+
+    def test_a_key_can_be_cleared(self):
+        driver, device = self.driver(keys={'wp9abc': 'a' * 16}), self.device()
+        self.assertFalse(driver.needs_key(device))
+        self.assertTrue(driver.set_local_key(device, ''))
+        self.assertTrue(driver.needs_key(device))
+
+    def test_discovery_warns_about_unkeyed_devices(self):
+        import tuya_lan as t
+        from tuya_driver import TuyaDriver
+
+        heard = [{'device_id': 'wp9abc', 'ip': '10.0.0.55', 'version': '3.3'}]
+        saved_discover = t.discover
+        t.discover = lambda timeout=6.0, log_func=None: heard
+        try:
+            found, warnings = TuyaDriver(keys={}).discover()
+        finally:
+            t.discover = saved_discover
+
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].driver, 'tuya')
+        self.assertEqual(found[0].device_id, 'WP9ABC')
+        self.assertTrue(any('local key' in w for w in warnings))
+
+    def test_a_keyed_device_produces_no_warning(self):
+        import tuya_lan as t
+        from tuya_driver import TuyaDriver
+
+        heard = [{'device_id': 'wp9abc', 'ip': '10.0.0.55', 'version': '3.3'}]
+        saved_discover = t.discover
+        t.discover = lambda timeout=6.0, log_func=None: heard
+        try:
+            _found, warnings = TuyaDriver(
+                keys={'wp9abc': 'k' * 16}).discover()
+        finally:
+            t.discover = saved_discover
+        self.assertEqual(warnings, [])
+
+    def test_a_blocked_listen_port_becomes_a_warning(self):
+        import tuya_lan as t
+        from tuya_driver import TuyaDriver
+
+        saved_discover = t.discover
+
+        def blocked(timeout=6.0, log_func=None):
+            raise t.TuyaError('Could not listen on UDP 6666 or 6667.')
+
+        t.discover = blocked
+        try:
+            found, warnings = TuyaDriver().discover()
+        finally:
+            t.discover = saved_discover
+
+        self.assertEqual(found, [])
+        self.assertTrue(any('6666' in w for w in warnings))
+
+    def test_discovery_listens_longer_than_a_request_response_sweep(self):
+        """Tuya devices announce on their own schedule; 3 seconds is not enough."""
+        import tuya_lan as t
+        from tuya_driver import TuyaDriver
+
+        seen = []
+        saved_discover = t.discover
+        t.discover = lambda timeout=6.0, log_func=None: seen.append(timeout) or []
+        try:
+            TuyaDriver().discover(timeout=3.0)
+        finally:
+            t.discover = saved_discover
+        self.assertGreaterEqual(seen[0], 6.0)
+
+    def test_the_session_refuses_without_a_key(self):
+        import tuya_lan as t
+
+        session = t.Session('10.0.0.55', 'wp9abc', '', version='3.3')
+        self.assertFalse(session.keyed)
+        self.assertRaises(t.TuyaKeyMissing, session._cipher)
+
+    def test_packet_framing_carries_the_prefix_and_crc(self):
+        import struct as _struct
+        import tuya_lan as t
+        import zlib as _zlib
+
+        session = t.Session('10.0.0.55', 'wp9abc', 'k' * 16)
+        packet = bytearray(session.build_packet(t.CMD_STATUS, b'{}'))
+
+        self.assertEqual(_struct.unpack('>I', bytes(packet[0:4]))[0], t.PREFIX)
+        self.assertEqual(_struct.unpack('>I', bytes(packet[-4:]))[0], t.SUFFIX)
+        body = bytes(packet[:-8])
+        self.assertEqual(_struct.unpack('>I', bytes(packet[-8:-4]))[0],
+                         _zlib.crc32(body) & 0xFFFFFFFF)
+
+    def test_a_device_error_reply_is_raised(self):
+        import struct as _struct
+        import tuya_lan as t
+
+        session = t.Session('10.0.0.55', 'wp9abc', 'k' * 16)
+        reply = bytearray(_struct.pack('>4I', t.PREFIX, 1, 10, 0))
+        reply.extend(_struct.pack('>I', 1))       # non-zero return code
+        reply.extend(b'json obj data unvalid')
+        reply.extend(bytearray(8))
+
+        with self.assertRaises(t.TuyaError) as caught:
+            session.parse_packet(reply)
+        self.assertIn('error 1', str(caught.exception))
+
+
 class FakeBlaster(object):
     """A stand-in for a second vendor: emits commands, has no colour.
 

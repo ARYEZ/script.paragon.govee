@@ -1,3 +1,22 @@
+v2.2.0
+- Finds Tuya smart plugs, as the third driver. That covers GHome, Gosund,
+  Smart Life and most no-name plugs, which are all the same platform.
+- Discovery is passive: Tuya devices announce themselves by UDP broadcast
+  rather than answering a probe, so the search listens on ports 6666 and 6667
+  for at least one announce interval rather than doing a quick sweep.
+- Both broadcast forms are handled -- clear 3.1 and AES-encrypted 3.3+ -- and
+  both payload offsets are tried, since neither is announced and guessing
+  wrong would mean silently finding nothing.
+- Added AES-128-ECB, which Tuya uses where Broadlink uses CBC. Verified
+  against the NIST SP 800-38A ECB vector.
+- Switching a plug needs its local key, which exists only in Tuya's cloud and
+  is never offered by the device. A plug without one is still discovered,
+  listed and nameable, and says what it needs rather than looking broken.
+  "Set local key" in a plug's Manage devices menu takes it.
+- Device ids keep their original case alongside the upper-cased matching
+  form. Tuya ids are lower case and go on the wire verbatim, so upper-casing
+  one would produce an id the device disowns.
+
 v2.1.2
 - Supports the newer Broadlink data payload layout. RM4-family devices and
   later "RM Mini 3" units prefix the payload with a two byte length; RM2 and

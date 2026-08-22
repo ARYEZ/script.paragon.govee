@@ -57,8 +57,14 @@ class Device(object):
 
     def __init__(self, device_id, name='', model='', ip='', lan=False,
                  cloud=False, supports=None, temp_range=None, enabled=True,
-                 driver=DEFAULT_DRIVER, devtype=None):
+                 driver=DEFAULT_DRIVER, devtype=None, native_id=None):
+        # device_id is upper-cased so matching is case-insensitive, which is
+        # what a Govee or Broadlink MAC wants. Tuya ids are lower-case strings
+        # that go on the wire verbatim, and upper-casing one would produce an
+        # id the device does not recognise -- so the original is kept too, and
+        # a driver that needs the exact bytes uses native_id.
         self.device_id = (device_id or '').upper()
+        self.native_id = native_id or device_id or ''
         self.driver = driver or DEFAULT_DRIVER
         self.model = model or ''
         self.ip = ip or ''
@@ -114,6 +120,7 @@ class Device(object):
             'temp_range': self.temp_range,
             'enabled': self.enabled,
             'devtype': self.devtype,
+            'native_id': self.native_id,
         }
 
     @classmethod
@@ -130,6 +137,7 @@ class Device(object):
             temp_range=data.get('temp_range'),
             enabled=data.get('enabled', True),
             devtype=data.get('devtype'),
+            native_id=data.get('native_id'),
         )
 
     def merge(self, other):
@@ -454,6 +462,13 @@ def build_hub(settings):
     from hub import Hub
 
     drivers = [build_controller(settings)]
+
+    if settings.get('tuya_enabled', True):
+        from tuya_driver import TuyaDriver
+        drivers.append(TuyaDriver(
+            keys=settings.get('tuya_keys'),
+            save_keys=settings.get('save_tuya_keys'),
+            log_func=settings.get('log_func')))
 
     if settings.get('broadlink_enabled', True):
         drivers.append(BroadlinkDriver(

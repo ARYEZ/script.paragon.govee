@@ -434,6 +434,16 @@ Reracks live under **Reracks...** on the first screen, and each one is also a
 RunScript(script.paragon.govee,action=rerack,name=Wind Down)
 ```
 
+### Commands a scene sends
+
+A scene sets state. A command has none to set — an infrared blaster has no
+colour, it has "AVR Power". **Commands to send** in the scene editor is where
+one scene picks up both, so a single "Movie Night" dims the lights and
+switches the amplifier on.
+
+Commands fire *after* the lighting changes, so the lights are already moving
+when the amp clicks on. Any device that has learned codes can be picked.
+
 ### What "all" means in a scene
 
 A scene that names no targets applies to **what it can actually describe**,
@@ -615,6 +625,18 @@ reads the plug back and says whether the key was accepted. Worth doing: 16
 characters typed on a remote control is an easy thing to get one keystroke
 wrong, and a wrong key otherwise shows up later as a plug that will not
 switch.
+
+### After a power cut
+
+**Manage devices → the plug → After a power cut** sets what the relay does
+when mains power comes back: **stay off**, **come back on**, or **remember how
+it was**. Useful for leaving the house — a plug set to stay off will not wake
+up mid-holiday because the power blinked.
+
+It is a setting on the plug itself, so it covers every outlet on that plug and
+holds whether or not Kodi is running. The current value is read from the plug
+rather than remembered here, and a plug that has no such setting says so
+instead of showing a made-up one.
 
 ### Multi-outlet plugs
 

@@ -44,6 +44,16 @@ SWITCH_DPS = OUTLET_DPS + USB_DPS
 MASTER_DP = 'all'
 MASTER_LABEL = 'All outlets'
 
+# What the plug does when mains power comes back after a cut. Datapoint 38 in
+# Tuya's socket instruction set, and a property of the whole plug rather than
+# of one outlet -- there is one relay memory in the box, however many sockets
+# it has.
+POWER_MEMORY_DP = '38'
+POWER_MEMORY = (('Stay off', 'power_off'),
+                ('Come back on', 'power_on'),
+                ('Remember how it was', 'last'))
+POWER_MEMORY_VALUES = tuple(value for _label, value in POWER_MEMORY)
+
 
 def outlet_label(dp):
     """A human name for one switchable datapoint."""
@@ -182,6 +192,36 @@ class TuyaDriver(object):
 
     def send_command(self, device, name):
         raise ControlError('%s does not send commands' % device.name)
+
+    # -- power-cut memory --------------------------------------------------
+
+    def power_memory(self, device):
+        """What this plug does when mains power returns.
+
+        Returns (value, [(label, value)]) or (None, []) when the plug does not
+        carry the datapoint -- which is worth distinguishing from "off",
+        because not every Tuya plug has a relay memory to set.
+        """
+        try:
+            dps = self._session(device).status()
+        except (tuya_lan.TuyaError, ControlError) as exc:
+            self._log('Could not read the power memory of %s: %s'
+                      % (device.name, exc))
+            return None, []
+
+        value = dps.get(POWER_MEMORY_DP)
+        if value not in POWER_MEMORY_VALUES:
+            return None, []
+        return value, list(POWER_MEMORY)
+
+    def set_power_memory(self, device, value):
+        if value not in POWER_MEMORY_VALUES:
+            raise ControlError('%s is not a power-cut setting' % value)
+        try:
+            self._session(device).set_dps({POWER_MEMORY_DP: value})
+        except tuya_lan.TuyaError as exc:
+            raise ControlError('%s: %s' % (device.name, exc))
+        return True
 
     def test_connection(self, device):
         """Read the device and report the result in words.

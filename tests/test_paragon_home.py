@@ -3154,6 +3154,57 @@ class TestTuyaControl(unittest.TestCase):
 
         self.assertTrue(plug.dps['1'])
 
+    # -- power-cut memory --------------------------------------------------
+
+    def test_the_power_cut_setting_is_read_from_the_plug(self):
+        """Datapoint 38: what the relay does when mains power returns."""
+        self.start(dps=dict(self.WP9_DPS, **{'38': 'last'}))
+
+        value, options = self.driver().power_memory(self.device())
+
+        self.assertEqual(value, 'last')
+        self.assertEqual([v for _label, v in options],
+                         ['power_off', 'power_on', 'last'])
+
+    def test_the_power_cut_setting_can_be_changed(self):
+        plug = self.start(dps=dict(self.WP9_DPS, **{'38': 'last'}))
+
+        self.driver().set_power_memory(self.device(), 'power_off')
+
+        self.assertEqual(plug.dps['38'], 'power_off')
+
+    def test_a_plug_without_the_datapoint_says_so_rather_than_guessing(self):
+        """Not every Tuya plug has a relay memory, and none is not "off"."""
+        self.start(dps={'1': True, '2': False})
+
+        value, options = self.driver().power_memory(self.device())
+
+        self.assertIsNone(value)
+        self.assertEqual(options, [])
+
+    def test_an_unreadable_plug_does_not_invent_a_setting(self):
+        plug = self.start(dps=self.WP9_DPS)
+        plug.refuse = 1
+
+        self.assertEqual(self.driver().power_memory(self.device()), (None, []))
+
+    def test_a_value_the_plug_would_not_understand_is_refused_here(self):
+        self.start(dps=self.WP9_DPS)
+
+        with self.assertRaises(ControlError):
+            self.driver().set_power_memory(self.device(), 'sideways')
+
+    def test_the_setting_belongs_to_the_plug_not_to_one_outlet(self):
+        """One relay memory in the box, however many sockets it has."""
+        plug = self.start(dps=dict(self.WP9_DPS, **{'38': 'power_on'}))
+        driver = self.driver()
+
+        driver.set_power_memory(self.device(dp='2'), 'power_off')
+
+        self.assertEqual(driver.power_memory(self.device(dp='3'))[0],
+                         'power_off')
+        self.assertEqual(plug.dps['38'], 'power_off')
+
     # -- test connection ---------------------------------------------------
 
     def test_test_connection_reports_what_it_found(self):
@@ -6379,6 +6430,182 @@ class TestControlPanel(unittest.TestCase):
 
         self.assertIn('Lights: all colour devices', colour)
         self.assertIn('Lights: all devices', plain)
+
+    def _blaster_app(self):
+        blaster = Device('EE:FF', name='Bedroom Broadlink', driver='broadlink',
+                         lan=True)
+        self.app._devices = [self.app.devices[0], blaster]
+        self.recorder.capabilities = lambda d: set(
+            ['commands'] if d.driver == 'broadlink'
+            else ['power', 'brightness', 'color', 'color_temp', 'state'])
+        self.recorder.commands = lambda d: ['AVR Power', 'TV power']
+        return blaster
+
+    def test_the_scene_editor_offers_the_commands_a_scene_sends(self):
+        """They worked in the engine all along; there was no way to add one."""
+        self._blaster_app()
+        self.app._scenes = [scene_lib.make_scene('Movie Night')]
+
+        _row, labels = menu_row(lambda: self.panel().edit_scene(0),
+                                'Commands to send')
+
+        self.assertIn('Commands to send: none', labels)
+
+    def test_a_command_is_added_by_picking_a_device_then_a_code(self):
+        self._blaster_app()
+        scene = scene_lib.make_scene('Movie Night')
+        self.app._scenes = [scene]
+        panel = self.panel()
+
+        rows = menu_row(lambda: panel.edit_scene(0), 'Commands to send')[1]
+        commands = [i for i, l in enumerate(rows)
+                    if l.startswith('Commands to send')][0]
+        # Commands, "Add a command...", the blaster, "AVR Power", back out,
+        # then Save -- the editor works on a copy until then, on purpose.
+        xbmcgui.SELECT_QUEUE.extend([commands, 0, 0, 0, -1,
+                                     rows.index('Save')])
+        panel.edit_scene(0)
+
+        self.assertEqual(self.app.scenes[0]['actions'],
+                         [{'device': 'EE:FF', 'command': 'AVR Power'}])
+
+    def test_a_scene_command_fires_when_the_scene_is_applied(self):
+        """The whole point of the row: it reaches the engine that existed."""
+        blaster = self._blaster_app()
+        scene = scene_lib.make_scene(
+            'Movie Night', actions=[{'device': 'EE:FF',
+                                     'command': 'AVR Power'}])
+
+        fired, errors = scene_lib.fire_actions(
+            self.recorder, scene_lib.normalise(scene),
+            [self.app.devices[0], blaster])
+
+        self.assertEqual((fired, errors), (1, []))
+        self.assertEqual(self.recorder.calls,
+                         [('command', 'EE:FF', 'AVR Power')])
+
+    def test_leaving_the_editor_without_saving_changes_nothing(self):
+        """The copy is deliberate: cancelling has to discard."""
+        self._blaster_app()
+        scene = scene_lib.normalise(scene_lib.make_scene('Movie Night'))
+        self.app._scenes = [scene]
+        panel = self.panel()
+
+        rows = menu_row(lambda: panel.edit_scene(0), 'Commands to send')[1]
+        commands = [i for i, l in enumerate(rows)
+                    if l.startswith('Commands to send')][0]
+        xbmcgui.SELECT_QUEUE.extend([commands, 0, 0, 0, -1, -1])
+        panel.edit_scene(0)
+
+        self.assertEqual(self.app.scenes[0]['actions'], [])
+
+    def test_a_command_can_be_taken_off_a_scene_again(self):
+        self._blaster_app()
+        scene = scene_lib.normalise(scene_lib.make_scene(
+            'Movie Night', actions=[{'device': 'EE:FF',
+                                     'command': 'AVR Power'}]))
+        self.app._scenes = [scene]
+        panel = self.panel()
+
+        rows = menu_row(lambda: panel.edit_scene(0), 'Commands to send')[1]
+        commands = [i for i, l in enumerate(rows)
+                    if l.startswith('Commands to send')][0]
+        xbmcgui.YESNO_QUEUE.append(True)
+        xbmcgui.SELECT_QUEUE.extend([commands, 0, -1, rows.index('Save')])
+        panel.edit_scene(0)
+
+        self.assertEqual(self.app.scenes[0]['actions'], [])
+
+    def test_the_editor_says_when_nothing_can_send_a_command(self):
+        self.app._scenes = [scene_lib.make_scene('Movie Night')]
+        self.recorder.caps = ['power', 'color', 'state']
+        panel = self.panel()
+
+        row = menu_row(lambda: panel.edit_scene(0), 'Commands to send')[0]
+        xbmcgui.SELECT_QUEUE.extend([row, -1])
+        panel.edit_scene(0)
+
+        self.assertTrue(any('sends commands' in message
+                            for _heading, message in xbmcgui.NOTIFICATIONS))
+
+    def test_every_scene_editor_row_survives_a_new_row_being_added(self):
+        """Rows are looked up by label now, not counted.
+
+        This editor grew a row four times and the numbering under it had to be
+        re-counted by hand each time. It no longer can be.
+        """
+        self._blaster_app()
+        self.app._scenes = [scene_lib.make_scene('Movie Night')]
+
+        _row, labels = menu_row(lambda: self.panel().edit_scene(0), 'Name:')
+
+        for expected in ('Name:', 'Power:', 'Brightness:', 'Appearance:',
+                         'Lights:', 'Commands to send:', 'Cycle colours:',
+                         'Test this scene', 'Save', 'Delete'):
+            self.assertTrue(any(l.startswith(expected) for l in labels),
+                            'lost the "%s" row' % expected)
+
+    def test_any_switchable_device_gets_its_own_switch_rows(self):
+        """Not only the drivers that need a key, which was Tuya alone."""
+        plug = Device('8006ABCD', name='Christmas Tree', driver='kasa',
+                      lan=True, ip='10.0.0.31')
+        self.app._devices = [plug]
+        self.recorder.caps = ['power', 'state']
+
+        class _Kasa(object):
+            def test_connection(self, device):
+                return True, 'ok'
+        self.recorder.driver_for = lambda device: _Kasa()
+
+        _row, labels = menu_row(lambda: self.panel()._edit_device(plug),
+                                'Rename')
+
+        self.assertIn('Switch on', labels)
+        self.assertIn('Switch off', labels)
+
+    def test_a_blaster_gets_no_switch_rows(self):
+        blaster = Device('EE:FF', name='Bedroom RM', driver='broadlink',
+                         lan=True)
+        self.app._devices = [blaster]
+        self.recorder.caps = ['commands']
+
+        _row, labels = menu_row(lambda: self.panel()._edit_device(blaster),
+                                'Rename')
+
+        self.assertNotIn('Switch on', labels)
+
+    def test_a_tuya_plug_is_offered_its_power_cut_setting(self):
+        plug = Device('WP9ABC#ALL', name='Office Plug', driver='tuya',
+                      lan=True, ip='10.0.0.99', native_id='wp9abc')
+        self.app._devices = [plug]
+        self.recorder.caps = ['power', 'state']
+
+        class _Tuya(object):
+            def set_local_key(self, device, key):
+                return True
+
+            def local_key(self, device):
+                return '0123456789abcdef'
+
+            def test_connection(self, device):
+                return True, 'ok'
+
+            def set_power_memory(self, device, value):
+                return True
+        self.recorder.driver_for = lambda device: _Tuya()
+
+        _row, labels = menu_row(lambda: self.panel()._edit_device(plug),
+                                'Rename')
+
+        self.assertIn('After a power cut...', labels)
+
+    def test_a_govee_bulb_is_not_offered_a_power_cut_setting(self):
+        bulb = self.app.devices[0]
+
+        _row, labels = menu_row(lambda: self.panel()._edit_device(bulb),
+                                'Rename')
+
+        self.assertNotIn('After a power cut...', labels)
 
     def test_main_menu_shows_the_version(self):
         xbmcgui.SELECT_QUEUE.extend([-1])

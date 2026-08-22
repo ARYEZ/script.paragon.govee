@@ -97,6 +97,21 @@ class ParagonHome(object):
             raise ControlError('%s does not use a local key' % device.name)
         return driver.set_local_key(device, key)
 
+    def power_memory(self, device):
+        """What a plug does when mains power returns, if it can say."""
+        driver = self.controller.driver_for(device)
+        if driver is None or not hasattr(driver, 'power_memory'):
+            return None, []
+        return driver.power_memory(device)
+
+    def set_power_memory(self, device, value):
+        from devices import ControlError
+
+        driver = self.controller.driver_for(device)
+        if driver is None or not hasattr(driver, 'set_power_memory'):
+            raise ControlError('%s has no power-cut setting' % device.name)
+        return driver.set_power_memory(device, value)
+
     def needs_local_key(self, device):
         driver = self.controller.driver_for(device)
         getter = getattr(driver, 'needs_key', None)

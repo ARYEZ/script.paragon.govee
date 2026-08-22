@@ -1,3 +1,21 @@
+v2.11.0
+- The commands a scene sends are now editable. They have worked in the engine
+  since v1.1 but there was no way to add one short of editing scenes.json by
+  hand: "Commands to send" in the scene editor picks a device that has learned
+  codes and one of its codes, so a single "Movie Night" can dim the lights and
+  switch the amplifier on.
+- Tuya plugs: "After a power cut" sets what the relay does when mains power
+  returns -- stay off, come back on, or remember how it was. It is a setting
+  on the plug, so it covers every outlet on it and holds whether or not Kodi
+  is running. The value is read from the plug rather than remembered here, and
+  a plug without one says so rather than showing a made-up setting.
+- "Switch on" and "Switch off" now appear for any device that switches. They
+  were written when Tuya was the only plug driver and were gated on needing a
+  local key, which quietly denied a Kasa plug the two rows it most wants.
+- The scene editor is built from rows with handlers rather than a list read
+  back by index. It had grown a row four times, and each time the numbering
+  under it had to be re-counted by hand.
+
 v2.10.1
 - Fixed a rerack whose steps included a scene switching every plug in the
   house. The scene was doing it, not the plug step beside it.

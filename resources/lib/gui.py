@@ -775,53 +775,127 @@ class ControlPanel(object):
             cycle_label = ('off' if not cycle
                            else 'every %s' % _duration(cycle))
 
-            options = [
-                'Name: %s' % scene['name'],
-                'Power: %s' % scene['power'],
-                'Brightness: %s' % brightness,
-                'Appearance: %s' % appearance,
-                'Lights: %s' % target_label,
-                'Cycle colours: %s' % cycle_label,
-                'Test this scene',
-                'Save',
+            commands = scene.get('actions') or []
+            command_label = ('none' if not commands
+                             else '%d' % len(commands))
+
+            # (label, handler) rows rather than a list read back by index.
+            # This editor has grown a row four times, and every time the
+            # numbering under it had to be re-counted by hand.
+            rows = [
+                ('Name: %s' % scene['name'],
+                 lambda: self._edit_scene_name(scene)),
+                ('Power: %s' % scene['power'],
+                 lambda: self._edit_power(scene)),
+                ('Brightness: %s' % brightness,
+                 lambda: self._edit_brightness(scene)),
+                ('Appearance: %s' % appearance,
+                 lambda: self._edit_appearance(scene)),
+                ('Lights: %s' % target_label,
+                 lambda: self._edit_targets(scene)),
+                ('Commands to send: %s' % command_label,
+                 lambda: self._edit_actions(scene)),
+                ('Cycle colours: %s' % cycle_label,
+                 lambda: self._edit_cycle(scene)),
+                ('Test this scene', lambda: self.app.apply_scene(scene)),
+                ('Save', lambda: self._save_and_close(scene, index)),
             ]
             if index is not None:
-                options.append('Delete')
+                rows.append(('Delete',
+                             lambda: self._delete_scene(scene, index)))
 
-            choice = _select('Edit scene', options)
+            choice = _select('Edit scene', [label for label, _h in rows])
             if choice == BACK:
                 return
+            if rows[choice][1]() is False:
+                return
 
-            if choice == 0:
-                name = _dialog().input('Scene name', scene['name'])
-                if name and name.strip():
-                    scene['name'] = name.strip()
-            elif choice == 1:
-                pick = _select('Power', ['Turn on', 'Turn off',
-                                         'Leave as it is'])
-                if pick != BACK:
-                    scene['power'] = [scene_lib.POWER_ON, scene_lib.POWER_OFF,
-                                      scene_lib.POWER_KEEP][pick]
-            elif choice == 2:
-                self._edit_brightness(scene)
-            elif choice == 3:
-                self._edit_appearance(scene)
-            elif choice == 4:
-                self._edit_targets(scene)
-            elif choice == 5:
-                self._edit_cycle(scene)
-            elif choice == 6:
-                self.app.apply_scene(scene)
-            elif choice == 7:
-                self._save_scene(scene, index)
+    def _edit_scene_name(self, scene):
+        name = _dialog().input('Scene name', scene['name'])
+        if name and name.strip():
+            scene['name'] = name.strip()
+
+    def _edit_power(self, scene):
+        pick = _select('Power', ['Turn on', 'Turn off', 'Leave as it is'])
+        if pick != BACK:
+            scene['power'] = [scene_lib.POWER_ON, scene_lib.POWER_OFF,
+                              scene_lib.POWER_KEEP][pick]
+
+    def _save_and_close(self, scene, index):
+        self._save_scene(scene, index)
+        return False
+
+    def _delete_scene(self, scene, index):
+        if _dialog().yesno(utils.ADDON_NAME,
+                           'Delete the scene "%s"?' % scene['name']):
+            del self.app.scenes[index]
+            self.app.save_scenes()
+            utils.notify('Scene deleted')
+        return False
+
+    def _edit_actions(self, scene):
+        """The commands a scene fires alongside its lighting.
+
+        A scene sets state; a command has none to set. An infrared blaster has
+        no colour, it has "AVR Power" -- so one "Movie Night" can dim the
+        lights and switch the amplifier on in the same breath.
+        """
+        from devices import CAP_COMMANDS
+
+        while True:
+            actions = scene.get('actions') or []
+            rows = []
+            for action in actions:
+                device = self.app.device_by_id(action['device'])
+                name = device.name if device else action['device']
+                rows.append(('%s: %s' % (name, action['command']),
+                             lambda a=action: self._remove_action(scene, a)))
+
+            emitters = [d for d in self.app.enabled_devices
+                        if CAP_COMMANDS in self.app.controller.capabilities(d)]
+            if emitters:
+                rows.append(('Add a command...',
+                             lambda: self._add_action(scene, emitters)))
+            elif not rows:
+                utils.force_notify('No device here sends commands')
                 return
-            elif choice == 8:
-                if _dialog().yesno(utils.ADDON_NAME,
-                                   'Delete the scene "%s"?' % scene['name']):
-                    del scenes[index]
-                    self.app.save_scenes()
-                    utils.notify('Scene deleted')
+
+            choice = _select('%s - commands' % scene['name'],
+                             [label for label, _h in rows])
+            if choice == BACK:
                 return
+            rows[choice][1]()
+
+    def _add_action(self, scene, emitters):
+        """Pick a blaster, then one of the codes it knows."""
+        pick = _select('Which device', [d.name for d in emitters])
+        if pick == BACK:
+            return
+        device = emitters[pick]
+
+        names = self.app.controller.commands(device)
+        if not names:
+            _dialog().ok(utils.ADDON_NAME,
+                         '%s has not learned any commands yet.\n\n'
+                         'Teach it one under its own menu first.' % device.name)
+            return
+
+        chosen = _select('Which command', list(names))
+        if chosen == BACK:
+            return
+
+        actions = list(scene.get('actions') or [])
+        actions.append({'device': device.device_id,
+                        'command': names[chosen]})
+        scene['actions'] = actions
+
+    def _remove_action(self, scene, action):
+        if not _dialog().yesno(
+                utils.ADDON_NAME,
+                'Stop this scene sending "%s"?' % action['command']):
+            return
+        scene['actions'] = [a for a in scene.get('actions') or []
+                            if a is not action]
 
     def _save_scene(self, scene, index):
         cleaned = scene_lib.normalise(scene)
@@ -1241,8 +1315,15 @@ class ControlPanel(object):
                                  and self.app.needs_local_key(device)):
                 rows.append(('Test connection',
                              lambda: self.test_device(device)))
+            if hasattr(driver, 'set_power_memory') and not (
+                    keyed and self.app.needs_local_key(device)):
+                rows.append(('After a power cut...',
+                             lambda: self.power_memory_menu(device)))
 
-        if keyed and CAP_POWER in capabilities:
+        # Anything that switches, not only the drivers that need a key. This
+        # was written when Tuya was the only plug driver, and quietly denied
+        # a Kasa plug the two rows it most wants.
+        if CAP_COMMANDS not in capabilities and CAP_POWER in capabilities:
             rows.append(('Switch on', lambda: self._switch(device, True)))
             rows.append(('Switch off', lambda: self._switch(device, False)))
 
@@ -1288,6 +1369,50 @@ class ControlPanel(object):
                 % device.name):
             self.app.forget_device(device)
             utils.notify('Forgot %s' % device.name)
+
+    def power_memory_menu(self, device):
+        """What the plug should do when mains power comes back.
+
+        Read from the plug rather than remembered here: it is the plug's own
+        setting and survives the add-on entirely, so showing a value we merely
+        last wrote would be a guess that looks like a fact.
+        """
+        utils.notify('Reading %s...' % device.name)
+        try:
+            current, options = self.app.power_memory(device)
+        except ControlError as exc:
+            utils.force_notify(str(exc))
+            return
+
+        if not options:
+            _dialog().ok(utils.ADDON_NAME,
+                         '%s did not report a power-cut setting.\n\n'
+                         'Not every plug has one.' % device.name)
+            return
+
+        labels = []
+        for label, value in options:
+            labels.append('%s%s' % (label, '  (now)' if value == current
+                                    else ''))
+        choice = _select('%s after a power cut' % device.name, labels)
+        if choice == BACK:
+            return
+
+        value = options[choice][1]
+        if value == current:
+            return
+        try:
+            self.app.set_power_memory(device, value)
+        except ControlError as exc:
+            utils.force_notify(str(exc))
+            return
+        # Said plainly because the entry may be one outlet of several: there
+        # is one relay memory in the box, however many sockets it has.
+        _dialog().ok(utils.ADDON_NAME,
+                     'After a power cut, %s will %s.\n\nThis is a setting '
+                     'on the plug itself, so it covers every outlet on it and '
+                     'holds whether or not Kodi is running.'
+                     % (device.name, options[choice][0].lower()))
 
     def set_local_key(self, device):
         """Paste in the local key a Tuya device needs before it can be used."""

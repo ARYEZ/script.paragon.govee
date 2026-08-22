@@ -42,6 +42,7 @@ class ParagonHome(object):
         self._tuya_keys = utils.read_json(self.KEY_FILE, default={}) or {}
         settings['tuya_keys'] = self._tuya_keys
         settings['save_tuya_keys'] = self.save_tuya_keys
+        settings['known_ips'] = self.known_ips
         self.controller = build_hub(settings)
         self._devices = None
         self._scenes = None
@@ -69,6 +70,16 @@ class ParagonHome(object):
 
     def save_codes(self):
         utils.write_json(self.CODE_FILE, self._codes or {})
+
+    def known_ips(self):
+        """Addresses of every device already known, whatever its brand.
+
+        Used to work out which subnet the house is actually on. A Govee bulb's
+        address says that as well as anything, and better than this machine's
+        own -- which on a box with a VPN or a container bridge can be a
+        confident wrong answer.
+        """
+        return [d.ip for d in self.devices if d.ip]
 
     def save_tuya_keys(self):
         utils.write_json(self.KEY_FILE, self._tuya_keys or {})

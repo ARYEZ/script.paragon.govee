@@ -1,3 +1,19 @@
+v2.7.2
+- The Kasa sweep was covering the wrong subnet, so a search still found only
+  the plugs broadcast could reach. It worked out which subnet to sweep from
+  this machine's own addresses, which on a box with a VPN, a container bridge
+  or an unhelpful hostname is a confident wrong answer -- and sweeping the
+  wrong /24 looks exactly like sweeping the right one and finding nothing.
+- The range now comes from every device already known to be on the network:
+  one the search has just found, and anything already in the device list,
+  whatever its brand. A Govee bulb's address states which subnet the house is
+  on better than this machine's own can.
+- The Kasa diagnostic now reports what the search did rather than only what it
+  found: how many each pass turned up, which subnet was swept and how many
+  hosts that covered, and which addresses it went out from. Reporting only the
+  devices could not tell "the sweep ran and they are not there" apart from
+  "the sweep never ran", which need opposite responses.
+
 v2.7.1
 - Fixed a Kasa search finding only some of the plugs. Two causes, one mine.
 - Mine: the search sent from a socket it closed immediately afterwards. A Kasa

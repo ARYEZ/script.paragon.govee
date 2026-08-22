@@ -29,9 +29,12 @@ class KasaDriver(object):
     DRIVER_ID = 'kasa'
     DRIVER_LABEL = 'Kasa'
 
-    def __init__(self, log_func=None, timeout=5.0):
+    def __init__(self, log_func=None, timeout=5.0, known_ips=None):
         self.timeout = timeout
         self._log = log_func or (lambda message: None)
+        # A callable rather than a list: the device cache is loaded lazily and
+        # the drivers are built before it is read.
+        self._known_ips = known_ips or (lambda: [])
 
     # -- discovery ---------------------------------------------------------
 
@@ -45,7 +48,8 @@ class KasaDriver(object):
         listen = max(5.0, float(timeout) + 2.0)
         try:
             heard, counts = kasa_lan.search(timeout=listen,
-                                            log_func=self._log)
+                                            log_func=self._log,
+                                            hints=self._known_ips())
         except kasa_lan.KasaError as exc:
             return [], [str(exc)]
 

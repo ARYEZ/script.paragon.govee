@@ -161,6 +161,16 @@ def directed_broadcast(address):
     return '.'.join(parts[:3] + ['255'])
 
 
+def subnet_of(address):
+    """The /24 prefix of an address, or '' if it has none worth sweeping."""
+    parts = (address or '').split('.')
+    if len(parts) != 4 or parts[0] == '127' or not parts[3].isdigit():
+        return ''
+    if not all(part.isdigit() for part in parts[:3]):
+        return ''
+    return '.'.join(parts[:3])
+
+
 def sweep_addresses(address):
     """Every host on `address`'s assumed /24, for when broadcast is not enough.
 
@@ -249,24 +259,49 @@ def _run(sockets, plan, payload, window, found):
     return len(found) - before
 
 
-def search(timeout=5.0, log_func=None, sweep=True):
-    """Find Kasa devices. Returns (devices, {'broadcast': n, 'sweep': n}).
+def sweep_subnets(local, found_ips, hints):
+    """Which /24s to sweep, in the order they were learnt.
+
+    Deliberately not just this host's own addresses. Working out which
+    interface a Kodi box actually reaches the plugs on is guesswork -- a VPN,
+    a container bridge or a hostname resolving somewhere unhelpful all give a
+    confident wrong answer, and sweeping the wrong subnet looks exactly like
+    sweeping the right one and finding nothing.
+
+    So anything already known to be on the network counts: a device this
+    search has already found, and any device the add-on already knows about,
+    whatever its brand. A Govee bulb's address is just as good a statement of
+    which subnet the house is on as our own.
+    """
+    subnets = []
+    for address in list(local) + list(found_ips) + list(hints or []):
+        prefix = subnet_of(address)
+        if prefix and prefix not in subnets:
+            subnets.append(prefix)
+    return subnets
+
+
+def search(timeout=5.0, log_func=None, sweep=True, hints=None):
+    """Find Kasa devices. Returns (devices, report).
 
     Two passes, because they fail differently. A broadcast is one datagram
     and finds everything on a well-behaved network. When an access point
     suppresses broadcast -- which mesh systems and guest networks routinely
     do -- it finds some devices and not others, which looks like the missing
-    ones are broken. The sweep addresses each host on the subnet directly and
-    does not depend on broadcast working at all.
+    ones are broken. The sweep addresses each host directly and does not
+    depend on broadcast working at all.
     """
     log = log_func or (lambda message: None)
     payload = encrypt(_dumps(INFO_COMMAND))
     found = {}
-    counts = {'broadcast': 0, 'sweep': 0}
+    report = {'broadcast': 0, 'sweep': 0, 'subnets': [], 'targets': 0,
+              'addresses': []}
 
     sockets = _open_sockets(log)
     if not sockets:
         raise KasaError('Could not open a socket to search for Kasa devices.')
+    report['addresses'] = [address or 'default route'
+                           for address, _sock in sockets]
 
     try:
         plan = []
@@ -277,30 +312,44 @@ def search(timeout=5.0, log_func=None, sweep=True):
         # Repeated because a broadcast is a single datagram with no
         # retransmission, and several devices answering at once is exactly
         # when one goes missing.
-        counts['broadcast'] = _run(sockets, plan * BROADCAST_ROUNDS, payload,
+        report['broadcast'] = _run(sockets, plan * BROADCAST_ROUNDS, payload,
                                    max(1.5, float(timeout) * 0.4), found)
-        log('Kasa broadcast found %d device(s)' % counts['broadcast'])
+        log('Kasa broadcast found %d device(s)' % report['broadcast'])
 
         if sweep:
+            report['subnets'] = sweep_subnets(
+                [address for address, _sock in sockets],
+                [device.get('ip', '') for device in found.values()],
+                hints)
             plan = []
-            for address, sock in sockets:
-                for target in sweep_addresses(address):
-                    plan.append((sock, target))
+            for prefix in report['subnets']:
+                for target in sweep_addresses('%s.0' % prefix):
+                    # From every socket rather than the matching one: which
+                    # interface reaches a subnet is the routing table's
+                    # business, and it is better at it than a guess here.
+                    for _address, sock in sockets:
+                        plan.append((sock, target))
+            report['targets'] = len(plan)
+            log('Kasa sweep: %d host(s) across %s'
+                % (len(plan), ', '.join('%s.0/24' % s
+                                        for s in report['subnets'])
+                   or 'no subnet'))
             if plan:
-                counts['sweep'] = _run(sockets, plan, payload,
-                                       max(2.0, float(timeout) * 0.6), found)
-                log('Kasa subnet sweep found %d more' % counts['sweep'])
+                report['sweep'] = _run(sockets, plan, payload,
+                                       max(2.5, float(timeout) * 0.6), found)
+                log('Kasa sweep found %d more' % report['sweep'])
     finally:
         for _address, sock in sockets:
             sock.close()
 
     log('Kasa discovery found %d device(s) in total' % len(found))
-    return list(found.values()), counts
+    return list(found.values()), report
 
 
-def discover(timeout=5.0, log_func=None, sweep=True):
+def discover(timeout=5.0, log_func=None, sweep=True, hints=None):
     """Find Kasa devices. Returns a list of device dicts."""
-    return search(timeout=timeout, log_func=log_func, sweep=sweep)[0]
+    return search(timeout=timeout, log_func=log_func, sweep=sweep,
+                  hints=hints)[0]
 
 
 class Session(object):

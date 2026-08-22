@@ -432,13 +432,24 @@ subnet directly, which does not depend on broadcast working at all. When that
 turns up devices the broadcast missed, it says so rather than quietly papering
 over a real network fault.
 
+Which subnet to sweep is taken from every device already known — one the
+search just found, or anything already in the device list, whatever its brand.
+Working it out from this machine's own addresses alone is guesswork: a VPN, a
+container bridge or a hostname resolving somewhere unhelpful all give a
+confident wrong answer, and sweeping the wrong subnet looks exactly like
+sweeping the right one and finding nothing.
+
 The sweep assumes a /24, which is right on essentially every home network. It
 is a few hundred small datagrams to port 9999 and takes about a second.
 
 ### If a search finds nothing at all
 
-**Diagnose device search → Kasa plugs** says which addresses the search went
-out from and lists the causes in order of likelihood. In short: these plugs are
+**Diagnose device search → Kasa plugs** reports what the search *did*, not
+only what it found: how many each pass turned up, which subnet was swept and
+how many hosts that covered, and which addresses it went out from. A sweep
+that ran and found nothing means the plugs are not there; a sweep that never
+ran means the search could not tell which subnet to cover. Those need opposite
+responses, so they are reported differently. In short: these plugs are
 2.4GHz only and neither broadcast nor the sweep crosses subnets, so a plug on a
 guest SSID or a separate VLAN from Kodi will never be heard.
 

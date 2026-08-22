@@ -370,46 +370,76 @@ def run_tuya(app, timeout=8.0):
 # ---------------------------------------------------------------------------
 
 def kasa_summary(report):
-    """Short, actionable text for the on-screen dialog."""
+    """What the search did, not only what it found.
+
+    An earlier version reported the devices and nothing else, which could not
+    tell "the sweep ran and they are not there" apart from "the sweep never
+    ran because it could not work out which subnet to sweep". Those need
+    opposite responses, so both passes now report separately whether or not
+    anything was found.
+    """
     devices = report.get('devices') or []
-    if devices:
-        rows = ['%s  %s  (%s)' % (d.get('alias') or d.get('device_id'),
-                                  d.get('ip'), d.get('model') or '?')
-                for d in devices[:8]]
-        text = ('Found %d Kasa device(s):\n\n%s\n\nRun "Refresh devices" to '
-                'add them.' % (len(devices), '\n'.join(rows)))
-        if report.get('sweep'):
-            # The interesting half of the result: which ones broadcast could
-            # not reach says something about the network, not the plugs.
-            text += ('\n\n%d of them answered only when addressed directly, '
-                     'so your access point is dropping broadcast traffic. '
-                     'They will still be found every search, and the Kasa app '
-                     'may show fewer devices than this does.'
-                     % report['sweep'])
-        return text
-
     if report.get('error'):
-        return ('The search could not be sent.\n\n%s' % report['error'])
+        return 'The search could not be sent.\n\n%s' % report['error']
 
-    return ('No Kasa device answered in %.0f seconds.\n\n'
-            'A Kasa plug replies to a broadcast straight away, so silence '
-            'means the broadcast never reached it or its reply never came '
-            'back:\n\n'
-            '1. The plug is on a different network from Kodi -- a 2.4GHz '
-            'guest SSID or a separate VLAN. Broadcasts do not cross subnets, '
-            'and these plugs are 2.4GHz only.\n'
-            '2. Inbound UDP is blocked for Kodi by the firewall. This is the '
-            'most common cause on Windows.\n'
-            '3. "Local control" or the local API is switched off in the Kasa '
-            'app, under the device settings.\n'
-            '4. The firmware has closed the local protocol. Newer TP-Link '
-            'firmware on some models talks only to the cloud. Check the plug '
-            'still works in the Kasa app first -- if it does, this is the '
-            'likely answer, and it is not something the add-on can work '
-            'around.\n\n'
-            'Addresses the search went out from:\n%s'
-            % (report.get('listened', 0),
-               '\n'.join(report.get('addresses') or ['(none found)'])))
+    lines = []
+    if devices:
+        lines.append('Found %d Kasa device(s):' % len(devices))
+        lines.append('')
+        for device in devices[:8]:
+            lines.append('  %s  %s  (%s)'
+                         % (device.get('alias') or device.get('device_id'),
+                            device.get('ip'), device.get('model') or '?'))
+        lines.append('')
+        lines.append('Run "Refresh devices" to add them.')
+        lines.append('')
+    else:
+        lines.append('No Kasa device answered.')
+        lines.append('')
+
+    lines.append('Broadcast: %d found.' % report.get('broadcast', 0))
+    subnets = report.get('subnets') or []
+    if not subnets:
+        lines.append('Sweep: did not run -- no subnet to sweep. Nothing this '
+                     'machine could see gave an address to work from.')
+    else:
+        lines.append('Sweep: %d found, across %s (%d hosts).'
+                     % (report.get('sweep', 0),
+                        ', '.join('%s.0/24' % s for s in subnets),
+                        report.get('targets', 0)))
+    lines.append('Searched from: %s'
+                 % ', '.join(report.get('addresses') or ['?']))
+    lines.append('')
+
+    if devices and report.get('sweep'):
+        lines.append('%d answered only when addressed directly, so your '
+                     'access point is dropping broadcast. They will be found '
+                     'every search, and the Kasa app may show fewer devices '
+                     'than this does.' % report['sweep'])
+    elif devices and subnets:
+        lines.append('The sweep covered every host on the subnet above and '
+                     'found nothing further. Any plug still missing is not '
+                     'answering on port %d at all -- it is on another subnet '
+                     'or SSID, or its firmware has closed the local protocol '
+                     'and talks only to the cloud. That last one is not '
+                     'something the add-on can work around.' % _kasa_port())
+    elif not devices:
+        lines.append('These plugs are 2.4GHz only, and neither a broadcast '
+                     'nor a sweep crosses subnets:')
+        lines.append('1. The plug is on a different network from Kodi -- a '
+                     'guest SSID or a separate VLAN.')
+        lines.append('2. Inbound UDP is blocked for Kodi by the firewall. '
+                     'The usual cause on Windows.')
+        lines.append('3. The firmware has closed the local protocol. Check '
+                     'the plug still works in the Kasa app: if it does, this '
+                     'is the likely answer and cannot be worked around.')
+    return '\n'.join(lines)
+
+
+def _kasa_port():
+    import kasa_lan
+
+    return kasa_lan.PORT
 
 
 def run_kasa(app, timeout=6.0):
@@ -418,15 +448,16 @@ def run_kasa(app, timeout=6.0):
     from govee_lan import local_addresses
 
     report = {'listened': timeout, 'devices': [], 'error': '',
-              'broadcast': 0, 'sweep': 0,
+              'broadcast': 0, 'sweep': 0, 'subnets': [], 'targets': 0,
               'addresses': list(local_addresses()) + ['default route']}
     utils.log('--- Paragon Home Kasa diagnostics ---')
     utils.log('Broadcasting UDP %d from: %s'
               % (kasa_lan.PORT, ', '.join(report['addresses'])))
     try:
-        report['devices'], counts = kasa_lan.search(timeout=timeout,
-                                                    log_func=utils.debug)
-        report.update(counts)
+        report['devices'], found = kasa_lan.search(
+            timeout=timeout, log_func=utils.debug,
+            hints=app.known_ips() if hasattr(app, 'known_ips') else None)
+        report.update(found)
     except kasa_lan.KasaError as exc:
         report['error'] = str(exc)
         utils.log('Kasa search failed: %s' % exc)

@@ -2897,6 +2897,43 @@ class TestKasaProtocol(unittest.TestCase):
         self.assertEqual(struct.unpack('>I', framed[:4])[0], len(payload))
         self.assertEqual(framed[4:], self.kasa_lan.encrypt(payload))
 
+    def test_the_sweep_range_comes_from_devices_not_just_this_machine(self):
+        """The fix for a search that found one plug and swept the wrong subnet.
+
+        Working out which interface reaches the plugs is guesswork: a VPN, a
+        container bridge or a hostname resolving somewhere unhelpful all give
+        a confident wrong answer, and sweeping the wrong /24 looks exactly
+        like sweeping the right one and finding nothing.
+        """
+        subnets = self.kasa_lan.sweep_subnets(
+            local=['192.0.2.2'],            # a VPN address, reaches nothing
+            found_ips=['10.0.0.25'],        # a plug the broadcast did find
+            hints=['10.0.0.71'])            # a device already in the cache
+
+        self.assertIn('10.0.0', subnets)
+
+    def test_the_subnet_of_an_already_known_device_is_enough_on_its_own(self):
+        """Even when the broadcast finds nothing and this host looks useless."""
+        subnets = self.kasa_lan.sweep_subnets(
+            local=[''], found_ips=[], hints=['10.0.0.71'])
+
+        self.assertEqual(subnets, ['10.0.0'])
+
+    def test_a_subnet_is_swept_once_however_many_devices_name_it(self):
+        subnets = self.kasa_lan.sweep_subnets(
+            local=['10.0.0.5'],
+            found_ips=['10.0.0.25', '10.0.0.26'],
+            hints=['10.0.0.71', '10.0.0.99'])
+
+        self.assertEqual(subnets, ['10.0.0'])
+
+    def test_loopback_and_rubbish_are_not_swept(self):
+        subnets = self.kasa_lan.sweep_subnets(
+            local=['127.0.0.1'], found_ips=['', 'not-an-address'],
+            hints=[None])
+
+        self.assertEqual(subnets, [])
+
     def test_sysinfo_without_an_id_is_not_a_device(self):
         self.assertIsNone(self.kasa_lan.parse_sysinfo({'alias': 'No id'}))
 
@@ -2991,9 +3028,12 @@ class TestKasaDiscovery(unittest.TestCase):
         kasa_lan.PORT = self.port
         self.real_addresses = kasa_lan.local_addresses
         self.real_sweep = kasa_lan.sweep_addresses
+        self.real_subnets = kasa_lan.sweep_subnets
         # The search runs on loopback, which the real helpers deliberately
-        # refuse to sweep.
+        # refuse to sweep -- so both the subnet choice and the host list are
+        # stood in for here.
         kasa_lan.local_addresses = lambda: ['127.0.0.1']
+        kasa_lan.sweep_subnets = lambda local, found, hints: ['127.0.0']
         kasa_lan.sweep_addresses = lambda address: list(self.HOSTS)
         self.plugs = []
 
@@ -3004,6 +3044,7 @@ class TestKasaDiscovery(unittest.TestCase):
             self.assertIsNone(crashed, 'a fake plug crashed: %r' % crashed)
         self.kasa_lan.local_addresses = self.real_addresses
         self.kasa_lan.sweep_addresses = self.real_sweep
+        self.kasa_lan.sweep_subnets = self.real_subnets
 
     def start(self, *specs):
         for host, alias, deaf in specs:
@@ -3022,11 +3063,11 @@ class TestKasaDiscovery(unittest.TestCase):
         self.start(('127.0.0.2', 'Tree', True), ('127.0.0.3', 'Lamp', True),
                    ('127.0.0.4', 'Fan', True))
 
-        devices, counts = self.kasa_lan.search(timeout=4.0)
+        devices, report = self.kasa_lan.search(timeout=4.0)
 
         self.assertEqual(sorted(d['alias'] for d in devices),
                          ['Fan', 'Lamp', 'Tree'])
-        self.assertEqual(counts['sweep'], 3)
+        self.assertEqual(report['sweep'], 3)
 
     def test_a_reply_to_a_send_is_not_thrown_away(self):
         """The bug this replaced: the socket that sent was closed at once.
@@ -3038,7 +3079,7 @@ class TestKasaDiscovery(unittest.TestCase):
         """
         self.start(('127.0.0.2', 'Tree', True))
 
-        devices, _counts = self.kasa_lan.search(timeout=3.0)
+        devices, _report = self.kasa_lan.search(timeout=3.0)
 
         self.assertEqual(len(devices), 1)
         self.assertEqual(devices[0]['ip'], '127.0.0.2')
@@ -3047,7 +3088,7 @@ class TestKasaDiscovery(unittest.TestCase):
         """Broadcast repeats, so a device is asked more than once."""
         self.start(('127.0.0.2', 'Tree', True))
 
-        devices, _counts = self.kasa_lan.search(timeout=3.0)
+        devices, _report = self.kasa_lan.search(timeout=3.0)
 
         self.assertGreater(self.plugs[0].asked, 1)
         self.assertEqual(len(devices), 1)
@@ -3055,10 +3096,10 @@ class TestKasaDiscovery(unittest.TestCase):
     def test_a_search_with_the_sweep_off_stays_on_broadcast(self):
         self.start(('127.0.0.2', 'Tree', True))
 
-        devices, counts = self.kasa_lan.search(timeout=2.0, sweep=False)
+        devices, report = self.kasa_lan.search(timeout=2.0, sweep=False)
 
         self.assertEqual(devices, [])
-        self.assertEqual(counts['sweep'], 0)
+        self.assertEqual(report['sweep'], 0)
 
     def test_a_pass_stops_once_everything_has_gone_quiet(self):
         """A search that found everything should not sit out its window."""
@@ -3118,8 +3159,36 @@ class TestKasaDiagnostics(unittest.TestCase):
         # Closed firmware is the one outcome the add-on cannot fix, so it says
         # so rather than leaving the user retrying a search forever.
         self.assertIn('firmware has closed the local protocol', text)
-        self.assertIn('not something the add-on can work around', text)
+        self.assertIn('cannot be worked around', text)
         self.assertIn('10.0.0.5', text)
+
+    def test_a_sweep_that_never_ran_is_not_reported_as_one_that_found_nothing(self):
+        """The two need opposite responses, so they must not read alike.
+
+        A sweep that ran and found nothing means the plugs are not there. A
+        sweep that never ran means the search could not tell which subnet to
+        cover -- which is a fault in the search, not evidence about the plugs.
+        """
+        never = self.summary({'devices': [], 'broadcast': 0, 'subnets': [],
+                              'addresses': ['192.0.2.2']})
+        ran = self.summary({'devices': [], 'broadcast': 0,
+                            'subnets': ['10.0.0'], 'sweep': 0, 'targets': 253,
+                            'addresses': ['10.0.0.5']})
+
+        self.assertIn('did not run', never)
+        self.assertNotIn('did not run', ran)
+        self.assertIn('10.0.0.0/24', ran)
+        self.assertIn('253 hosts', ran)
+
+    def test_a_sweep_that_covered_everything_says_what_is_left(self):
+        text = self.summary({
+            'devices': [{'alias': 'Egg Maker', 'ip': '10.0.0.25',
+                         'model': 'HS103'}],
+            'broadcast': 1, 'sweep': 0, 'subnets': ['10.0.0'],
+            'targets': 253, 'addresses': ['10.0.0.5']})
+
+        self.assertIn('found nothing further', text)
+        self.assertIn('closed the local protocol', text)
 
     def test_a_send_failure_is_reported_rather_than_read_as_silence(self):
         text = self.summary({'devices': [], 'error': 'no interfaces'})

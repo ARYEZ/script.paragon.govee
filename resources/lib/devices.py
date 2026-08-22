@@ -485,7 +485,8 @@ def build_hub(settings):
 
     if settings.get('kasa_enabled', True):
         from kasa_driver import KasaDriver
-        drivers.append(KasaDriver(log_func=settings.get('log_func')))
+        drivers.append(KasaDriver(log_func=settings.get('log_func'),
+                                  known_ips=settings.get('known_ips')))
 
     if settings.get('broadlink_enabled', True):
         drivers.append(BroadlinkDriver(

@@ -79,6 +79,9 @@ class ParagonGovee(object):
             raise ControlError('%s cannot learn commands' % device.name)
         return driver
 
+    def test_device(self, device):
+        return self._emitter(device).test_connection(device)
+
     def start_learning(self, device):
         return self._emitter(device).start_learning(device)
 

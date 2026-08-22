@@ -73,6 +73,42 @@ class BroadlinkError(Exception):
     """The device could not be reached or refused the request."""
 
 
+# Device-reported errors, as signed 16 bit values. Only the ones whose
+# meaning is well established are named; anything else is reported with its
+# signed value, which is what the number is written as everywhere else and so
+# what a search for it will match.
+ERROR_NAMES = {
+    -1: 'Authentication failed',
+    -2: 'You have been logged out',
+    -3: 'The device is offline',
+    -4: 'Unknown error',
+    -9: 'Control key is expired',
+}
+
+# What to do about the one people actually hit. A Broadlink device that is
+# locked to the phone app refuses LAN authentication outright, which is
+# indistinguishable from a wrong key unless it is spelled out.
+AUTH_ADVICE = (
+    'The device is almost certainly locked to the Broadlink app. Open the '
+    'Broadlink app, go to the device, and turn off "Lock device". Some '
+    'firmware also refuses LAN control while the app is holding the device, '
+    'so close the app afterwards and try again.')
+
+
+def error_text(code):
+    """Human wording for a device error code, always including the number."""
+    signed = code - 0x10000 if code >= 0x8000 else code
+    name = ERROR_NAMES.get(signed)
+    if name:
+        return '%s (error %d)' % (name, signed)
+    return 'error %d (0x%04x)' % (signed, code)
+
+
+def is_auth_error(code):
+    signed = code - 0x10000 if code >= 0x8000 else code
+    return signed in (-1, -2, -9)
+
+
 def device_label(devtype):
     return DEVICE_TYPES.get(devtype, 'Broadlink %04x' % devtype)
 
@@ -216,7 +252,10 @@ class Session(object):
 
         error = data[0x22] | (data[0x23] << 8)
         if error:
-            raise BroadlinkError('%s returned error 0x%04x' % (self.ip, error))
+            message = '%s: %s' % (self.ip, error_text(error))
+            if is_auth_error(error):
+                message += '\n\n' + AUTH_ADVICE
+            raise BroadlinkError(message)
 
         body = data[0x38:]
         if len(body) % 16:
@@ -249,7 +288,14 @@ class Session(object):
         self.iv = bytearray(INITIAL_IV)
         self.device_id = bytearray(4)
 
-        payload = self.send(CMD_AUTH, build_auth_payload(client_id))
+        try:
+            payload = self.send(CMD_AUTH, build_auth_payload(client_id))
+        except BroadlinkError as exc:
+            # Say which step failed. Authentication happens lazily on the
+            # first command, so without this the error looks like the command
+            # was refused rather than the handshake.
+            raise BroadlinkError('Could not authenticate with %s.\n\n%s'
+                                 % (self.ip, exc))
         if len(payload) < 0x14:
             raise BroadlinkError('%s sent a short auth reply' % self.ip)
 

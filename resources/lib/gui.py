@@ -1036,12 +1036,16 @@ class ControlPanel(object):
             names = self.app.controller.commands(device)
             rows = list(names)
             rows.append('Learn a new command...')
+            rows.append('Test connection')
 
             choice = _select('%s - commands' % device.name, rows)
             if choice == BACK:
                 return
             if choice == len(names):
                 self.learn_command(device)
+                continue
+            if choice == len(names) + 1:
+                self.test_device(device)
                 continue
 
             name = names[choice]
@@ -1056,6 +1060,15 @@ class ControlPanel(object):
                     'Paragon Home', 'Delete the command "%s"?' % name):
                 self.app.forget_command(device, name)
                 utils.notify('Deleted %s' % name)
+
+    def test_device(self, device):
+        """Authenticate with an emitter and report the result plainly."""
+        try:
+            ok, message = self.app.test_device(device)
+        except ControlError as exc:
+            ok, message = False, str(exc)
+        _dialog().ok('Paragon Home - %s' % ('connected' if ok
+                                            else 'not connected'), message)
 
     def learn_command(self, device, sleep_func=None):
         """Put the blaster into learning mode and wait for a remote press.

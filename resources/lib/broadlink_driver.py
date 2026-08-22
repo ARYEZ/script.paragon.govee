@@ -95,18 +95,25 @@ class BroadlinkDriver(object):
 
     # -- sessions ----------------------------------------------------------
 
+    @staticmethod
+    def _mac_bytes(device):
+        """The MAC as the wire wants it, rebuilt from the device id if needed."""
+        mac_bytes = getattr(device, 'mac_bytes', None)
+        if mac_bytes:
+            return mac_bytes
+        return bytearray(
+            int(part, 16) for part in reversed(device.device_id.split(':'))
+            if part)
+
     def _session(self, device):
         """An authenticated session for `device`.
 
         The session key is per-conversation and the device forgets it when it
         reboots, so a stale key is retried once from scratch rather than being
-        reported as a dead device.
+        reported as a dead device. A device that is locked to the Broadlink
+        app refuses both attempts, and says so.
         """
-        mac_bytes = getattr(device, 'mac_bytes', None)
-        if not mac_bytes:
-            mac_bytes = bytearray(
-                int(part, 16) for part in reversed(device.device_id.split(':'))
-                if part)
+        mac_bytes = self._mac_bytes(device)
         devtype = getattr(device, 'devtype', None) or 0x2712
 
         try:
@@ -140,6 +147,24 @@ class BroadlinkDriver(object):
             raise ControlError('%s: %s' % (device.name, exc))
         self._log('Sent "%s" via %s' % (name, device.name))
         return True
+
+    def test_connection(self, device):
+        """Try to authenticate and report what happened, in words.
+
+        Authentication is lazy -- it happens on the first real command -- so
+        without this the only way to find out whether a device will talk to us
+        is to try to learn a code and read the failure sideways.
+        """
+        try:
+            session = self.transport.session(
+                device.ip, self._mac_bytes(device),
+                getattr(device, 'devtype', None) or 0x2712)
+        except BroadlinkError as exc:
+            return False, str(exc)
+        return True, ('%s answered and accepted the handshake.\n\n'
+                      'Device id %s' % (device.name,
+                                        ''.join('%02x' % b for b
+                                                in session.device_id)))
 
     # -- learning ----------------------------------------------------------
 

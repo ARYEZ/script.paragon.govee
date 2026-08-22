@@ -1,3 +1,18 @@
+v2.1.1
+- Broadlink device errors are decoded into words and reported as signed
+  values, which is how every reference writes them. 0xffff is error -1,
+  "Authentication failed".
+- An authentication error now carries what to do about it: the device is
+  almost certainly locked to the Broadlink app. Turn off "Lock device" in the
+  app, and close the app afterwards -- some firmware refuses LAN control while
+  the app is holding the device.
+- Authentication failures say which step failed. Authentication happens
+  lazily on the first command, so a locked device previously looked as though
+  learning had failed rather than the handshake.
+- New "Test connection" on an emitter's Commands menu. It authenticates and
+  reports the result, so a device can be checked without trying to learn a
+  code and reading the failure sideways.
+
 v2.1.0
 - Broadlink RM support, as the second driver. Discovery, authentication, IR
   learning and sending, all over the LAN with no Broadlink account and no

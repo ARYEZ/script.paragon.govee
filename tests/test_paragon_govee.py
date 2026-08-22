@@ -1134,6 +1134,49 @@ class TestBroadlinkProtocol(unittest.TestCase):
         self.assertEqual(self.bl.checksum(b'\xff' * 1000),
                          (0xBEAF + 255 * 1000) & 0xFFFF)
 
+    def test_error_codes_are_decoded_as_signed(self):
+        """0xffff is -1, which is what every reference calls it."""
+        self.assertIn('Authentication failed', self.bl.error_text(0xFFFF))
+        self.assertIn('-1', self.bl.error_text(0xFFFF))
+        self.assertIn('You have been logged out', self.bl.error_text(0xFFFE))
+        self.assertIn('Control key is expired', self.bl.error_text(0xFFF7))
+
+    def test_an_unnamed_code_still_shows_its_signed_value(self):
+        text = self.bl.error_text(0xFFF9)
+        self.assertIn('-7', text)
+        self.assertIn('0xfff9', text)
+
+    def test_auth_errors_are_recognised_as_such(self):
+        self.assertTrue(self.bl.is_auth_error(0xFFFF))
+        self.assertTrue(self.bl.is_auth_error(0xFFF7))
+        self.assertFalse(self.bl.is_auth_error(0xFFF9))
+        self.assertFalse(self.bl.is_auth_error(0x000B))
+
+    def test_an_auth_error_carries_the_unlock_advice(self):
+        """The number alone tells the user nothing they can act on."""
+        session = self.bl.Session('10.0.0.1', b'\x01\x02\x03\x04\x05\x06',
+                                  0x27c2)
+        reply = bytearray(0x38)
+        reply[0x22] = 0xFF
+        reply[0x23] = 0xFF
+
+        with self.assertRaises(self.bl.BroadlinkError) as caught:
+            session.parse_response(reply)
+
+        message = str(caught.exception)
+        self.assertIn('Authentication failed', message)
+        self.assertIn('Lock device', message)
+
+    def test_a_non_auth_error_does_not_blame_the_app_lock(self):
+        session = self.bl.Session('10.0.0.1', b'\x01\x02\x03\x04\x05\x06',
+                                  0x27c2)
+        reply = bytearray(0x38)
+        reply[0x22] = 0x0B
+
+        with self.assertRaises(self.bl.BroadlinkError) as caught:
+            session.parse_response(reply)
+        self.assertNotIn('Lock device', str(caught.exception))
+
     def test_hello_is_48_bytes_with_a_valid_checksum(self):
         packet = bytearray(self.bl.build_hello('192.168.1.50', 4321))
         self.assertEqual(len(packet), 0x30)
@@ -1323,6 +1366,34 @@ class TestBroadlinkDriver(unittest.TestCase):
 
         self.assertEqual(len(self.rm.sent_codes), 1)
         self.assertTrue(self.rm.sent_codes[0].startswith(b'\x26\x00'))
+
+    def test_test_connection_reports_success(self):
+        driver, device = self.driver(), self.device()
+        ok, message = driver.test_connection(device)
+        self.assertTrue(ok)
+        self.assertIn('Lounge RM', message)
+
+    def test_test_connection_explains_a_locked_device(self):
+        """The RM Mini 3 case: discovered fine, refuses the handshake."""
+        from broadlink_driver import BroadlinkDriver
+
+        class Locked(object):
+            def session(self, ip, mac, devtype):
+                raise self_bl.BroadlinkError(
+                    'Could not authenticate with %s.\n\n%s: %s\n\n%s'
+                    % (ip, ip, self_bl.error_text(0xFFFF),
+                       self_bl.AUTH_ADVICE))
+
+            def forget_session(self, ip):
+                pass
+
+        self_bl = self.bl
+        driver = BroadlinkDriver(transport=Locked())
+        ok, message = driver.test_connection(self.device())
+
+        self.assertFalse(ok)
+        self.assertIn('Authentication failed', message)
+        self.assertIn('Lock device', message)
 
     def test_an_unknown_command_is_refused_clearly(self):
         driver, device = self.driver(), self.device()

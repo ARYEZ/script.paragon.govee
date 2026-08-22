@@ -52,6 +52,21 @@ DATA_LEARN_RF_SWEEP = 0x19
 DATA_CHECK_RF_FOUND = 0x1a
 DATA_LEARN_RF_CODE = 0x1b
 
+# Devices that want the newer, length-prefixed data payload. The RM4 family
+# and the later "RM Mini 3" (0x5f36) share it; RM2/RM3-era hardware, including
+# the RM Pro, does not. The two are otherwise identical, which is why a device
+# can authenticate perfectly and then refuse every command.
+#
+# This list is a starting guess, not the authority: an unknown device is
+# retried with the other framing and remembers whichever works, because
+# hardware sold as "RM Mini 3" turns out to span both.
+NEW_FRAMING_TYPES = set([
+    0x5f36,
+    0x51da, 0x6026, 0x6070, 0x610e, 0x610f, 0x62bc, 0x62be,
+    0x6364, 0x648d, 0x6507, 0x6508, 0x6539, 0x653a, 0x653c,
+])
+
+
 # Device type codes seen on RM-family hardware. Anything not listed still
 # works if it speaks the protocol; this only improves the label.
 DEVICE_TYPES = {
@@ -194,10 +209,15 @@ def build_auth_payload(client_id='Paragon Home'):
 class Session(object):
     """One authenticated conversation with one Broadlink device."""
 
-    def __init__(self, ip, mac_bytes, devtype, timeout=5.0, log_func=None):
+    def __init__(self, ip, mac_bytes, devtype, timeout=5.0, log_func=None,
+                 new_framing=None):
         self.ip = ip
         self.mac = bytearray(mac_bytes)
         self.devtype = devtype
+        # Which data-payload layout this device wants. Guessed from the type
+        # code, then corrected by experience the first time a command fails.
+        self.new_framing = (devtype in NEW_FRAMING_TYPES
+                            if new_framing is None else bool(new_framing))
         self.timeout = timeout
         self._log = log_func or (lambda message: None)
         self.key = bytearray(INITIAL_KEY)
@@ -307,16 +327,64 @@ class Session(object):
 
     # -- IR / RF -----------------------------------------------------------
 
+    def build_data_payload(self, verb, data=b'', new_framing=None):
+        """The payload of a data command, in whichever layout this device wants.
+
+        Old: <I verb> + data
+        New: <H length> + <I verb> + data, where length covers verb and data
+        """
+        if new_framing is None:
+            new_framing = self.new_framing
+        body = bytearray(struct.pack('<I', verb))
+        body.extend(bytearray(data))
+        if new_framing:
+            return bytearray(struct.pack('<H', len(body))) + body
+        return body
+
+    @staticmethod
+    def read_data_payload(payload, new_framing):
+        """The data out of a reply, past whichever header it carries."""
+        payload = bytearray(payload)
+        if not new_framing:
+            return bytes(payload[0x04:])
+        if len(payload) < 0x06:
+            return b''
+        length = struct.unpack('<H', bytes(payload[0:2]))[0]
+        return bytes(payload[0x06:length + 2])
+
+    def data_command(self, verb, data=b''):
+        """Send a data command, correcting the framing if it turns out wrong.
+
+        A device given the other layout authenticates fine and then refuses
+        the command, which looks like a broken feature rather than a wire
+        format mismatch. Rather than trust the type-code guess, a failure is
+        retried the other way and whichever works is remembered.
+        """
+        try:
+            reply = self.send(CMD_DATA,
+                              self.build_data_payload(verb, data))
+            return self.read_data_payload(reply, self.new_framing)
+        except BroadlinkError as first:
+            other = not self.new_framing
+            try:
+                reply = self.send(CMD_DATA,
+                                  self.build_data_payload(verb, data,
+                                                          new_framing=other))
+            except BroadlinkError:
+                raise first          # report the original, not the retry
+            self.new_framing = other
+            self._log('%s wants the %s data framing; switching to it'
+                      % (self.ip, 'new' if other else 'old'))
+            return self.read_data_payload(reply, other)
+
     def send_code(self, code):
         """Emit a previously learned IR or RF code."""
-        payload = bytearray([DATA_SEND, 0x00, 0x00, 0x00])
-        payload.extend(bytearray(code))
-        self.send(CMD_DATA, payload)
+        self.data_command(DATA_SEND, bytearray(code))
         return True
 
     def enter_learning(self):
         """Put the device into IR learning mode; it waits for a remote press."""
-        self.send(CMD_DATA, bytearray([DATA_LEARN, 0x00, 0x00, 0x00]))
+        self.data_command(DATA_LEARN)
         return True
 
     def check_learned(self):
@@ -327,12 +395,10 @@ class Session(object):
         than as a failure.
         """
         try:
-            payload = self.send(CMD_DATA,
-                                bytearray([DATA_CHECK, 0x00, 0x00, 0x00]))
+            code = self.data_command(DATA_CHECK)
         except BroadlinkError:
             return None
-        code = payload[0x04:]
-        return bytes(code) if code else None
+        return code if code else None
 
 
 class BroadlinkTransport(object):

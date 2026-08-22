@@ -1,3 +1,16 @@
+v2.1.2
+- Supports the newer Broadlink data payload layout. RM4-family devices and
+  later "RM Mini 3" units prefix the payload with a two byte length; RM2 and
+  RM3-era hardware, including the RM Pro, does not. Only the older layout was
+  implemented, so a newer device authenticated perfectly and then refused
+  every command with error -5.
+- The layout is guessed from the device type code and then corrected by
+  experience: a command that fails is retried the other way, and whichever
+  works is remembered for the rest of the session. Hardware sold as "RM Mini
+  3" spans both generations, so the type code alone cannot be trusted.
+- A command that fails both ways reports the original error rather than
+  whatever the speculative retry produced, and does not flip the setting.
+
 v2.1.1
 - Broadlink device errors are decoded into words and reported as signed
   values, which is how every reference writes them. 0xffff is error -1,

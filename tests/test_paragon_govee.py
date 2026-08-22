@@ -1009,11 +1009,17 @@ class FakeRM(object):
 
     LEARNED = b'\x26\x00\x28\x00' + b'\x10' * 36
 
-    def __init__(self, devtype=0x27c2, name='Lounge RM'):
+    def __init__(self, devtype=0x27c2, name='Lounge RM', new_framing=False):
         import broadlink_lan as bl
 
         self.bl = bl
         self.devtype = devtype
+        # Which data payload layout this device accepts. Anything else is
+        # refused with an error, exactly as the hardware does.
+        self.new_framing = new_framing
+        # Refuse every data command regardless of layout, to stand in for a
+        # device that is genuinely failing rather than mismatched.
+        self.refuse_all = False
         self.name = name
         self.mac = bytearray([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF])
         self.session_key = bytearray(range(0x10, 0x20))
@@ -1054,6 +1060,24 @@ class FakeRM(object):
         packet.extend(bytearray(AES(key, self.bl.INITIAL_IV).encrypt(payload)))
         return bytes(packet)
 
+    def _refuse(self, sender, code=0xFFFB):
+        """Answer with a device error, the way a real one refuses."""
+        error = bytearray(0x38)
+        error[0x22] = code & 0xFF
+        error[0x23] = (code >> 8) & 0xFF
+        self.sock.sendto(bytes(error), sender)
+
+    def _reply(self, data):
+        """A data reply in whichever layout this device speaks."""
+        import struct as _struct
+
+        if self.new_framing:
+            body = bytearray(_struct.pack('<I', 0)) + bytearray(data)
+            payload = bytearray(_struct.pack('<H', len(body))) + body
+        else:
+            payload = bytearray(4) + bytearray(data)
+        return self._wrap(payload, self.session_key)
+
     def _serve(self):
         from aes import AES
 
@@ -1084,25 +1108,36 @@ class FakeRM(object):
             body = bytes(raw[0x38:])
             request = bytearray(
                 AES(self.session_key, self.bl.INITIAL_IV).decrypt(body))
-            verb = request[0]
+
+            if self.refuse_all:
+                self._refuse(sender, code=0xFFF3)
+                continue
+
+            # Refuse the wrong payload layout, which is what a real device
+            # does: it authenticates fine and then rejects every command.
+            if self.new_framing:
+                declared = request[0] | (request[1] << 8)
+                if declared < 4 or declared > len(request):
+                    self._refuse(sender)
+                    continue
+                verb, data = request[2], request[6:]
+            else:
+                if request[1] or request[2] or request[3]:
+                    self._refuse(sender)
+                    continue
+                verb, data = request[0], request[4:]
 
             if verb == self.bl.DATA_SEND:
-                self.sent_codes.append(bytes(request[4:]))
-                self.sock.sendto(self._wrap(bytearray(16),
-                                            self.session_key), sender)
+                self.sent_codes.append(bytes(data))
+                self.sock.sendto(self._reply(bytearray(16)), sender)
             elif verb == self.bl.DATA_LEARN:
                 self.learning = True
-                self.sock.sendto(self._wrap(bytearray(16),
-                                            self.session_key), sender)
+                self.sock.sendto(self._reply(bytearray(16)), sender)
             elif verb == self.bl.DATA_CHECK:
                 if not self.learning:
-                    error = bytearray(0x38)
-                    error[0x22] = 0xF9      # "nothing learned yet"
-                    error[0x23] = 0xFF
-                    self.sock.sendto(bytes(error), sender)
+                    self._refuse(sender, code=0xFFF9)
                 else:
-                    payload = bytearray(4) + bytearray(self.LEARNED)
-                    self.sock.sendto(self._wrap(payload, self.session_key),
+                    self.sock.sendto(self._reply(bytearray(self.LEARNED)),
                                      sender)
 
 
@@ -1255,6 +1290,102 @@ class TestBroadlinkProtocol(unittest.TestCase):
 
         self.assertIsNotNone(learned)
         self.assertTrue(learned.startswith(b'\x26\x00'))
+
+    def test_new_framing_is_length_prefixed(self):
+        """<H length> + <I verb> + data, length covering verb and data."""
+        import struct as _struct
+
+        session = self.bl.Session('10.0.0.1', b'\x01' * 6, 0x5f36)
+        self.assertTrue(session.new_framing)
+
+        payload = bytearray(session.build_data_payload(self.bl.DATA_SEND,
+                                                       b'\xAA\xBB'))
+        self.assertEqual(_struct.unpack('<H', bytes(payload[0:2]))[0], 6)
+        self.assertEqual(payload[2], self.bl.DATA_SEND)
+        self.assertEqual(bytes(payload[6:]), b'\xAA\xBB')
+
+    def test_old_framing_has_no_prefix(self):
+        session = self.bl.Session('10.0.0.1', b'\x01' * 6, 0x2712)
+        self.assertFalse(session.new_framing)
+
+        payload = bytearray(session.build_data_payload(self.bl.DATA_SEND,
+                                                       b'\xAA\xBB'))
+        self.assertEqual(payload[0], self.bl.DATA_SEND)
+        self.assertEqual(bytes(payload[4:]), b'\xAA\xBB')
+
+    def test_the_framing_guess_comes_from_the_device_type(self):
+        self.assertIn(0x5f36, self.bl.NEW_FRAMING_TYPES)
+        self.assertNotIn(0x2712, self.bl.NEW_FRAMING_TYPES)
+
+
+class TestBroadlinkNewFraming(unittest.TestCase):
+    """A device wanting the newer payload layout, e.g. a later RM Mini 3."""
+
+    def setUp(self):
+        # devtype 0x27c2 is on the old list, but this unit wants the new
+        # layout -- exactly the mismatch that hardware sold as "RM Mini 3"
+        # produces, and the reason the guess has to be correctable.
+        self.device = FakeRM(devtype=0x27c2, name='Bedroom RM',
+                             new_framing=True)
+        self.addCleanup(self.device.close)
+        import broadlink_lan as bl
+        self.bl = bl
+        self._saved = bl.DEVICE_PORT
+        bl.DEVICE_PORT = self.device.port
+
+    def tearDown(self):
+        self.bl.DEVICE_PORT = self._saved
+
+    def session(self):
+        session = self.bl.Session('127.0.0.1', self.device.mac,
+                                  self.device.devtype, timeout=2.0)
+        session.authenticate()
+        return session
+
+    def test_authentication_succeeds_even_with_the_wrong_framing_guess(self):
+        """Auth is layout-independent, which is why only commands failed."""
+        session = self.session()
+        self.assertTrue(session.authenticated)
+        self.assertFalse(session.new_framing)   # guessed wrong, on purpose
+
+    def test_a_command_corrects_the_framing_and_succeeds(self):
+        session = self.session()
+        code = b'\x26\x00\x10\x00' + b'\x44' * 12
+
+        session.send_code(code)
+
+        self.assertTrue(session.new_framing, 'framing was not corrected')
+        self.assertEqual(len(self.device.sent_codes), 1)
+        self.assertTrue(self.device.sent_codes[0].startswith(code))
+
+    def test_the_correction_sticks_for_later_commands(self):
+        session = self.session()
+        session.send_code(b'\x26\x00\x04\x00')
+        session.send_code(b'\x26\x00\x04\x00')
+        self.assertEqual(len(self.device.sent_codes), 2)
+
+    def test_learning_works_once_the_framing_is_right(self):
+        session = self.session()
+        session.enter_learning()
+        learned = session.check_learned()
+
+        self.assertIsNotNone(learned)
+        self.assertTrue(learned.startswith(b'\x26\x00'))
+
+    def test_a_genuinely_broken_command_reports_the_original_error(self):
+        """Retrying the other way must not disguise a real failure."""
+        session = self.session()
+        session.new_framing = True          # already correct
+
+        # Neither layout will satisfy a device that is simply refusing.
+        self.device.refuse_all = True
+        with self.assertRaises(self.bl.BroadlinkError) as caught:
+            session.send_code(b'\x26\x00')
+
+        # The error reported is the first one, from the layout we believed in,
+        # not whatever the speculative retry produced.
+        self.assertIn('-13', str(caught.exception))
+        self.assertTrue(session.new_framing, 'framing flipped on a real error')
 
     def test_a_device_error_is_raised_not_swallowed(self):
         session = self.session()

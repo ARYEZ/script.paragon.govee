@@ -27,6 +27,10 @@ if _LIB_PATH not in sys.path:
 
 import addon_utils as utils  # noqa: E402 - needs the sys.path setup above
 
+# How often the clock is consulted for a scheduled rerack. The check is
+# cheap; firing one writes a file, and this loop runs twice a second.
+RERACK_CHECK_SECONDS = 5
+
 EVENT_PLAY = 'play'
 EVENT_PAUSE = 'pause'
 EVENT_STOP = 'stop'
@@ -94,6 +98,7 @@ class GoveeService(xbmc.Monitor):
         self._pending = None
         self._last_applied = None
         self._we_dimmed = False
+        self._last_rerack_check = 0.0
         self.player = GoveePlayer().attach(self)
 
     # -- lifecycle ---------------------------------------------------------
@@ -216,6 +221,26 @@ class GoveeService(xbmc.Monitor):
 
     # -- main loop ---------------------------------------------------------
 
+    def _check_reracks(self, now=None):
+        """Run anything the clock says is due.
+
+        Checked at most once every few seconds rather than on every tick: the
+        test itself is cheap, but a rerack that fires writes a file, and this
+        loop runs twice a second.
+
+        A rerack can hold pauses, so its waits go through waitForAbort and
+        each step is gated on the service still being alive. Otherwise closing
+        Kodi during a five-minute rerack would wait for it to finish.
+        """
+        moment = now or time.time()
+        if moment - self._last_rerack_check < RERACK_CHECK_SECONDS:
+            return []
+        self._last_rerack_check = moment
+
+        return self.app.run_due_reracks(
+            sleep_func=self.waitForAbort,
+            on_step=lambda index, step: not self.abortRequested())
+
     def run(self):
         utils.log('Service started')
 
@@ -241,6 +266,14 @@ class GoveeService(xbmc.Monitor):
                     self.app.cycle_step()
             except Exception as exc:
                 utils.log('Cycle step failed: %s' % exc, xbmc.LOGERROR)
+
+            # Scheduled reracks are checked here for the same reason
+            # cycling is: this loop already exists and already stops cleanly.
+            try:
+                self._check_reracks()
+            except Exception as exc:
+                utils.log('Rerack schedule check failed: %s' % exc,
+                          xbmc.LOGERROR)
 
             event = self._pending
             if event is not None:

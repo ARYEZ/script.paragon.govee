@@ -28,6 +28,8 @@ describes a sequence of things to do, including things with no state to
 describe at all, like an infrared button press.
 """
 
+import datetime
+import re
 import time as time_module
 
 RERACK_FILE = 'reracks.json'
@@ -54,15 +56,141 @@ TARGET_ALL = '*'
 
 MAX_PAUSE = 600
 
+RERACK_STATE_FILE = 'rerack_state.json'
+
+# Index 0 is Monday, to match datetime.weekday(). Nothing is gained by
+# picking a different origin from the standard library's.
+DAYS = ('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday',
+        'Sunday')
+WEEKDAYS = (0, 1, 2, 3, 4)
+WEEKEND = (5, 6)
+
+# How late a rerack may still run. Kodi is not always awake at the minute a
+# rerack is due -- it may be starting up, or mid-way through something -- and
+# a few minutes late is what was wanted. An hour late is not: a rerack that
+# lifts the lights at six should not do it at seven because the box was off.
+CATCH_UP_SECONDS = 300
+
+_TIME_PATTERNS = (
+    re.compile(r'^(\d{1,2}):(\d{2})\s*([ap]m?)?$', re.I),
+    re.compile(r'^(\d{1,2})\s*([ap]m?)$', re.I),
+    re.compile(r'^(\d{2})(\d{2})$'),
+)
+
+
+def parse_time(text):
+    """Read a time of day into 'HH:MM', or '' if it is not one.
+
+    Deliberately forgiving about how it is typed. This is entered on a remote
+    control, where "6pm" is a great deal less work than "18:00", and both mean
+    the same thing.
+    """
+    if not text:
+        return ''
+    text = str(text).strip()
+
+    for pattern in _TIME_PATTERNS:
+        match = pattern.match(text)
+        if not match:
+            continue
+        groups = match.groups()
+        hour = int(groups[0])
+        if len(groups) == 3 and groups[1] is not None and ':' in text:
+            minute, suffix = int(groups[1]), groups[2]
+        elif pattern is _TIME_PATTERNS[1]:
+            minute, suffix = 0, groups[1]
+        else:
+            minute, suffix = int(groups[1]), None
+
+        if suffix:
+            suffix = suffix[0].lower()
+            if hour == 12:
+                hour = 0
+            if suffix == 'p':
+                hour += 12
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return '%02d:%02d' % (hour, minute)
+    return ''
+
+
+def clean_days(raw):
+    """Days of the week as a sorted list of 0-6, ignoring anything else."""
+    days = set()
+    for entry in raw or []:
+        try:
+            day = int(entry)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= day <= 6:
+            days.add(day)
+    return sorted(days)
+
+
+def scheduled(rerack):
+    """Whether this rerack runs itself. Both halves are needed, not either."""
+    return bool(rerack.get('time') and rerack.get('days'))
+
+
+def describe_schedule(rerack):
+    """The schedule in words, the way it would be said."""
+    if not scheduled(rerack):
+        return 'only when you run it'
+
+    days = tuple(rerack['days'])
+    if len(days) == 7:
+        when = 'every day'
+    elif days == WEEKDAYS:
+        when = 'weekdays'
+    elif days == WEEKEND:
+        when = 'weekends'
+    else:
+        when = ', '.join(DAYS[day][:3] for day in days)
+    return '%s at %s' % (when, rerack['time'])
+
+
+def stamp(rerack, now):
+    """The key that says this rerack has run today.
+
+    Includes the time as well as the date, so moving a schedule later in the
+    same day lets it run again rather than being counted as already done.
+    """
+    return '%04d-%02d-%02d %s' % (now.year, now.month, now.day,
+                                  rerack.get('time') or '')
+
+
+def due(rerack, now, last=''):
+    """Whether this rerack should run right now.
+
+    Three separate questions, and all of them have to be yes: is today one of
+    its days, is the time here or just past, and has it not already run.
+    """
+    if not scheduled(rerack):
+        return False
+    if now.weekday() not in rerack['days']:
+        return False
+
+    hour, minute = [int(part) for part in rerack['time'].split(':')]
+    at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    late = (now - at).total_seconds()
+    if late < 0 or late > CATCH_UP_SECONDS:
+        return False
+    return last != stamp(rerack, now)
+
+
+def now():
+    """The current local time, in one place so tests can hand in their own."""
+    return datetime.datetime.now()
+
 
 def empty_step():
     return {'kind': KIND_NONE, 'driver': '', 'target': '', 'action': '',
             'pause': 0}
 
 
-def make_rerack(name, steps=None):
+def make_rerack(name, steps=None, time=None, days=None):
     """A rerack with its full complement of slots, however few are filled."""
-    return normalise({'name': name, 'steps': list(steps or [])})
+    return normalise({'name': name, 'steps': list(steps or []),
+                      'time': time, 'days': days})
 
 
 def _clean_int(value, low, high, default=0):
@@ -139,6 +267,8 @@ def normalise(raw):
 
     return {'name': name,
             'description': (raw.get('description') or '').strip(),
+            'time': parse_time(raw.get('time')),
+            'days': clean_days(raw.get('days')),
             'steps': steps}
 
 

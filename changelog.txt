@@ -1,3 +1,24 @@
+v2.12.0
+- A rerack can now run itself: "Runs:" in the rerack editor gives it a time
+  and the days it applies to, so "Ignition" can run on Saturdays at 6pm.
+- The time is read forgivingly. 18:00, 6pm, 6:30 PM and 1800 all mean the same
+  thing, which matters when it is being typed on a remote control.
+- Both a time and at least one day are needed. Either alone is a schedule that
+  can never come round, so it counts as unscheduled until it has both.
+- A scheduled rerack runs once per day, recorded on disk so restarting Kodi
+  does not re-run it. A few minutes late still counts, because Kodi is not
+  always awake at the exact minute; an hour late does not, because a rerack
+  that lifts the lights at six should not do it at seven.
+- It is marked as run before it runs, not after: a rerack that failed half way
+  would otherwise be due again on the next tick and every tick after that.
+- Moving a schedule later in the same day lets it run again. The record holds
+  the time as well as the date, on purpose.
+- Firing happens in the background service, which already stops cleanly on
+  shutdown -- so closing Kodi during a rerack full of pauses does not wait for
+  it to finish.
+- Deleting a rerack forgets when it last ran, so a new one given the same name
+  does not inherit a day it never had.
+
 v2.11.0
 - The commands a scene sends are now editable. They have worked in the engine
   since v1.1 but there was no way to add one short of editing scenes.json by

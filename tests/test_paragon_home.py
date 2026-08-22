@@ -11,6 +11,7 @@ transport-selection logic and the scene engine without needing hardware.
 """
 
 import base64
+import datetime
 import hashlib
 import hmac
 import json
@@ -808,6 +809,182 @@ class TestReracks(unittest.TestCase):
                                          on_step=stop_after_first)
 
         self.assertEqual(done, 1)
+
+    # -- when it runs ------------------------------------------------------
+
+    SATURDAY_6PM = datetime.datetime(2026, 8, 22, 18, 0)   # a Saturday
+
+    def ignition(self):
+        """The rerack from the request: Saturday nights at six."""
+        return self.reracks.make_rerack('Ignition', [
+            {'kind': 'scene', 'target': 'Warshade'}], time='6pm', days=[5])
+
+    def test_a_time_is_read_however_it_is_typed(self):
+        """Entered on a remote, where "6pm" is much less work than "18:00"."""
+        for text, expected in (('18:00', '18:00'), ('6pm', '18:00'),
+                               ('6 PM', '18:00'), ('6:30pm', '18:30'),
+                               ('1800', '18:00'), ('0:05', '00:05'),
+                               ('12am', '00:00'), ('12pm', '12:00')):
+            self.assertEqual(self.reracks.parse_time(text), expected,
+                             'could not read %r' % text)
+
+    def test_something_that_is_not_a_time_is_refused(self):
+        for text in ('24:00', '18:60', 'banana', '', None, '99'):
+            self.assertEqual(self.reracks.parse_time(text), '',
+                             'accepted %r as a time' % (text,))
+
+    def test_a_schedule_needs_both_a_time_and_days(self):
+        """Either alone would be a schedule that can never come round."""
+        self.assertFalse(self.reracks.scheduled(
+            self.reracks.make_rerack('A', time='6pm')))
+        self.assertFalse(self.reracks.scheduled(
+            self.reracks.make_rerack('B', days=[5])))
+        self.assertTrue(self.reracks.scheduled(self.ignition()))
+
+    def test_it_is_due_at_its_time_on_its_day(self):
+        self.assertTrue(self.reracks.due(self.ignition(), self.SATURDAY_6PM))
+
+    def test_it_is_not_due_before_its_time(self):
+        self.assertFalse(self.reracks.due(
+            self.ignition(), self.SATURDAY_6PM - datetime.timedelta(minutes=1)))
+
+    def test_it_is_not_due_on_another_day(self):
+        for offset in (1, 2, 3, 4, 5, 6):
+            self.assertFalse(
+                self.reracks.due(self.ignition(),
+                                 self.SATURDAY_6PM
+                                 + datetime.timedelta(days=offset)),
+                'fired %d day(s) late' % offset)
+
+    def test_a_few_minutes_late_still_counts(self):
+        """Kodi is not always awake at the exact minute."""
+        self.assertTrue(self.reracks.due(
+            self.ignition(), self.SATURDAY_6PM + datetime.timedelta(minutes=4)))
+
+    def test_an_hour_late_does_not(self):
+        """A rerack that lifts the lights at six should not do it at seven."""
+        self.assertFalse(self.reracks.due(
+            self.ignition(), self.SATURDAY_6PM + datetime.timedelta(hours=1)))
+
+    def test_it_does_not_run_twice_in_the_same_day(self):
+        rerack = self.ignition()
+        already = self.reracks.stamp(rerack, self.SATURDAY_6PM)
+
+        self.assertFalse(self.reracks.due(rerack, self.SATURDAY_6PM, already))
+
+    def test_moving_the_time_later_the_same_day_lets_it_run_again(self):
+        """The stamp holds the time as well as the date, on purpose."""
+        rerack = self.ignition()
+        already = self.reracks.stamp(rerack, self.SATURDAY_6PM)
+        rerack['time'] = '20:00'
+
+        self.assertTrue(self.reracks.due(
+            rerack, self.SATURDAY_6PM.replace(hour=20), already))
+
+    def test_next_week_it_is_due_again(self):
+        rerack = self.ignition()
+        already = self.reracks.stamp(rerack, self.SATURDAY_6PM)
+
+        self.assertTrue(self.reracks.due(
+            rerack, self.SATURDAY_6PM + datetime.timedelta(days=7), already))
+
+    def test_the_schedule_reads_the_way_it_would_be_said(self):
+        self.assertEqual(self.reracks.describe_schedule(self.ignition()),
+                         'Sat at 18:00')
+        self.assertEqual(self.reracks.describe_schedule(
+            self.reracks.make_rerack('A', time='07:00',
+                                     days=[0, 1, 2, 3, 4])),
+            'weekdays at 07:00')
+        self.assertEqual(self.reracks.describe_schedule(
+            self.reracks.make_rerack('B', time='09:00', days=[5, 6])),
+            'weekends at 09:00')
+        self.assertEqual(self.reracks.describe_schedule(
+            self.reracks.make_rerack('C', time='23:00', days=list(range(7)))),
+            'every day at 23:00')
+        self.assertEqual(
+            self.reracks.describe_schedule(self.reracks.make_rerack('D')),
+            'only when you run it')
+
+    # -- firing ------------------------------------------------------------
+
+    def test_a_due_rerack_runs_and_is_not_run_again(self):
+        app = self.app()
+        app._reracks = [self.ignition()]
+
+        first = app.run_due_reracks(now=self.SATURDAY_6PM)
+        second = app.run_due_reracks(
+            now=self.SATURDAY_6PM + datetime.timedelta(minutes=2))
+
+        self.assertEqual(first, ['Ignition'])
+        self.assertEqual(second, [])
+
+    def test_a_restart_does_not_re_run_what_already_ran(self):
+        """The record is on disk, so it survives Kodi closing."""
+        app = self.app()
+        app._reracks = [self.ignition()]
+        app.run_due_reracks(now=self.SATURDAY_6PM)
+
+        from paragon_home import ParagonHome
+        again = ParagonHome()
+        again.controller = self.recorder
+        again._reracks = [self.ignition()]
+
+        self.assertEqual(
+            again.run_due_reracks(
+                now=self.SATURDAY_6PM + datetime.timedelta(minutes=1)),
+            [])
+
+    def test_it_is_marked_as_run_before_it_runs(self):
+        """A rerack that fails half way must not retry on every tick."""
+        app = self.app()
+        rerack = self.ignition()
+        rerack['steps'][1] = {'kind': 'scene', 'target': 'No Such Scene',
+                              'pause': 0}
+        app._reracks = [rerack]
+
+        app.run_due_reracks(now=self.SATURDAY_6PM)
+
+        self.assertEqual(
+            app.run_due_reracks(
+                now=self.SATURDAY_6PM + datetime.timedelta(minutes=1)),
+            [])
+
+    def test_an_unscheduled_rerack_never_fires_itself(self):
+        app = self.app()
+        app._reracks = [self.reracks.make_rerack('Manual only', [
+            {'kind': 'scene', 'target': 'Warshade'}])]
+
+        self.assertEqual(app.run_due_reracks(now=self.SATURDAY_6PM), [])
+
+    def test_two_reracks_due_at_once_both_run(self):
+        app = self.app()
+        other = self.ignition()
+        other['name'] = 'Also Ignition'
+        app._reracks = [self.ignition(), other]
+
+        self.assertEqual(sorted(app.run_due_reracks(now=self.SATURDAY_6PM)),
+                         ['Also Ignition', 'Ignition'])
+
+    def test_deleting_a_rerack_forgets_when_it_last_ran(self):
+        """Otherwise a new one of the same name inherits a day it never had."""
+        app = self.app()
+        app.save_rerack(self.ignition())
+        app.run_due_reracks(now=self.SATURDAY_6PM)
+        app.delete_rerack({'name': 'Ignition'})
+
+        app.save_rerack(self.ignition())
+        self.assertEqual(app.run_due_reracks(now=self.SATURDAY_6PM),
+                         ['Ignition'])
+
+    def test_a_schedule_survives_a_restart(self):
+        app = self.app()
+        app.save_rerack(self.ignition())
+
+        from paragon_home import ParagonHome
+        saved = ParagonHome().rerack_by_name('Ignition')
+
+        self.assertEqual(saved['time'], '18:00')
+        self.assertEqual(saved['days'], [5])
 
     # -- persistence -------------------------------------------------------
 

@@ -460,6 +460,38 @@ appeared to be switching far more than it had been asked to.
 To put a plug in a colour scene deliberately, name it in the scene's target
 list. Named targets are honoured exactly.
 
+### Running one on a schedule
+
+**Runs:** in the rerack editor gives it a time and the days it applies to:
+
+```
+Ignition - when it runs
+   Time: 18:00
+   Days: Sat
+   Stop running it on a schedule
+```
+
+The time is read forgivingly — `18:00`, `6pm`, `6:30 PM` and `1800` all mean
+the same thing, which matters when it is typed on a remote control. Days are a
+toggled checklist with **Every day**, **Weekdays** and **Weekends** shortcuts.
+
+Both halves are needed. A time with no days, or days with no time, is a
+schedule that can never come round, so it counts as unscheduled until it has
+both.
+
+The background service does the firing, so **Kodi has to be running**. Three
+rules govern when:
+
+* **Once per day.** Recorded on disk, so restarting Kodi does not re-run it.
+* **A few minutes late still counts.** Kodi is not always awake at the exact
+  minute — it may be starting up. An hour late does not: a rerack that lifts
+  the lights at six should not do it at seven because the box was off.
+* **Marked as run before it runs.** A rerack that fails half way must not
+  retry on the next tick and every tick after that.
+
+Moving a schedule later in the same day lets it run again — the record holds
+the time as well as the date.
+
 ### A rerack is not a scene
 
 A **scene** describes a state — how the lights should look. It can be

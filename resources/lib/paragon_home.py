@@ -50,6 +50,7 @@ class ParagonHome(object):
         self._devices = None
         self._scenes = None
         self._reracks = None
+        self._rerack_state = None
         self._palette = None
         # How many known lights failed to answer the last refresh, so the
         # control panel can say so rather than silently showing a short list.
@@ -596,6 +597,10 @@ class ParagonHome(object):
             return False
         self._reracks.remove(existing)
         self.save_reracks()
+        if self.rerack_state.pop(existing['name'], None) is not None:
+            # Otherwise a new rerack given the same name would inherit a
+            # "already ran today" it never earned.
+            self.save_rerack_state()
         return True
 
     def run_rerack(self, rerack, announce=True, sleep_func=None,
@@ -616,6 +621,48 @@ class ParagonHome(object):
                 utils.force_notify('%s has no steps yet'
                                    % rerack.get('name'))
         return done > 0
+
+    # -- scheduled reracks -------------------------------------------------
+
+    @property
+    def rerack_state(self):
+        """When each rerack last ran, so a restart does not re-run it."""
+        if self._rerack_state is None:
+            raw = utils.read_json(rerack_lib.RERACK_STATE_FILE, default={})
+            self._rerack_state = raw if isinstance(raw, dict) else {}
+        return self._rerack_state
+
+    def save_rerack_state(self):
+        utils.write_json(rerack_lib.RERACK_STATE_FILE, self.rerack_state)
+
+    def due_reracks(self, now=None):
+        """The reracks whose time has come and that have not run yet today."""
+        moment = now or rerack_lib.now()
+        state = self.rerack_state
+        return [r for r in self.reracks
+                if rerack_lib.due(r, moment, state.get(r['name'], ''))]
+
+    def run_due_reracks(self, now=None, sleep_func=None, on_step=None):
+        """Run whatever is due. Returns the names of the reracks that ran.
+
+        Each is marked as run *before* it runs, not after. A rerack can hold
+        pauses adding up to minutes, and if something went wrong half way
+        through, marking it afterwards would leave it due on the next tick and
+        every tick after that -- a failing rerack retrying in a loop is worse
+        than one that failed once.
+        """
+        moment = now or rerack_lib.now()
+        ran = []
+        for rerack in self.due_reracks(moment):
+            self.rerack_state[rerack['name']] = rerack_lib.stamp(rerack,
+                                                                 moment)
+            self.save_rerack_state()
+            utils.log('Rerack "%s" is due (%s)'
+                      % (rerack['name'], rerack_lib.describe_schedule(rerack)))
+            self.run_rerack(rerack, announce=True, sleep_func=sleep_func,
+                            on_step=on_step)
+            ran.append(rerack['name'])
+        return ran
 
     def run_rerack_by_name(self, name, announce=True):
         rerack = self.rerack_by_name(name)

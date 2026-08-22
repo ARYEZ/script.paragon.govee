@@ -1436,8 +1436,14 @@ class ControlPanel(object):
         """The saved reracks. Picking one runs it."""
         while True:
             reracks = self.app.reracks
-            rows = [('%s  -  %s' % (r['name'], rerack_lib.describe(r)),
-                     lambda r=r: self.run_rerack(r)) for r in reracks]
+            rows = []
+            for rerack in reracks:
+                summary = rerack_lib.describe(rerack)
+                if rerack_lib.scheduled(rerack):
+                    summary = '%s  -  %s' % (
+                        rerack_lib.describe_schedule(rerack), summary)
+                rows.append(('%s  -  %s' % (rerack['name'], summary),
+                             lambda r=rerack: self.run_rerack(r)))
             rows.append(('New rerack...', self.new_rerack))
             if reracks:
                 rows.append(('Manage reracks...', self.manage_reracks))
@@ -1520,6 +1526,8 @@ class ControlPanel(object):
                                 rerack_lib.describe_step(
                                     step, self._target_name(step))),
                              lambda i=index: self.edit_step(rerack, i)))
+            rows.append(('Runs: %s' % rerack_lib.describe_schedule(rerack),
+                         lambda: self.schedule_rerack(rerack)))
             rows.append(('Run it now', lambda: self.run_rerack(rerack)))
             rows.append(('Rename', lambda: self._rename_rerack(rerack)))
             rows.append(('Delete this rerack',
@@ -1550,6 +1558,82 @@ class ControlPanel(object):
             return
         self.app.delete_rerack(rerack)
         utils.notify('Deleted %s' % rerack['name'])
+        return False
+
+    # -- when it runs ------------------------------------------------------
+
+    def schedule_rerack(self, rerack):
+        """A time and the days it applies to. Both are needed, or neither."""
+        while True:
+            rows = [
+                ('Time: %s' % (rerack['time'] or 'not set'),
+                 lambda: self._edit_rerack_time(rerack)),
+                ('Days: %s' % (self._days_label(rerack) or 'none'),
+                 lambda: self._edit_rerack_days(rerack)),
+            ]
+            if rerack_lib.scheduled(rerack):
+                rows.append(('Stop running it on a schedule',
+                             lambda: self._clear_schedule(rerack)))
+
+            choice = _select('%s - when it runs' % rerack['name'],
+                             [label for label, _h in rows])
+            if choice == BACK:
+                self.app.save_rerack(rerack)
+                return
+            if rows[choice][1]() is False:
+                self.app.save_rerack(rerack)
+                return
+
+    @staticmethod
+    def _days_label(rerack):
+        return ', '.join(rerack_lib.DAYS[day][:3]
+                         for day in rerack.get('days') or [])
+
+    def _edit_rerack_time(self, rerack):
+        value = _dialog().input(
+            'Time of day (18:00, or 6pm)', rerack['time'] or '')
+        if value is None:
+            return
+        if not value.strip():
+            rerack['time'] = ''
+            return
+        parsed = rerack_lib.parse_time(value)
+        if not parsed:
+            _dialog().ok(utils.ADDON_NAME,
+                         'Could not read "%s" as a time.\n\n'
+                         'Try 18:00, 6pm or 1800.' % value.strip())
+            return
+        rerack['time'] = parsed
+
+    def _edit_rerack_days(self, rerack):
+        """A toggled checklist, as the scene target picker is and for the
+        same reason: Krypton's multiselect differs across skins."""
+        chosen = set(rerack.get('days') or [])
+        while True:
+            options = ['Every day', 'Weekdays', 'Weekends']
+            for index, name in enumerate(rerack_lib.DAYS):
+                options.append('%s %s' % ('[x]' if index in chosen else '[ ]',
+                                          name))
+            options.append('Done')
+
+            choice = _select('Which days', options)
+            if choice == BACK or choice == len(options) - 1:
+                rerack['days'] = sorted(chosen)
+                return
+            if choice == 0:
+                chosen = set(range(7))
+            elif choice == 1:
+                chosen = set(rerack_lib.WEEKDAYS)
+            elif choice == 2:
+                chosen = set(rerack_lib.WEEKEND)
+            else:
+                day = choice - 3
+                chosen.symmetric_difference_update([day])
+
+    def _clear_schedule(self, rerack):
+        rerack['time'] = ''
+        rerack['days'] = []
+        utils.notify('%s runs only when you run it' % rerack['name'])
         return False
 
     # -- one step ----------------------------------------------------------

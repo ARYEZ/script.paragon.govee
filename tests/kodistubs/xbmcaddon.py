@@ -8,11 +8,11 @@ SETTINGS = {}
 OPENED_SETTINGS = []
 
 _PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_PROFILE = os.path.join(tempfile.gettempdir(), 'paragon-govee-test-profile')
+_PROFILE = os.path.join(tempfile.gettempdir(), 'paragon-home-test-profile')
 
 _INFO = {
     'id': 'script.paragon.govee',
-    'name': 'Paragon Govee',
+    'name': 'Paragon Home',
     'path': _PATH,
     'profile': _PROFILE,
     'version': '1.0.0',

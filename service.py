@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Paragon Govee
+Paragon Home
 Creator: Aryez
 Year: 2026
 Part of: Paragon TV Project
@@ -102,8 +102,8 @@ class GoveeService(xbmc.Monitor):
     def app(self):
         """Build the session lazily so a bad setting cannot break startup."""
         if self._app is None:
-            from paragon_govee import ParagonGovee
-            self._app = ParagonGovee()
+            from paragon_home import ParagonHome
+            self._app = ParagonHome()
         return self._app
 
     def onSettingsChanged(self):

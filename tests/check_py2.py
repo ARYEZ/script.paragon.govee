@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Paragon Govee - Python 2.7 compatibility gate.
+Paragon Home - Python 2.7 compatibility gate.
 
 Kodi 17.6 embeds Python 2.7, but a 2.7 interpreter is not something a modern
 development machine still has lying around. Rather than trust review, this

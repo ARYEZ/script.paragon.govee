@@ -12,7 +12,7 @@ LOGERROR = 4
 
 LOG_LINES = []
 
-_PROFILE = os.path.join(tempfile.gettempdir(), 'paragon-govee-test-profile')
+_PROFILE = os.path.join(tempfile.gettempdir(), 'paragon-home-test-profile')
 
 COND_VISIBILITY = {}
 

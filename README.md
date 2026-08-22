@@ -68,7 +68,7 @@ and restart Kodi.
    **LAN Control**. Not every model has it; check Govee's supported list.
 2. Make sure the lights and the Kodi box are on the same subnet, and that
    UDP ports **4001**, **4002** and **4003** aren't blocked between them.
-3. Open **Paragon Govee** → it offers to search. Or **Settings → Lights →
+3. Open **Paragon Home** → it offers to search. Or **Settings → Lights →
    Search for lights now**.
 
 ### For cloud control
@@ -566,15 +566,31 @@ button that appears to do nothing is worse.
 ## Development
 
 ```
-python3 tests/test_paragon_govee.py     # 217 tests
+python3 tests/test_paragon_home.py      # 354 tests
 python3 tests/check_py2.py              # Python 2.7 syntax gate
+python3 tests/validate_addon.py         # manifest and settings cross-check
 python3 tools/make_assets.py            # regenerate icon.png / fanart.png
 ```
 
 The tests run without Kodi and without hardware: `tests/kodistubs/` replaces the
 Kodi API, a UDP socket on loopback stands in for a Govee light, and a local HTTP
-server stands in for the Govee cloud. That covers protocol encoding, transport
-selection, the scene engine and the menu walks.
+server stands in for the Govee cloud. Broadlink and Tuya have fakes too, each
+speaking its real wire format — the Tuya one negotiates a 3.4 session key and
+rejects a status query framed the way a control should be. That covers protocol
+encoding, transport selection, the scene engine and the menu walks.
+
+### Why the add-on id still says "govee"
+
+The display name is **Paragon Home**, but the add-on id is still
+`script.paragon.govee` and will stay that way. The id is what Kodi uses to name
+the settings folder, so changing it would strand every device name, scene,
+colour, learned IR code and Tuya key in an `addon_data` directory the add-on no
+longer reads — and would break any keymap or favourite holding a
+`RunScript(script.paragon.govee,…)` line. A cosmetic rename is not worth
+re-naming thirty-four bulbs over.
+
+Inside the code, `govee_lan.py`, `govee_cloud.py` and `GoveeController` keep
+their names on purpose too: those really are the Govee driver, not the add-on.
 
 `check_py2.py` exists because Krypton runs Python 2.7 and a 2.7 interpreter is
 no longer easy to come by — it walks the AST of every shipped file and fails on
@@ -594,7 +610,7 @@ resources/lib/govee_lan.py    Govee LAN (UDP) client
 resources/lib/govee_cloud.py  Govee Cloud (HTTPS) client
 resources/lib/devices.py      device model + transport selection
 resources/lib/scenes.py       scene model and application
-resources/lib/paragon_govee.py  the add-on session
+resources/lib/paragon_home.py  the add-on session
 resources/lib/gui.py          dialog-driven control panel
 ```
 

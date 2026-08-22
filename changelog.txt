@@ -1,3 +1,17 @@
+v2.6.1
+- Renamed the last of "Paragon Govee" to "Paragon Home": every file header, the
+  settings page, the README, and the session module and class, which were still
+  paragon_govee.py and ParagonGovee.
+- The add-on id stays script.paragon.govee deliberately. Kodi names the settings
+  folder after the id, so changing it would strand every device name, scene,
+  colour, learned IR code and Tuya key in a directory the add-on no longer
+  reads, and break any keymap holding a RunScript(script.paragon.govee,...)
+  line.
+- govee_lan.py, govee_cloud.py and GoveeController keep their names for the same
+  kind of reason: those really are the Govee driver rather than the add-on.
+- Older changelog entries keep the old name. One of them records the rename
+  itself, and rewriting it would make it describe nothing.
+
 v2.6.0
 - The main menu is now one row per kind of device -- Govee, Broadlink, Tuya --
   rather than one row per device. With three drivers and forty devices the

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Paragon Govee
+Paragon Home
 Creator: Aryez
 Year: 2026
 Part of: Paragon TV Project

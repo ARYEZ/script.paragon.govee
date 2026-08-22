@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-Paragon Govee - test suite.
+Paragon Home - test suite.
 
 Runs off-device: Kodi is replaced by the stubs in tests/kodistubs, the Govee
 LAN device is replaced by a UDP socket on loopback, and the Govee cloud is
 replaced by a local HTTP server. That covers the protocol encoding, the
 transport-selection logic and the scene engine without needing hardware.
 
-    python3 tests/test_paragon_govee.py
+    python3 tests/test_paragon_home.py
 """
 
 import base64
@@ -656,7 +656,7 @@ class TestCycling(unittest.TestCase):
         clean_profile()
         xbmcaddon.reset()
         xbmcgui.reset()
-        for name in ('addon_utils', 'paragon_govee', 'palette', 'scenes'):
+        for name in ('addon_utils', 'paragon_home', 'palette', 'scenes'):
             if name in sys.modules:
                 del sys.modules[name]
 
@@ -665,9 +665,9 @@ class TestCycling(unittest.TestCase):
 
     def build(self, count=4, interval=60):
         import scenes as fresh_scenes
-        from paragon_govee import ParagonGovee
+        from paragon_home import ParagonHome
 
-        app = ParagonGovee()
+        app = ParagonHome()
         app._devices = [Device('%02X' % i, name='Light %d' % i, lan=True,
                                ip='10.0.0.%d' % (i + 1))
                         for i in range(count)]
@@ -858,8 +858,8 @@ class TestCycling(unittest.TestCase):
         app.apply_scene(app.scene_by_name('Party'))
         expected = dict(app.read_cycle()['assignment'])
 
-        from paragon_govee import ParagonGovee
-        service_side = ParagonGovee()
+        from paragon_home import ParagonHome
+        service_side = ParagonHome()
         service_side._devices = app._devices
         service_side.controller = RecordingController()
 
@@ -1518,7 +1518,7 @@ class TestBroadlinkDriver(unittest.TestCase):
         clean_profile()
         xbmcaddon.reset()
         xbmcgui.reset()
-        for name in ('addon_utils', 'paragon_govee', 'broadlink_driver',
+        for name in ('addon_utils', 'paragon_home', 'broadlink_driver',
                      'broadlink_lan', 'hub'):
             if name in sys.modules:
                 del sys.modules[name]
@@ -2106,7 +2106,7 @@ class TestTuyaDriver(unittest.TestCase):
         clean_profile()
         xbmcaddon.reset()
         xbmcgui.reset()
-        for name in ('addon_utils', 'paragon_govee', 'tuya_driver',
+        for name in ('addon_utils', 'paragon_home', 'tuya_driver',
                      'tuya_lan', 'hub'):
             if name in sys.modules:
                 del sys.modules[name]
@@ -2285,7 +2285,7 @@ class TestTuyaControl(unittest.TestCase):
         clean_profile()
         xbmcaddon.reset()
         xbmcgui.reset()
-        for name in ('addon_utils', 'paragon_govee', 'tuya_driver',
+        for name in ('addon_utils', 'paragon_home', 'tuya_driver',
                      'tuya_lan', 'hub'):
             if name in sys.modules:
                 del sys.modules[name]
@@ -2796,7 +2796,7 @@ class TestDriverSeam(unittest.TestCase):
         clean_profile()
         xbmcaddon.reset()
         xbmcgui.reset()
-        for name in ('addon_utils', 'paragon_govee', 'hub', 'scenes'):
+        for name in ('addon_utils', 'paragon_home', 'hub', 'scenes'):
             if name in sys.modules:
                 del sys.modules[name]
 
@@ -3433,7 +3433,7 @@ class TestSession(unittest.TestCase):
         xbmcaddon.reset()
         xbmcgui.reset()
         # addon_utils caches module-level state, so reload it per test.
-        for name in ('addon_utils', 'paragon_govee'):
+        for name in ('addon_utils', 'paragon_home'):
             if name in sys.modules:
                 del sys.modules[name]
 
@@ -3441,9 +3441,9 @@ class TestSession(unittest.TestCase):
         clean_profile()
 
     def app(self):
-        from paragon_govee import ParagonGovee
+        from paragon_home import ParagonHome
 
-        return ParagonGovee()
+        return ParagonHome()
 
     def test_a_plug_split_into_outlets_drops_its_old_single_entry(self):
         """The pre-split entry is the same hardware; it would switch nothing."""
@@ -3472,61 +3472,61 @@ class TestSession(unittest.TestCase):
         self.assertEqual([d.name for d in listed], ['Hall Lamp'])
 
     def test_transport_mode_setting_maps_to_constants(self):
-        from paragon_govee import ParagonGovee
+        from paragon_home import ParagonHome
 
         xbmcaddon.SETTINGS['transport_mode'] = '1'
-        self.assertEqual(ParagonGovee.read_settings()['mode'],
+        self.assertEqual(ParagonHome.read_settings()['mode'],
                          devices_mod.TRANSPORT_LAN)
 
         xbmcaddon.SETTINGS['transport_mode'] = '2'
-        self.assertEqual(ParagonGovee.read_settings()['mode'],
+        self.assertEqual(ParagonHome.read_settings()['mode'],
                          devices_mod.TRANSPORT_CLOUD)
 
         # Out-of-range values fall back rather than raising.
         xbmcaddon.SETTINGS['transport_mode'] = '99'
-        self.assertEqual(ParagonGovee.read_settings()['mode'],
+        self.assertEqual(ParagonHome.read_settings()['mode'],
                          devices_mod.TRANSPORT_AUTO)
 
     def test_scenes_are_seeded_and_persisted_on_first_read(self):
-        from paragon_govee import ParagonGovee
+        from paragon_home import ParagonHome
 
-        app = ParagonGovee()
+        app = ParagonHome()
         names = [s['name'] for s in app.scenes]
         self.assertIn('Movie Night', names)
         self.assertTrue(os.path.isfile(os.path.join(PROFILE, 'scenes.json')))
 
         # A second session reads them back off disk unchanged.
-        app2 = ParagonGovee()
+        app2 = ParagonHome()
         self.assertEqual([s['name'] for s in app2.scenes], names)
 
     def test_corrupt_scene_file_falls_back_to_defaults(self):
-        from paragon_govee import ParagonGovee
+        from paragon_home import ParagonHome
 
         os.makedirs(PROFILE)
         handle = open(os.path.join(PROFILE, 'scenes.json'), 'w')
         handle.write('{ this is not json')
         handle.close()
 
-        app = ParagonGovee()
+        app = ParagonHome()
         self.assertIn('Movie Night', [s['name'] for s in app.scenes])
 
     def test_device_cache_round_trips(self):
-        from paragon_govee import ParagonGovee
+        from paragon_home import ParagonHome
 
-        app = ParagonGovee()
+        app = ParagonHome()
         app._devices = [Device('AA:BB', name='Lamp', model='H6159',
                                ip='10.0.0.2', lan=True)]
         app.save_devices()
 
-        reloaded = ParagonGovee()
+        reloaded = ParagonHome()
         self.assertEqual(len(reloaded.devices), 1)
         self.assertEqual(reloaded.devices[0].name, 'Lamp')
         self.assertEqual(reloaded.device_by_id('aa:bb').ip, '10.0.0.2')
 
     def test_refresh_preserves_custom_name_and_disabled_flag(self):
-        from paragon_govee import ParagonGovee
+        from paragon_home import ParagonHome
 
-        app = ParagonGovee()
+        app = ParagonHome()
         app._devices = [Device('AA:BB', name='Behind the TV', model='H6159',
                                ip='10.0.0.2', lan=True, enabled=False)]
         app.save_devices()
@@ -3545,9 +3545,9 @@ class TestSession(unittest.TestCase):
 
     def test_cloud_names_survive_switching_to_lan_only(self):
         """The exact round trip: name via cloud, then go LAN-only."""
-        from paragon_govee import ParagonGovee
+        from paragon_home import ParagonHome
 
-        app = ParagonGovee()
+        app = ParagonHome()
 
         # First refresh with the API key set: the cloud supplies real names.
         class CloudAndLan(object):
@@ -3568,7 +3568,7 @@ class TestSession(unittest.TestCase):
                 return [Device('AA:BB', model='H6008', ip='10.0.0.11',
                                lan=True)], []
 
-        reopened = ParagonGovee()          # reloads devices.json from disk
+        reopened = ParagonHome()          # reloads devices.json from disk
         reopened.controller = LanOnly()
         reopened.refresh_devices()
 
@@ -3581,9 +3581,9 @@ class TestSession(unittest.TestCase):
 
     def test_a_light_that_misses_one_search_keeps_its_name(self):
         """A sleeping bulb used to be erased along with its name."""
-        from paragon_govee import ParagonGovee
+        from paragon_home import ParagonHome
 
-        app = ParagonGovee()
+        app = ParagonHome()
         app._devices = [
             Device('AA:BB', name='KITCHEN RIGHT LOW', model='H6008',
                    ip='10.0.0.11', lan=True),
@@ -3611,9 +3611,9 @@ class TestSession(unittest.TestCase):
         self.assertEqual(absent.ip, '10.0.0.12')
 
     def test_a_forgotten_light_is_gone_from_disk(self):
-        from paragon_govee import ParagonGovee
+        from paragon_home import ParagonHome
 
-        app = ParagonGovee()
+        app = ParagonHome()
         keep = Device('AA:BB', name='Keep', lan=True)
         drop = Device('CC:DD', name='Drop', lan=True)
         app._devices = [keep, drop]
@@ -3629,9 +3629,9 @@ class TestSession(unittest.TestCase):
 
     def test_placeholder_names_are_still_replaced_by_discovery(self):
         """Preserving names must not freeze a light on its placeholder."""
-        from paragon_govee import ParagonGovee
+        from paragon_home import ParagonHome
 
-        app = ParagonGovee()
+        app = ParagonHome()
         app._devices = [Device('AA:BB', model='H6008', lan=True)]
         self.assertEqual(app.devices[0].name, 'H6008 (AABB)')
         app.save_devices()
@@ -3646,17 +3646,17 @@ class TestSession(unittest.TestCase):
         self.assertEqual(app.devices[0].name, 'GREATROOM BACK TOP')
 
     def test_apply_scene_by_name_reports_a_missing_scene(self):
-        from paragon_govee import ParagonGovee
+        from paragon_home import ParagonHome
 
-        app = ParagonGovee()
+        app = ParagonHome()
         self.assertFalse(app.apply_scene_by_name('Does Not Exist'))
         self.assertTrue(any('Does Not Exist' in message
                             for _heading, message in xbmcgui.NOTIFICATIONS))
 
     def test_toggle_turns_the_group_off_when_any_light_is_on(self):
-        from paragon_govee import ParagonGovee
+        from paragon_home import ParagonHome
 
-        app = ParagonGovee()
+        app = ParagonHome()
         one = Device('ONE', name='One', lan=True, ip='10.0.0.1')
         two = Device('TWO', name='Two', lan=True, ip='10.0.0.2')
         app._devices = [one, two]
@@ -3672,9 +3672,9 @@ class TestSession(unittest.TestCase):
         self.assertTrue(all(call[2] is False for call in recorder.calls))
 
     def test_toggle_turns_on_when_no_state_can_be_read(self):
-        from paragon_govee import ParagonGovee
+        from paragon_home import ParagonHome
 
-        app = ParagonGovee()
+        app = ParagonHome()
         app._devices = [Device('ONE', name='One', lan=True, ip='10.0.0.1')]
         recorder = RecordingController()
         recorder.get_state = lambda d: None
@@ -3717,7 +3717,7 @@ class TestCollapsingTargets(unittest.TestCase):
     def setUp(self):
         clean_profile()
         xbmcaddon.reset()
-        for name in ('addon_utils', 'paragon_govee', 'tuya_driver',
+        for name in ('addon_utils', 'paragon_home', 'tuya_driver',
                      'tuya_lan', 'hub'):
             if name in sys.modules:
                 del sys.modules[name]
@@ -3735,9 +3735,9 @@ class TestCollapsingTargets(unittest.TestCase):
         return master, outlets
 
     def app(self, devices):
-        from paragon_govee import ParagonGovee
+        from paragon_home import ParagonHome
 
-        app = ParagonGovee()
+        app = ParagonHome()
         app._devices = devices
         return app
 
@@ -3787,7 +3787,7 @@ class TestScriptArguments(unittest.TestCase):
         clean_profile()
         xbmcaddon.reset()
         xbmcgui.reset()
-        for name in ('addon_utils', 'paragon_govee', 'default'):
+        for name in ('addon_utils', 'paragon_home', 'default'):
             if name in sys.modules:
                 del sys.modules[name]
 
@@ -3818,9 +3818,9 @@ class TestScriptArguments(unittest.TestCase):
 
     def test_target_resolves_by_name_and_by_id(self):
         import default
-        from paragon_govee import ParagonGovee
+        from paragon_home import ParagonHome
 
-        app = ParagonGovee()
+        app = ParagonHome()
         app._devices = [Device('AA:BB', name='Living Room', lan=True)]
 
         self.assertIsNone(default.resolve_targets(app, 'all'))
@@ -3832,9 +3832,9 @@ class TestScriptArguments(unittest.TestCase):
     def test_unknown_target_is_reported_and_nothing_is_sent(self):
         import addon_utils
         import default
-        from paragon_govee import ParagonGovee
+        from paragon_home import ParagonHome
 
-        app = ParagonGovee()
+        app = ParagonHome()
         recorder = RecordingController()
         app._devices = [Device('AA:BB', name='Living Room', lan=True)]
         app.controller = recorder
@@ -3849,9 +3849,9 @@ class TestScriptArguments(unittest.TestCase):
     def test_actions_drive_the_controller(self):
         import addon_utils
         import default
-        from paragon_govee import ParagonGovee
+        from paragon_home import ParagonHome
 
-        app = ParagonGovee()
+        app = ParagonHome()
         recorder = RecordingController()
         app._devices = [Device('AA:BB', name='Lamp', lan=True)]
         app.controller = recorder
@@ -3873,9 +3873,9 @@ class TestScriptArguments(unittest.TestCase):
     def test_color_action_accepts_a_saved_colour_name(self):
         import addon_utils
         import default
-        from paragon_govee import ParagonGovee
+        from paragon_home import ParagonHome
 
-        app = ParagonGovee()
+        app = ParagonHome()
         recorder = RecordingController()
         app._devices = [Device('AA:BB', name='Lamp', lan=True)]
         app.controller = recorder
@@ -3888,9 +3888,9 @@ class TestScriptArguments(unittest.TestCase):
     def test_color_action_rejects_a_name_that_is_not_saved(self):
         import addon_utils
         import default
-        from paragon_govee import ParagonGovee
+        from paragon_home import ParagonHome
 
-        app = ParagonGovee()
+        app = ParagonHome()
         recorder = RecordingController()
         app._devices = [Device('AA:BB', name='Lamp', lan=True)]
         app.controller = recorder
@@ -3903,9 +3903,9 @@ class TestScriptArguments(unittest.TestCase):
     def test_out_of_range_values_are_clamped(self):
         import addon_utils
         import default
-        from paragon_govee import ParagonGovee
+        from paragon_home import ParagonHome
 
-        app = ParagonGovee()
+        app = ParagonHome()
         recorder = RecordingController()
         app._devices = [Device('AA:BB', name='Lamp', lan=True)]
         app.controller = recorder
@@ -3917,9 +3917,9 @@ class TestScriptArguments(unittest.TestCase):
     def test_bad_value_is_reported_not_sent(self):
         import addon_utils
         import default
-        from paragon_govee import ParagonGovee
+        from paragon_home import ParagonHome
 
-        app = ParagonGovee()
+        app = ParagonHome()
         recorder = RecordingController()
         app._devices = [Device('AA:BB', name='Lamp', lan=True)]
         app.controller = recorder
@@ -3932,9 +3932,9 @@ class TestScriptArguments(unittest.TestCase):
     def test_no_action_falls_through_to_the_panel(self):
         import addon_utils
         import default
-        from paragon_govee import ParagonGovee
+        from paragon_home import ParagonHome
 
-        app = ParagonGovee()
+        app = ParagonHome()
         self.assertFalse(default.run_action(app, {}, addon_utils))
         self.assertFalse(default.run_action(app, {'action': 'panel'},
                                             addon_utils))
@@ -3954,7 +3954,7 @@ class TestPlaybackService(unittest.TestCase):
         xbmc.Player.playing_video = False
         xbmc.Player.playing_audio = False
         xbmc.COND_VISIBILITY.clear()
-        for name in ('addon_utils', 'paragon_govee', 'service'):
+        for name in ('addon_utils', 'paragon_home', 'service'):
             if name in sys.modules:
                 del sys.modules[name]
 
@@ -4095,7 +4095,7 @@ class TestPalette(unittest.TestCase):
         clean_profile()
         xbmcaddon.reset()
         xbmcgui.reset()
-        for name in ('addon_utils', 'paragon_govee', 'palette'):
+        for name in ('addon_utils', 'paragon_home', 'palette'):
             if name in sys.modules:
                 del sys.modules[name]
 
@@ -4103,8 +4103,8 @@ class TestPalette(unittest.TestCase):
         clean_profile()
 
     def app(self):
-        from paragon_govee import ParagonGovee
-        return ParagonGovee()
+        from paragon_home import ParagonHome
+        return ParagonHome()
 
     def test_seeded_and_persisted_on_first_read(self):
         import palette as palette_lib
@@ -4214,7 +4214,7 @@ class TestDiagnostics(unittest.TestCase):
         clean_profile()
         xbmcaddon.reset()
         xbmcgui.reset()
-        for name in ('addon_utils', 'paragon_govee', 'diagnostics'):
+        for name in ('addon_utils', 'paragon_home', 'diagnostics'):
             if name in sys.modules:
                 del sys.modules[name]
 
@@ -4309,9 +4309,9 @@ class TestDiagnostics(unittest.TestCase):
     def test_run_writes_to_the_log_and_returns_a_summary(self):
         import diagnostics
         import xbmc
-        from paragon_govee import ParagonGovee
+        from paragon_home import ParagonHome
 
-        app = ParagonGovee()
+        app = ParagonHome()
 
         class StubLAN(object):
             def probe(self, timeout=4.0):
@@ -4326,7 +4326,7 @@ class TestDiagnostics(unittest.TestCase):
         self.assertEqual(report['cause'], diagnostics.CAUSE_NO_REPLIES)
         self.assertIn('nothing answered', text)
         logged = '\n'.join(message for _level, message in xbmc.LOG_LINES)
-        self.assertIn('Paragon Govee LAN diagnostics', logged)
+        self.assertIn('Paragon Home LAN diagnostics', logged)
 
 
 class TestStatusRoundTrip(unittest.TestCase):
@@ -4341,12 +4341,12 @@ class TestStatusRoundTrip(unittest.TestCase):
         clean_profile()
         xbmcaddon.reset()
         xbmcgui.reset()
-        for name in ('addon_utils', 'paragon_govee', 'diagnostics'):
+        for name in ('addon_utils', 'paragon_home', 'diagnostics'):
             if name in sys.modules:
                 del sys.modules[name]
 
-        from paragon_govee import ParagonGovee
-        self.app = ParagonGovee()
+        from paragon_home import ParagonHome
+        self.app = ParagonHome()
         self.device = Device('AA:BB', name='Lamp', model='H6008', lan=True,
                              ip='10.0.0.11')
         self.app._devices = [self.device]
@@ -4459,12 +4459,12 @@ class TestControlPanel(unittest.TestCase):
         clean_profile()
         xbmcaddon.reset()
         xbmcgui.reset()
-        for name in ('addon_utils', 'paragon_govee', 'gui'):
+        for name in ('addon_utils', 'paragon_home', 'gui'):
             if name in sys.modules:
                 del sys.modules[name]
 
-        from paragon_govee import ParagonGovee
-        self.app = ParagonGovee()
+        from paragon_home import ParagonHome
+        self.app = ParagonHome()
         self.recorder = RecordingController()
         self.app._devices = [Device('AA:BB', name='Lamp', lan=True,
                                     ip='10.0.0.2')]

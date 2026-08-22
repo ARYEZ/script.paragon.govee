@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Paragon Govee - artwork generator (development tool, not shipped behaviour).
+Paragon Home - artwork generator (development tool, not shipped behaviour).
 
 Renders icon.png and fanart.png from code so the artwork can be regenerated or
 recoloured without a binary editing round-trip. Uses only zlib and struct, so

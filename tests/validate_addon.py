@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Paragon Govee - manifest and settings validation.
+Paragon Home - manifest and settings validation.
 
 Kodi fails quietly on these: a mistyped setting id reads back as an empty
 string, a missing asset shows a blank tile, and a malformed addon.xml means the

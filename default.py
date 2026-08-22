@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Paragon Govee
+Paragon Home
 Creator: Aryez
 Year: 2026
 Part of: Paragon TV Project
@@ -185,8 +185,8 @@ def main():
     utils.debug('Started with %s' % (params or 'no arguments'))
 
     try:
-        from paragon_govee import ParagonGovee
-        app = ParagonGovee()
+        from paragon_home import ParagonHome
+        app = ParagonHome()
     except Exception as exc:
         utils.log('Failed to start: %s' % exc, xbmc.LOGERROR)
         xbmcgui.Dialog().ok(utils.ADDON_NAME,

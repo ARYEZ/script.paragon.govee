@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <!--
-Paragon Govee - add-on settings
+Paragon Home - add-on settings
 
 Written in the pre-Kodi-18 settings format, which is what Krypton reads.
 Labels are literal strings rather than string ids so the file stays readable;

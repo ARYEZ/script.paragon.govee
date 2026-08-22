@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Paragon Govee
+Paragon Home
 Creator: Aryez
 Year: 2026
 Part of: Paragon TV Project
@@ -25,7 +25,7 @@ from devices import (DEVICE_CACHE, Device, TRANSPORT_AUTO, TRANSPORT_CLOUD,
 _TRANSPORT_MODES = [TRANSPORT_AUTO, TRANSPORT_LAN, TRANSPORT_CLOUD]
 
 
-class ParagonGovee(object):
+class ParagonHome(object):
     """Everything the add-on needs, assembled from the user's settings."""
 
     CODE_FILE = 'broadlink_codes.json'

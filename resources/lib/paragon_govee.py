@@ -486,7 +486,7 @@ class ParagonGovee(object):
             utils.notify('%s applied to %d light(s)'
                          % (scene.get('name', 'Scene'), applied))
         if errors and not applied:
-            utils.force_notify(errors[0], heading='Paragon Govee')
+            utils.force_notify(errors[0])
         elif errors:
             utils.log('Scene applied with %d error(s): %s'
                       % (len(errors), '; '.join(errors[:3])))

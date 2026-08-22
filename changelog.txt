@@ -1,3 +1,12 @@
+v2.2.2
+- Dialogs say "Paragon Home" rather than "Paragon Govee". The rename in
+  v2.0.0 changed the manifest but left the name hardcoded in every dialog, so
+  a Tuya plug was reporting itself under the old Govee name.
+- The name now comes from the add-on itself, so the next rename cannot miss a
+  dialog.
+- The first-run prompt asks about devices rather than lights, and the unkeyed
+  Tuya warning is short enough not to be cut off by a skin.
+
 v2.2.1
 - New Tuya search diagnostic, under "Diagnose device search..." on the main
   menu, which now offers one per driver since each fails its own way.

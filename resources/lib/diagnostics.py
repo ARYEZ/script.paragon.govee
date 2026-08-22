@@ -49,7 +49,7 @@ def classify(report):
 
 def format_lines(report):
     """Full detail for the Kodi log."""
-    lines = ['--- Paragon Govee LAN diagnostics ---']
+    lines = ['--- %s LAN diagnostics ---' % utils.ADDON_NAME]
     lines.append('Transport mode: %s' % report.get('mode'))
     lines.append('Cloud API key set: %s' % report.get('api_key_set'))
     lines.append('Configured send address: %s'
@@ -243,7 +243,7 @@ def verify_status(app, device, settle=1.5, sleep_func=None):
 
 def format_verify_lines(report):
     return [
-        '--- Paragon Govee status round-trip ---',
+        '--- %s status round-trip ---' % utils.ADDON_NAME,
         'Device: %s (%s) at %s' % (report.get('device'), report.get('model'),
                                    report.get('ip')),
         'Before: %s' % (report.get('before'),),

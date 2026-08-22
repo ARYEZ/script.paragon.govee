@@ -152,7 +152,8 @@ def run_action(app, params, utils):
     elif action == 'diagnose':
         import diagnostics
         text, _report = diagnostics.run(app)
-        xbmcgui.Dialog().ok('Paragon Govee - LAN diagnostics', text)
+        xbmcgui.Dialog().ok('%s - LAN diagnostics' % utils.ADDON_NAME,
+                            text)
     elif action == 'verifystatus':
         import diagnostics
         chosen = targets or app.enabled_devices
@@ -162,7 +163,7 @@ def run_action(app, params, utils):
             # Not named `report`: that is the local result-reporting helper
             # above, and shadowing it here would be a trap for the next edit.
             outcome = diagnostics.verify_status(app, chosen[0])
-            xbmcgui.Dialog().ok('Paragon Govee - status check',
+            xbmcgui.Dialog().ok('%s - status check' % utils.ADDON_NAME,
                                 diagnostics.verify_summary(outcome))
     elif action == 'pick_scene':
         # Fired by the "choose scene" buttons in the add-on settings.
@@ -188,7 +189,7 @@ def main():
         app = ParagonGovee()
     except Exception as exc:
         utils.log('Failed to start: %s' % exc, xbmc.LOGERROR)
-        xbmcgui.Dialog().ok('Paragon Govee',
+        xbmcgui.Dialog().ok(utils.ADDON_NAME,
                             'Could not start the add-on:\n\n%s' % exc)
         return
 
@@ -201,7 +202,8 @@ def main():
         utils.log('Unhandled error: %s' % exc, xbmc.LOGERROR)
         import traceback
         utils.log(traceback.format_exc(), xbmc.LOGERROR)
-        xbmcgui.Dialog().ok('Paragon Govee', 'Something went wrong:\n\n%s' % exc)
+        xbmcgui.Dialog().ok(utils.ADDON_NAME,
+                            'Something went wrong:\n\n%s' % exc)
 
 
 if __name__ == '__main__':

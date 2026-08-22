@@ -72,8 +72,8 @@ class TuyaDriver(object):
         warnings = []
         if unkeyed:
             warnings.append(
-                '%d Tuya device(s) were found but have no local key yet, so '
-                'they cannot be switched. Add a key from Manage devices.'
+                '%d Tuya device(s) need a local key before they can be '
+                'switched. Manage devices -> the plug -> Set local key.'
                 % unkeyed)
         return devices, warnings
 

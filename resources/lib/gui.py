@@ -123,9 +123,9 @@ class ControlPanel(object):
 
     def _first_run(self):
         """Offer a discovery pass when the cache is empty. True = give up."""
-        prompt = ('No Govee lights are known yet.\n\n'
+        prompt = ('No devices are known yet.\n\n'
                   'Search the network for them now?')
-        if not _dialog().yesno('Paragon Govee', prompt):
+        if not _dialog().yesno(utils.ADDON_NAME, prompt):
             return True
         self.refresh_devices()
         return not self.app.devices
@@ -172,7 +172,7 @@ class ControlPanel(object):
             ('Settings', utils.open_settings),
         ])
 
-        choice = _select('Paragon Govee %s' % utils.ADDON_VERSION,
+        choice = _select('%s %s' % (utils.ADDON_NAME, utils.ADDON_VERSION),
                          [label for label, _handler in rows])
         if choice == BACK:
             return BACK
@@ -199,55 +199,55 @@ class ControlPanel(object):
         import diagnostics
 
         progress = xbmcgui.DialogProgressBG()
-        progress.create('Paragon Home', 'Listening for Tuya devices...')
+        progress.create(utils.ADDON_NAME, 'Listening for Tuya devices...')
         try:
             text, _report = diagnostics.run_tuya(self.app)
         except Exception as exc:
             utils.log('Tuya diagnostics failed: %s' % exc)
             progress.close()
-            _dialog().ok('Paragon Home', 'Diagnostics failed:\n\n%s' % exc)
+            _dialog().ok(utils.ADDON_NAME, 'Diagnostics failed:\n\n%s' % exc)
             return
         progress.close()
-        _dialog().ok('Paragon Home - Tuya search', text)
+        _dialog().ok('%s - Tuya search' % utils.ADDON_NAME, text)
 
     def diagnose(self):
         """Probe the LAN and explain the result on screen and in the log."""
         import diagnostics
 
         progress = xbmcgui.DialogProgressBG()
-        progress.create('Paragon Govee', 'Probing the network...')
+        progress.create(utils.ADDON_NAME, 'Probing the network...')
         try:
             text, _report = diagnostics.run(self.app)
         except Exception as exc:
             utils.log('Diagnostics failed: %s' % exc)
             progress.close()
-            _dialog().ok('Paragon Govee', 'Diagnostics failed:\n\n%s' % exc)
+            _dialog().ok(utils.ADDON_NAME, 'Diagnostics failed:\n\n%s' % exc)
             return
         progress.close()
-        _dialog().ok('Paragon Govee - LAN diagnostics', text)
+        _dialog().ok('%s - LAN diagnostics' % utils.ADDON_NAME, text)
 
     def verify_status(self, device):
         """Drive one bulb to a known colour and see if it reports it back."""
         import diagnostics
 
         if not _dialog().yesno(
-                'Paragon Govee',
+                utils.ADDON_NAME,
                 'This will briefly set %s to a test colour and then put it '
                 'back, to check whether it reports its state honestly.\n\n'
                 'Continue?' % device.name):
             return
 
         progress = xbmcgui.DialogProgressBG()
-        progress.create('Paragon Govee', 'Testing %s...' % device.name)
+        progress.create(utils.ADDON_NAME, 'Testing %s...' % device.name)
         try:
             report = diagnostics.verify_status(self.app, device)
         except Exception as exc:
             utils.log('Status round-trip failed: %s' % exc)
             progress.close()
-            _dialog().ok('Paragon Govee', 'Test failed:\n\n%s' % exc)
+            _dialog().ok(utils.ADDON_NAME, 'Test failed:\n\n%s' % exc)
             return
         progress.close()
-        _dialog().ok('Paragon Govee - status check',
+        _dialog().ok('%s - status check' % utils.ADDON_NAME,
                      diagnostics.verify_summary(report))
 
     # -- control ------------------------------------------------------------
@@ -355,7 +355,7 @@ class ControlPanel(object):
                 self._add_color()
             elif choice == len(entries) + 1:
                 if _dialog().yesno(
-                        'Paragon Govee',
+                        utils.ADDON_NAME,
                         'Replace the colour list with the built-in set?\n\n'
                         'Any colours you added are removed.'):
                     self.app.reset_palette()
@@ -375,7 +375,7 @@ class ControlPanel(object):
         name = name.strip()
 
         if self.app.color_by_name(name) is not None and not _dialog().yesno(
-                'Paragon Govee',
+                utils.ADDON_NAME,
                 'A colour called "%s" already exists.\n\nReplace it?' % name):
             return
 
@@ -422,7 +422,7 @@ class ControlPanel(object):
         elif action == 'down':
             self.app.move_color(index, 1)
         elif action == 'delete':
-            if _dialog().yesno('Paragon Govee',
+            if _dialog().yesno(utils.ADDON_NAME,
                                'Delete the colour "%s"?' % entry['name']):
                 self.app.remove_color(entry)
                 utils.notify('Deleted %s' % entry['name'])
@@ -448,7 +448,7 @@ class ControlPanel(object):
     def show_status(self, device):
         state = self.app.controller.get_state(device)
         if not state:
-            _dialog().ok('Paragon Govee',
+            _dialog().ok(utils.ADDON_NAME,
                          'Could not read the state of %s.\n\n'
                          'LAN status needs UDP port 4002, which another '
                          'program may be holding.' % device.name)
@@ -509,24 +509,24 @@ class ControlPanel(object):
 
         existing = self.app.scene_by_name(name)
         if existing is not None and not _dialog().yesno(
-                'Paragon Govee',
+                utils.ADDON_NAME,
                 'A scene called "%s" already exists.\n\nReplace it with what '
                 'the lights are doing now?' % name):
             return
 
         progress = xbmcgui.DialogProgressBG()
-        progress.create('Paragon Govee', 'Reading the lights...')
+        progress.create(utils.ADDON_NAME, 'Reading the lights...')
         try:
             scene, captured, skipped = self.app.capture_scene(name)
         except Exception as exc:
             utils.log('Capture failed: %s' % exc)
             progress.close()
-            _dialog().ok('Paragon Govee', 'Capture failed:\n\n%s' % exc)
+            _dialog().ok(utils.ADDON_NAME, 'Capture failed:\n\n%s' % exc)
             return
         progress.close()
 
         if not captured:
-            _dialog().ok('Paragon Govee',
+            _dialog().ok(utils.ADDON_NAME,
                          'None of the lights reported their state.\n\n'
                          'Status replies need UDP port %d -- close the Govee '
                          'Desktop app and try again.' % 4002)
@@ -553,7 +553,7 @@ class ControlPanel(object):
                     'capture.')
         # Always shown rather than a toast: this is the moment to notice that
         # every bulb read back as white, or every brightness as 100%.
-        _dialog().ok('Paragon Govee', message)
+        _dialog().ok(utils.ADDON_NAME, message)
 
     def manage_scenes(self):
         while True:
@@ -638,7 +638,7 @@ class ControlPanel(object):
                 self._save_scene(scene, index)
                 return
             elif choice == 8:
-                if _dialog().yesno('Paragon Govee',
+                if _dialog().yesno(utils.ADDON_NAME,
                                    'Delete the scene "%s"?' % scene['name']):
                     del scenes[index]
                     self.app.save_scenes()
@@ -654,7 +654,7 @@ class ControlPanel(object):
         clash = scene_lib.find(scenes, cleaned['name'])
         if clash is not None and (index is None or scenes[index] is not clash):
             if not _dialog().yesno(
-                    'Paragon Govee',
+                    utils.ADDON_NAME,
                     'A scene called "%s" already exists.\n\nReplace it?'
                     % cleaned['name']):
                 return
@@ -727,7 +727,7 @@ class ControlPanel(object):
     def _edit_cycle(self, scene):
         """How often a mix moves the colours along, or off."""
         if scene.get('mode') != scene_lib.MODE_MIX:
-            _dialog().ok('Paragon Govee',
+            _dialog().ok(utils.ADDON_NAME,
                          'Cycling moves the lights through a mix of '
                          'colours.\n\nSet Appearance to "Mix of colours" '
                          'first.')
@@ -761,7 +761,7 @@ class ControlPanel(object):
             return True
 
         return _dialog().yesno(
-            'Paragon Govee',
+            utils.ADDON_NAME,
             '%d of these lights are driven over the Govee cloud, which is '
             'rate limited.\n\nCycling every %s would use about %d cloud '
             'calls a day against a limit near %d, so the lights would stop '
@@ -850,13 +850,13 @@ class ControlPanel(object):
 
     def refresh_devices(self):
         progress = xbmcgui.DialogProgressBG()
-        progress.create('Paragon Govee', 'Searching for lights...')
+        progress.create(utils.ADDON_NAME, 'Searching for lights...')
         try:
             devices, warnings = self.app.refresh_devices()
         except Exception as exc:  # a failed refresh must not kill the panel
             utils.log('Device refresh raised: %s' % exc)
             progress.close()
-            _dialog().ok('Paragon Govee', 'Device search failed:\n\n%s' % exc)
+            _dialog().ok(utils.ADDON_NAME, 'Device search failed:\n\n%s' % exc)
             return
         progress.close()
 
@@ -867,7 +867,7 @@ class ControlPanel(object):
                       'Settings to use the cloud.'
             if warnings:
                 message += '\n\n' + '\n'.join(warnings[:2])
-            _dialog().ok('Paragon Govee', message)
+            _dialog().ok(utils.ADDON_NAME, message)
             return
 
         lan_count = len([d for d in devices if d.lan])
@@ -879,7 +879,7 @@ class ControlPanel(object):
                         'as they were. Their names are safe; they will pick '
                         'up again on the next search.' % missing)
         if warnings:
-            _dialog().ok('Paragon Govee',
+            _dialog().ok(utils.ADDON_NAME,
                          summary + '\n\n' + '\n'.join(warnings[:2]))
         else:
             utils.notify(summary)
@@ -929,7 +929,7 @@ class ControlPanel(object):
             devices = unnamed if choice == 0 else devices
 
         if not _dialog().yesno(
-                'Paragon Govee',
+                utils.ADDON_NAME,
                 'Each light will come on bright magenta in turn. Type the '
                 'name of whichever one lights up.\n\n'
                 'Cancel the keyboard to stop; names entered so far are '
@@ -939,7 +939,7 @@ class ControlPanel(object):
         # One bulk read up front rather than per light: the lights get put
         # back from this snapshot as the walk moves on.
         progress = xbmcgui.DialogProgressBG()
-        progress.create('Paragon Govee', 'Reading the lights...')
+        progress.create(utils.ADDON_NAME, 'Reading the lights...')
         try:
             states = self.app.controller.get_states(devices)
         except Exception as exc:
@@ -951,7 +951,7 @@ class ControlPanel(object):
 
         self.app.save_devices()
         if named:
-            _dialog().ok('Paragon Govee', 'Named %d light(s).' % named)
+            _dialog().ok(utils.ADDON_NAME, 'Named %d light(s).' % named)
         else:
             utils.notify('No lights were renamed')
 
@@ -1056,7 +1056,7 @@ class ControlPanel(object):
             self._identify(device)
         elif choice == 3:
             if _dialog().yesno(
-                    'Paragon Govee',
+                    utils.ADDON_NAME,
                     'Forget "%s"?\n\nIts name and settings are removed. A '
                     'later search will find it again as an unnamed light.'
                     % device.name):
@@ -1075,7 +1075,7 @@ class ControlPanel(object):
                          % ('cleared' if not value.strip() else 'saved',
                             device.name))
         else:
-            _dialog().ok('Paragon Home',
+            _dialog().ok(utils.ADDON_NAME,
                          'A Tuya local key is exactly 16 characters.\n\n'
                          'You gave %d.' % len(value.strip()))
 
@@ -1108,7 +1108,7 @@ class ControlPanel(object):
                 except ControlError as exc:
                     utils.force_notify(str(exc))
             elif action == 1 and _dialog().yesno(
-                    'Paragon Home', 'Delete the command "%s"?' % name):
+                    utils.ADDON_NAME, 'Delete the command "%s"?' % name):
                 self.app.forget_command(device, name)
                 utils.notify('Deleted %s' % name)
 
@@ -1118,8 +1118,9 @@ class ControlPanel(object):
             ok, message = self.app.test_device(device)
         except ControlError as exc:
             ok, message = False, str(exc)
-        _dialog().ok('Paragon Home - %s' % ('connected' if ok
-                                            else 'not connected'), message)
+        _dialog().ok('%s - %s' % (utils.ADDON_NAME,
+                                  'connected' if ok else 'not connected'),
+                     message)
 
     def learn_command(self, device, sleep_func=None):
         """Put the blaster into learning mode and wait for a remote press.
@@ -1139,7 +1140,7 @@ class ControlPanel(object):
             return
 
         progress = xbmcgui.DialogProgress()
-        progress.create('Paragon Home',
+        progress.create(utils.ADDON_NAME,
                         'Point your remote at %s and press the button.'
                         % device.name,
                         'Cancel to give up.')
@@ -1157,7 +1158,7 @@ class ControlPanel(object):
             progress.close()
 
         if not code:
-            _dialog().ok('Paragon Home',
+            _dialog().ok(utils.ADDON_NAME,
                          'No code was captured.\n\nHold the remote close to '
                          '%s and press the button firmly while the dialog is '
                          'open.' % device.name)
@@ -1186,7 +1187,7 @@ class ControlPanel(object):
         before = self.app.controller.get_state(device)
 
         progress = xbmcgui.DialogProgress()
-        progress.create('Paragon Govee', 'Flashing %s' % device.name,
+        progress.create(utils.ADDON_NAME, 'Flashing %s' % device.name,
                         'Cancel once you have spotted it.')
         try:
             try:

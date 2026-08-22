@@ -42,16 +42,27 @@ class KasaDriver(object):
         out of several interfaces wants time for the slowest to answer, and a
         plug behind a mesh access point is not always prompt.
         """
-        listen = max(4.0, float(timeout) + 1.0)
+        listen = max(5.0, float(timeout) + 2.0)
         try:
-            heard = kasa_lan.discover(timeout=listen, log_func=self._log)
+            heard, counts = kasa_lan.search(timeout=listen,
+                                            log_func=self._log)
         except kasa_lan.KasaError as exc:
             return [], [str(exc)]
 
         devices = []
         for entry in heard:
             devices.extend(self._devices_for(entry))
-        return devices, []
+
+        warnings = []
+        if counts.get('sweep'):
+            # Worth saying rather than silently papering over: a network that
+            # drops broadcast will keep doing it, and it explains why the Kasa
+            # app -- which also broadcasts -- may show fewer devices too.
+            warnings.append(
+                '%d Kasa device(s) answered only when addressed directly. '
+                'Your access point is dropping broadcast traffic.'
+                % counts['sweep'])
+        return devices, warnings
 
     def _devices_for(self, entry):
         """One entry per outlet, or one for a single-outlet plug.

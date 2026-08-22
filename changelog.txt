@@ -1,3 +1,22 @@
+v2.7.1
+- Fixed a Kasa search finding only some of the plugs. Two causes, one mine.
+- Mine: the search sent from a socket it closed immediately afterwards. A Kasa
+  device answers to the port the request came from, so every reply to those
+  sends was discarded, and only the devices that happened to answer the one
+  send from the socket that stayed open were ever found.
+- Not mine: broadcast traffic. Mesh access points and guest networks routinely
+  drop or fail to flood it, which reaches some devices and not others. After
+  broadcasting, the search now addresses every host on the subnet directly,
+  which does not depend on broadcast working at all. The Kasa app broadcasts
+  too, so it can show fewer devices than this does for the same reason.
+- When the sweep turns up devices the broadcast missed, the search says so.
+  Silently working around a network fault would hide it.
+- The broadcast now goes out three times rather than once. UDP has no
+  retransmission, and several devices answering at once is exactly when one
+  goes missing.
+- A search stops as soon as everything has gone quiet instead of sitting out
+  its whole window, so finding everything is usually about a second.
+
 v2.7.0
 - TP-Link Kasa plugs are now supported, as the fourth driver: HS100, HS103,
   HS110 and the KP series.

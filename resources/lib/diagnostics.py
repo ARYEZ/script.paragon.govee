@@ -376,8 +376,17 @@ def kasa_summary(report):
         rows = ['%s  %s  (%s)' % (d.get('alias') or d.get('device_id'),
                                   d.get('ip'), d.get('model') or '?')
                 for d in devices[:8]]
-        return ('Found %d Kasa device(s):\n\n%s\n\nRun "Refresh devices" to '
+        text = ('Found %d Kasa device(s):\n\n%s\n\nRun "Refresh devices" to '
                 'add them.' % (len(devices), '\n'.join(rows)))
+        if report.get('sweep'):
+            # The interesting half of the result: which ones broadcast could
+            # not reach says something about the network, not the plugs.
+            text += ('\n\n%d of them answered only when addressed directly, '
+                     'so your access point is dropping broadcast traffic. '
+                     'They will still be found every search, and the Kasa app '
+                     'may show fewer devices than this does.'
+                     % report['sweep'])
+        return text
 
     if report.get('error'):
         return ('The search could not be sent.\n\n%s' % report['error'])
@@ -409,13 +418,15 @@ def run_kasa(app, timeout=6.0):
     from govee_lan import local_addresses
 
     report = {'listened': timeout, 'devices': [], 'error': '',
+              'broadcast': 0, 'sweep': 0,
               'addresses': list(local_addresses()) + ['default route']}
     utils.log('--- Paragon Home Kasa diagnostics ---')
     utils.log('Broadcasting UDP %d from: %s'
               % (kasa_lan.PORT, ', '.join(report['addresses'])))
     try:
-        report['devices'] = kasa_lan.discover(timeout=timeout,
-                                              log_func=utils.debug)
+        report['devices'], counts = kasa_lan.search(timeout=timeout,
+                                                    log_func=utils.debug)
+        report.update(counts)
     except kasa_lan.KasaError as exc:
         report['error'] = str(exc)
         utils.log('Kasa search failed: %s' % exc)

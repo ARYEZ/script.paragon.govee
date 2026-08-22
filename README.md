@@ -419,12 +419,28 @@ Multi-outlet models — the KP303 and HS300 strips — report their outlets in
 their system info, so they are listed one device per outlet under the names
 each outlet already has. A single plug like the HS103 stays one device.
 
-### If a search finds nothing
+### If a search finds some but not all of them
 
-**Diagnose device search → Kasa plugs** says which addresses the broadcast went
+That is almost always the access point, not the plugs. Mesh systems and guest
+networks routinely drop or fail to flood broadcast traffic, so a broadcast
+search reaches some devices and not others — and the ones it misses look
+broken when they are not. The Kasa app broadcasts too, so it can show fewer
+devices than it should for the same reason.
+
+The search handles it: after broadcasting it addresses every host on the
+subnet directly, which does not depend on broadcast working at all. When that
+turns up devices the broadcast missed, it says so rather than quietly papering
+over a real network fault.
+
+The sweep assumes a /24, which is right on essentially every home network. It
+is a few hundred small datagrams to port 9999 and takes about a second.
+
+### If a search finds nothing at all
+
+**Diagnose device search → Kasa plugs** says which addresses the search went
 out from and lists the causes in order of likelihood. In short: these plugs are
-2.4GHz only and broadcasts do not cross subnets, so a plug on a guest SSID or a
-separate VLAN from Kodi will never be heard.
+2.4GHz only and neither broadcast nor the sweep crosses subnets, so a plug on a
+guest SSID or a separate VLAN from Kodi will never be heard.
 
 One cause has no workaround. Newer TP-Link firmware on some models has closed
 the local protocol and talks only to the cloud. A plug that works in the Kasa

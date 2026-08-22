@@ -2919,6 +2919,170 @@ class TestKasaProtocol(unittest.TestCase):
                          ['8006ABCD00', '8006ABCD01'])
 
 
+class FakeKasaResponder(object):
+    """A Kasa plug answering discovery over UDP, on its own loopback address.
+
+    `deaf_to_broadcast` models the failure that actually happens: an access
+    point that drops broadcast traffic, so the plug never hears the search
+    even though it is reachable and answers a datagram addressed to it.
+    """
+
+    def __init__(self, host, port, alias, deaf_to_broadcast=False):
+        import kasa_lan
+
+        self.kasa_lan = kasa_lan
+        self.host = host
+        self.alias = alias
+        self.deaf_to_broadcast = deaf_to_broadcast
+        self.asked = 0
+        self.crashed = None
+
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        self.sock.bind((host, port))
+        self.sock.settimeout(0.2)
+
+        self.running = True
+        self.thread = threading.Thread(target=self._serve)
+        self.thread.daemon = True
+        self.thread.start()
+
+    def close(self):
+        self.running = False
+        self.thread.join(2.0)
+        self.sock.close()
+
+    def _serve(self):
+        while self.running:
+            try:
+                data, sender = self.sock.recvfrom(4096)
+            except socket.error:
+                continue
+            try:
+                self.asked += 1
+                body = json.loads(
+                    self.kasa_lan.decrypt(data).decode('utf-8'))
+                if 'get_sysinfo' not in (body.get('system') or {}):
+                    continue
+                reply = {'system': {'get_sysinfo': {
+                    'deviceId': '8006%s' % self.alias.replace(' ', ''),
+                    'alias': self.alias, 'model': 'HS103(US)',
+                    'sw_ver': '1.0.6', 'relay_state': 0}}}
+                self.sock.sendto(self.kasa_lan.encrypt(json.dumps(reply)),
+                                 sender)
+            except Exception as exc:
+                self.crashed = exc
+
+
+class TestKasaDiscovery(unittest.TestCase):
+    """Finding all of them, on a network that does not carry broadcast."""
+
+    HOSTS = ['127.0.0.2', '127.0.0.3', '127.0.0.4']
+
+    def setUp(self):
+        for name in ('kasa_lan', 'kasa_driver'):
+            if name in sys.modules:
+                del sys.modules[name]
+        import kasa_lan
+
+        self.kasa_lan = kasa_lan
+        self.port = _free_port()
+        kasa_lan.PORT = self.port
+        self.real_addresses = kasa_lan.local_addresses
+        self.real_sweep = kasa_lan.sweep_addresses
+        # The search runs on loopback, which the real helpers deliberately
+        # refuse to sweep.
+        kasa_lan.local_addresses = lambda: ['127.0.0.1']
+        kasa_lan.sweep_addresses = lambda address: list(self.HOSTS)
+        self.plugs = []
+
+    def tearDown(self):
+        for plug in self.plugs:
+            crashed = plug.crashed
+            plug.close()
+            self.assertIsNone(crashed, 'a fake plug crashed: %r' % crashed)
+        self.kasa_lan.local_addresses = self.real_addresses
+        self.kasa_lan.sweep_addresses = self.real_sweep
+
+    def start(self, *specs):
+        for host, alias, deaf in specs:
+            self.plugs.append(
+                FakeKasaResponder(host, self.port, alias,
+                                  deaf_to_broadcast=deaf))
+        return self.plugs
+
+    def test_every_plug_is_found_when_broadcast_does_not_reach_them(self):
+        """The one that matters: three of four silent on broadcast.
+
+        Loopback carries no broadcast at all, so every plug here is found by
+        the sweep -- which is the point. A network that drops broadcast used
+        to mean those devices simply never appeared.
+        """
+        self.start(('127.0.0.2', 'Tree', True), ('127.0.0.3', 'Lamp', True),
+                   ('127.0.0.4', 'Fan', True))
+
+        devices, counts = self.kasa_lan.search(timeout=4.0)
+
+        self.assertEqual(sorted(d['alias'] for d in devices),
+                         ['Fan', 'Lamp', 'Tree'])
+        self.assertEqual(counts['sweep'], 3)
+
+    def test_a_reply_to_a_send_is_not_thrown_away(self):
+        """The bug this replaced: the socket that sent was closed at once.
+
+        A device answers to the port the request came from, so closing that
+        socket discarded every reply to it -- and the search found only the
+        devices that happened to answer the one send from the socket that
+        stayed open.
+        """
+        self.start(('127.0.0.2', 'Tree', True))
+
+        devices, _counts = self.kasa_lan.search(timeout=3.0)
+
+        self.assertEqual(len(devices), 1)
+        self.assertEqual(devices[0]['ip'], '127.0.0.2')
+
+    def test_the_same_plug_answering_twice_is_listed_once(self):
+        """Broadcast repeats, so a device is asked more than once."""
+        self.start(('127.0.0.2', 'Tree', True))
+
+        devices, _counts = self.kasa_lan.search(timeout=3.0)
+
+        self.assertGreater(self.plugs[0].asked, 1)
+        self.assertEqual(len(devices), 1)
+
+    def test_a_search_with_the_sweep_off_stays_on_broadcast(self):
+        self.start(('127.0.0.2', 'Tree', True))
+
+        devices, counts = self.kasa_lan.search(timeout=2.0, sweep=False)
+
+        self.assertEqual(devices, [])
+        self.assertEqual(counts['sweep'], 0)
+
+    def test_a_pass_stops_once_everything_has_gone_quiet(self):
+        """A search that found everything should not sit out its window."""
+        self.start(('127.0.0.2', 'Tree', True))
+
+        started = time.time()
+        self.kasa_lan.search(timeout=20.0)
+        elapsed = time.time() - started
+
+        self.assertLess(elapsed, 12.0)
+
+    def test_the_driver_says_when_broadcast_was_the_problem(self):
+        """Silently working around it would hide a real network fault."""
+        from kasa_driver import KasaDriver
+
+        self.start(('127.0.0.2', 'Tree', True))
+
+        devices, warnings = KasaDriver().discover(timeout=3.0)
+
+        self.assertEqual(len(devices), 1)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn('dropping broadcast', warnings[0])
+
+
 class TestKasaDiagnostics(unittest.TestCase):
     """A search that finds nothing has to say why, in order of likelihood."""
 

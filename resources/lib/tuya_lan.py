@@ -30,6 +30,8 @@ AES-128-ECB under the local key, CRC32 over the header and payload.
 import base64
 import binascii
 import hashlib
+import hmac
+import os
 import json
 import socket
 import struct
@@ -54,15 +56,31 @@ SUFFIX = 0x0000AA55
 CMD_CONTROL = 0x07
 CMD_STATUS = 0x0A          # DP_QUERY: ask for the current datapoints
 
+# 3.4 renumbered both verbs and added the three-step key negotiation that has
+# to precede them on every connection.
+CMD_SESS_KEY_NEG_START = 0x03
+CMD_SESS_KEY_NEG_RESP = 0x04
+CMD_SESS_KEY_NEG_FINISH = 0x05
+CMD_CONTROL_NEW = 0x0D
+CMD_STATUS_NEW = 0x10
+
+# On 3.4 the version header goes inside the encryption, and only on the verbs
+# that want it. A status query and every negotiation step go without.
+V34_HEADERLESS = (CMD_STATUS_NEW, CMD_SESS_KEY_NEG_START,
+                  CMD_SESS_KEY_NEG_RESP, CMD_SESS_KEY_NEG_FINISH)
+
+NONCE_LENGTH = 16
+HMAC_LENGTH = 32
+
 # A single-outlet plug switches on datapoint 1. Multi-outlet plugs use one
 # datapoint per outlet; see tuya_driver for the allocation.
 DP_SWITCH = '1'
 
-# 3.1 through 3.3 differ only in how a payload is wrapped, which is a few
-# lines either way. 3.4 and 3.5 negotiate a per-connection session key before
-# anything else can be said, and 3.5 moves to AES-GCM -- a different job, not
-# a bigger version number.
-SUPPORTED_VERSIONS = ('3.1', '3.2', '3.3')
+# 3.1 through 3.3 differ only in how a payload is wrapped. 3.4 adds a session
+# key negotiated per connection, HMAC-SHA256 in place of the CRC, and its own
+# numbering for the verbs -- handled here. 3.5 moves to AES-GCM, which is a
+# different cipher rather than a bigger version number, and is not built.
+SUPPORTED_VERSIONS = ('3.1', '3.2', '3.3', '3.4')
 
 
 def version_note(version):
@@ -70,9 +88,8 @@ def version_note(version):
     version = str(version or '3.3')
     if version[:3] in SUPPORTED_VERSIONS:
         return None
-    return ('This device speaks Tuya %s. Paragon Home drives 3.1 to 3.3; '
-            '3.4 and later negotiate a session key first, which is not built '
-            'yet.' % version)
+    return ('This device speaks Tuya %s. Paragon Home drives 3.1 to 3.4; '
+            '3.5 encrypts with AES-GCM, which is not built yet.' % version)
 
 
 class TuyaError(Exception):
@@ -213,12 +230,20 @@ class Session(object):
         self.timeout = timeout
         self._log = log_func or (lambda message: None)
         self.sequence = 0
+        # Agreed per connection on 3.4 and discarded when it closes.
+        self.session_key = None
 
     @property
     def keyed(self):
         return len(self.local_key or b'') == 16
 
-    def _cipher(self):
+    @property
+    def is_v34(self):
+        return self.version.startswith('3.4')
+
+    def _cipher(self, key=None):
+        if key is not None:
+            return AESECB(key)
         if not self.keyed:
             raise TuyaKeyMissing(
                 'No local key for %s. A Tuya device will not hand out its own '
@@ -226,20 +251,64 @@ class Session(object):
                 % self.device_id)
         return AESECB(self.local_key)
 
+    def _payload_cipher(self):
+        """What payloads are encrypted with: the session key once there is one."""
+        if self.is_v34 and self.session_key:
+            return self._cipher(self.session_key)
+        return self._cipher()
+
+    def _hmac_key(self):
+        """The key a 3.4 packet is signed with, or None on earlier versions."""
+        if not self.is_v34:
+            return None
+        return self.session_key or self.local_key
+
+    @property
+    def tail_length(self):
+        """Bytes after the payload: HMAC and suffix on 3.4, CRC and suffix before."""
+        return HMAC_LENGTH + 4 if self.is_v34 else 8
+
+    @staticmethod
+    def _nonce():
+        return os.urandom(NONCE_LENGTH)
+
     # -- framing -----------------------------------------------------------
 
     def build_packet(self, command, payload):
-        """Wrap a payload in Tuya's 0x000055AA framing."""
-        payload = bytearray(payload)
+        """Wrap a payload in Tuya's 0x000055AA framing.
+
+        3.4 replaces the trailing CRC32 with an HMAC-SHA256 over the header
+        and payload, which is both longer and keyed -- so the declared length
+        changes with the version too.
+        """
+        payload = bytes(payload)
         self.sequence += 1
+        hmac_key = self._hmac_key()
 
         header = struct.pack('>4I', PREFIX, self.sequence, command,
-                             len(payload) + 8)
-        body = bytearray(header) + payload
-        crc = zlib.crc32(bytes(body)) & 0xFFFFFFFF
-        body.extend(struct.pack('>I', crc))
-        body.extend(struct.pack('>I', SUFFIX))
-        return bytes(body)
+                             len(payload) + self.tail_length)
+        body = header + payload
+        if hmac_key:
+            check = hmac.new(hmac_key, body, hashlib.sha256).digest()
+        else:
+            check = struct.pack('>I', zlib.crc32(body) & 0xFFFFFFFF)
+        return body + check + struct.pack('>I', SUFFIX)
+
+    def _reply_payload(self, reply):
+        """Split a reply into (return code, payload).
+
+        Not every 3.4 reply carries a return code -- the key negotiation step
+        does not -- and nothing in the header says which. Every 3.4 payload is
+        AES-ECB ciphertext, so the reading that leaves a whole number of
+        blocks is the right one. That is a check against the format, not a
+        guess between two equally likely options.
+        """
+        body = reply[16:-self.tail_length]
+        if not self.is_v34:
+            return struct.unpack('>I', body[:4])[0], body[4:]
+        if len(body) >= 4 and len(body) % 16 and not len(body[4:]) % 16:
+            return struct.unpack('>I', body[:4])[0], body[4:]
+        return 0, body
 
     def parse_packet(self, data):
         """Return the payload of a reply, raising on a device-reported error."""
@@ -274,6 +343,16 @@ class Session(object):
             return {}
 
         payload = bytes(payload)
+
+        if self.is_v34:
+            try:
+                plain = self._payload_cipher().decrypt(payload)
+            except (ValueError, TypeError):
+                return {}
+            if plain[:3] in (b'3.4', b'3.5'):
+                plain = plain[15:]
+            return self._unwrap(_json_loads(plain))
+
         marker = payload[:3]
         if marker == b'3.1':
             try:
@@ -295,17 +374,57 @@ class Session(object):
             # Some replies -- an echo of a control, mostly -- come back in
             # clear even on an encrypted connection.
             parsed = _json_loads(payload)
-        return parsed if isinstance(parsed, dict) else {}
+        return self._unwrap(parsed)
+
+    @staticmethod
+    def _unwrap(parsed):
+        """Take the datapoints out of a 3.4 envelope, if that is what this is.
+
+        3.4 wraps a reading as {"protocol":.., "t":.., "data":{"dps":..}}
+        where 3.3 sends {"dps":..} flat. Unwrapping here means everything
+        above this layer sees one shape.
+        """
+        if not isinstance(parsed, dict):
+            return {}
+        if 'dps' not in parsed:
+            inner = parsed.get('data')
+            if isinstance(inner, dict) and 'dps' in inner:
+                return inner
+        return parsed
 
     # -- requests ----------------------------------------------------------
 
-    def _body(self, command):
-        """The JSON body a given command expects."""
+    def _body(self, command, dps=None):
+        """The JSON body a given command expects.
+
+        3.4 restructured both: a status query carries nothing at all, and a
+        control wraps its datapoints in an envelope with an integer timestamp
+        where earlier versions used a string.
+        """
+        if self.is_v34:
+            if command == CMD_STATUS:
+                return {}
+            return {'protocol': 5, 't': int(time.time()),
+                    'data': {'dps': dps or {}}}
+
         stamp = str(int(time.time()))
         if command == CMD_STATUS:
             return {'gwId': self.device_id, 'devId': self.device_id,
                     'uid': self.device_id, 't': stamp}
-        return {'devId': self.device_id, 'uid': self.device_id, 't': stamp}
+        body = {'devId': self.device_id, 'uid': self.device_id, 't': stamp}
+        if dps is not None:
+            body['dps'] = dps
+        return body
+
+    def _wire_command(self, command):
+        """The number this verb travels as. 3.4 renumbered both of them."""
+        if not self.is_v34:
+            return command
+        if command == CMD_STATUS:
+            return CMD_STATUS_NEW
+        if command == CMD_CONTROL:
+            return CMD_CONTROL_NEW
+        return command
 
     def build_command_payload(self, command, body):
         """Encrypt and header a JSON body the way this version expects.
@@ -319,8 +438,18 @@ class Session(object):
             version header on a control but *not* on a status query. A status
             query sent with the header comes back as an error, which reads
             like a bad key and is not.
+        3.4 keeps that split but moves the header inside the encryption, and
+            encrypts with a session key rather than the local key.
         """
         raw = json.dumps(body, separators=(',', ':')).encode('utf-8')
+
+        if self.is_v34:
+            # The one that is genuinely counter-intuitive: on 3.3 the version
+            # header sits in front of the ciphertext, on 3.4 it goes inside
+            # it. Same three bytes, opposite side of the encryption.
+            if self._wire_command(command) not in V34_HEADERLESS:
+                raw = b'3.4' + (b'\x00' * 12) + raw
+            return self._payload_cipher().encrypt(raw)
 
         if self.version.startswith('3.1'):
             if command == CMD_STATUS:
@@ -360,13 +489,111 @@ class Session(object):
             data = data[end:]
         return packets, data
 
+    def _open(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(self.timeout)
+        try:
+            sock.connect((self.ip, CONTROL_PORT))
+        except socket.error as exc:
+            sock.close()
+            raise TuyaError('Could not reach %s on port %d: %s'
+                            % (self.ip, CONTROL_PORT, exc))
+        return sock
+
+    def _send(self, sock, command, payload):
+        try:
+            sock.sendall(self.build_packet(command, payload))
+        except socket.error as exc:
+            raise TuyaError('%s stopped listening: %s' % (self.ip, exc))
+
+    def _read(self, sock, buffer):
+        """Read until at least one whole packet is available.
+
+        Framing is by the declared length rather than by read boundaries: a
+        single read can hold more than the answer -- devices often push an
+        unsolicited status alongside the reply -- and TCP is free to cut the
+        stream anywhere.
+        """
+        deadline = time.time() + self.timeout
+        while True:
+            packets, buffer = self.split_packets(buffer)
+            if packets:
+                return packets, buffer
+            if time.time() >= deadline:
+                break
+            try:
+                chunk = sock.recv(4096)
+            except socket.timeout:
+                break
+            except socket.error as exc:
+                raise TuyaError('%s closed the connection: %s'
+                                % (self.ip, exc))
+            if not chunk:
+                break
+            buffer += chunk
+
+        raise TuyaError('%s did not answer within %.0f seconds'
+                        % (self.ip, self.timeout))
+
+    def negotiate(self, sock):
+        """Agree a session key for this connection (protocol 3.4).
+
+        3.4 accepts no command until both ends have shown they hold the same
+        local key. We send a nonce; the device answers with its own plus an
+        HMAC over ours; we return an HMAC over its one. The session key is
+        derived from both nonces, so it is different on every connection and
+        neither nonce is worth replaying.
+
+        The failure that matters is a wrong key, and it is caught here at the
+        HMAC rather than several steps later as an unreadable reply.
+        """
+        self.session_key = None
+        local_nonce = self._nonce()
+
+        self._send(sock, CMD_SESS_KEY_NEG_START,
+                   self._cipher().encrypt(local_nonce))
+        packets, _rest = self._read(sock, b'')
+        _code, raw = self._reply_payload(packets[0])
+
+        try:
+            # Unpadded and sliced rather than unpadded-and-trusted: only the
+            # first 48 bytes are defined, and devices differ on what they pad
+            # the rest with.
+            plain = self._cipher().decrypt(raw, unpad=False)
+        except (ValueError, TypeError) as exc:
+            raise TuyaError('%s answered the key negotiation with something '
+                            'that will not decrypt (%s)' % (self.ip, exc))
+        if len(plain) < NONCE_LENGTH + HMAC_LENGTH:
+            raise TuyaError('%s cut the key negotiation short (%d bytes)'
+                            % (self.ip, len(plain)))
+
+        remote_nonce = plain[:NONCE_LENGTH]
+        proof = hmac.new(self.local_key, local_nonce, hashlib.sha256).digest()
+        if plain[NONCE_LENGTH:NONCE_LENGTH + HMAC_LENGTH] != proof:
+            raise TuyaError(
+                '%s could not prove it holds the same local key, so the key '
+                'is wrong. A key changes every time the device is re-paired '
+                'in the app.' % self.ip)
+
+        self._send(sock, CMD_SESS_KEY_NEG_FINISH,
+                   self._cipher().encrypt(
+                       hmac.new(self.local_key, remote_nonce,
+                                hashlib.sha256).digest()))
+
+        mixed = bytearray(local_nonce)
+        for index, byte in enumerate(bytearray(remote_nonce)):
+            mixed[index] ^= byte
+        self.session_key = self._cipher().encrypt(bytes(mixed), pad=False)
+        return self.session_key
+
     def _exchange(self, command, body=None):
         """Send one request and return the first reply that answers it.
 
         A fresh connection per exchange rather than a kept-open socket: Tuya
         devices drop an idle connection without saying so, and a plug is
-        switched a few times an hour, not a few times a second. Reconnecting
-        costs a few milliseconds; a stale socket costs a silent failure.
+        switched a few times an hour, not a few times a second. On 3.4 that
+        means re-negotiating each time, which is two more round trips on a
+        LAN and still imperceptible.
         """
         note = version_note(self.version)
         if note:
@@ -374,51 +601,32 @@ class Session(object):
 
         if body is None:
             body = self._body(command)
-        packet = self.build_packet(command,
-                                   self.build_command_payload(command, body))
 
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(self.timeout)
+        sock = self._open()
         try:
-            try:
-                sock.connect((self.ip, CONTROL_PORT))
-                sock.sendall(packet)
-            except socket.error as exc:
-                raise TuyaError('Could not reach %s on port %d: %s'
-                                % (self.ip, CONTROL_PORT, exc))
+            if self.is_v34:
+                self.negotiate(sock)
+
+            self._send(sock, self._wire_command(command),
+                       self.build_command_payload(command, body))
 
             buffer = b''
-            deadline = time.time() + self.timeout
-            while time.time() < deadline:
-                try:
-                    chunk = sock.recv(4096)
-                except socket.timeout:
-                    break
-                except socket.error as exc:
-                    raise TuyaError('%s closed the connection: %s'
-                                    % (self.ip, exc))
-                if not chunk:
-                    break
-
-                buffer += chunk
-                packets, buffer = self.split_packets(buffer)
+            while True:
+                packets, buffer = self._read(sock, buffer)
                 for reply in packets:
                     answer = self._read_reply(command, reply)
                     if answer is not None:
                         return answer
         finally:
+            self.session_key = None
             try:
                 sock.close()
             except socket.error:
                 pass
 
-        raise TuyaError('%s did not answer within %.0f seconds'
-                        % (self.ip, self.timeout))
-
     def _read_reply(self, command, reply):
         """Interpret one reply packet, or None if it was not the answer."""
-        return_code = struct.unpack('>I', reply[16:20])[0]
-        raw = reply[20:-8]
+        return_code, raw = self._reply_payload(reply)
         if return_code:
             detail = self._error_detail(raw)
             if detail:
@@ -481,10 +689,8 @@ class Session(object):
 
     def set_dps(self, values):
         """Set one or more datapoints. Returns True, or raises TuyaError."""
-        body = self._body(CMD_CONTROL)
-        body['dps'] = dict((str(key), value)
-                           for key, value in values.items())
-        self._exchange(CMD_CONTROL, body)
+        dps = dict((str(key), value) for key, value in values.items())
+        self._exchange(CMD_CONTROL, self._body(CMD_CONTROL, dps))
         return True
 
     def set_switch(self, on, dp=DP_SWITCH):

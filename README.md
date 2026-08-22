@@ -22,8 +22,8 @@ Built for **Kodi 17.6 (Krypton)** — `xbmc.python 2.25.0`, Python 2.7.
   power, brightness, RGB colour and colour temperature.
 * **Broadlink RM blasters** — learn an IR code from a remote and send it back,
   over the LAN with no Broadlink account.
-* **Tuya smart plugs** — GHome, Gosund, Smart Life and most no-name plugs.
-  Multi-outlet plugs are listed one device per outlet.
+* **Tuya smart plugs** — GHome, Gosund, Smart Life and most no-name plugs,
+  protocol 3.1 to 3.4. Multi-outlet plugs are listed one device per outlet.
 * **Scenes** — named presets (`Movie Night`, `Paused`, `All Off`, …) that you
   can edit in the add-on and re-use everywhere.
 * **Playback lighting** — an optional service that dims when playback starts,
@@ -448,9 +448,18 @@ therefore drive bulbs and plugs together with no special handling.
 ### Protocol versions
 
 The device list shows what each plug speaks (`Tuya 3.3`). Versions **3.1 to
-3.3** are driven; **3.4 and 3.5** negotiate a per-connection session key
-before anything else can be said and are not built yet. A plug on one of those
-is still discovered and listed, and says so rather than failing obscurely.
+3.4** are driven.
+
+3.4 is a different protocol wearing the same version number: it negotiates a
+session key on every connection, signs each packet with HMAC-SHA256 instead of
+a CRC, renumbers both verbs, and moves the version header inside the
+encryption. That is all handled — a 3.4 plug behaves like any other, and a
+wrong key is caught at the handshake rather than several steps later as an
+unreadable reply.
+
+**3.5** encrypts with AES-GCM, which is a different cipher rather than a bigger
+version number, and is not built. A 3.5 plug is still discovered and listed,
+and says so rather than failing obscurely.
 
 ---
 

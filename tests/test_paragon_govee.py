@@ -12,6 +12,7 @@ transport-selection logic and the scene engine without needing hardware.
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import shutil
@@ -1831,7 +1832,7 @@ class FakeTuyaPlug(object):
     """
 
     def __init__(self, key=b'0123456789abcdef', version='3.3', dps=None,
-                 header_on_status_reply=True):
+                 header_on_status_reply=True, envelope_replies=False):
         import tuya_lan
 
         self.tuya_lan = tuya_lan
@@ -1839,9 +1840,14 @@ class FakeTuyaPlug(object):
         self.version = version
         self.dps = dict(dps or {'1': False})
         self.header_on_status_reply = header_on_status_reply
+        self.envelope_replies = envelope_replies
         self.requests = []
         self.connections = 0
         self.refuse = None
+        self.negotiations = 0
+        self.session_key = None
+        self.crashed = None
+        self.remote_nonce = None
 
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -1871,13 +1877,30 @@ class FakeTuyaPlug(object):
             self.connections += 1
             try:
                 conn.settimeout(1.0)
-                data = conn.recv(4096)
-                if data:
-                    reply = self._handle(data)
-                    if reply:
-                        conn.sendall(reply)
+                self.session_key = None
+                # 3.4 negotiates a key before every command, so a connection
+                # is a conversation rather than a single request -- and the
+                # client is free to put two of its turns in one segment, so
+                # this frames by declared length rather than by read.
+                buffer = b''
+                while True:
+                    data = conn.recv(4096)
+                    if not data:
+                        break
+                    buffer += data
+                    while len(buffer) >= 16:
+                        length = struct.unpack('>I', buffer[12:16])[0]
+                        if len(buffer) < 16 + length:
+                            break
+                        packet, buffer = (buffer[:16 + length],
+                                          buffer[16 + length:])
+                        reply = self._handle(packet)
+                        if reply:
+                            conn.sendall(reply)
             except socket.error:
                 pass
+            except Exception as exc:  # surfaced by the test, not swallowed
+                self.crashed = exc
             finally:
                 try:
                     conn.close()
@@ -1886,16 +1909,29 @@ class FakeTuyaPlug(object):
 
     # -- protocol ----------------------------------------------------------
 
-    def _cipher(self):
+    @property
+    def is_v34(self):
+        return self.version.startswith('3.4')
+
+    @property
+    def tail(self):
+        return 36 if self.is_v34 else 8
+
+    def _cipher(self, key=None):
         from aes import AESECB
 
-        return AESECB(self.key)
+        return AESECB(key or self.key)
 
     def _handle(self, data):
         prefix, sequence, command, length = struct.unpack('>4I', data[0:16])
         assert prefix == self.tuya_lan.PREFIX
-        payload = data[16:16 + length - 8]
+        payload = data[16:16 + length - self.tail]
         self.requests.append((command, payload))
+
+        if self.is_v34:
+            handshake = self._handshake(sequence, command, payload)
+            if handshake is not None:
+                return handshake
 
         if self.refuse is not None:
             return self._packet(sequence, command, b'device busy',
@@ -1912,15 +1948,68 @@ class FakeTuyaPlug(object):
                                 self._encode_reply({'err': 'decrypt failed'}),
                                 retcode=1)
 
-        if command == self.tuya_lan.CMD_STATUS:
+        if command in (self.tuya_lan.CMD_STATUS, self.tuya_lan.CMD_STATUS_NEW):
             return self._packet(sequence, command,
-                                self._encode_reply({'dps': dict(self.dps)}))
+                                self._encode_reply(self._reading()))
 
-        for key, value in (body.get('dps') or {}).items():
+        dps = body.get('dps')
+        if dps is None:
+            dps = (body.get('data') or {}).get('dps') or {}
+        for key, value in dps.items():
             self.dps[str(key)] = value
         return self._packet(sequence, command, b'')
 
+    def _reading(self):
+        body = {'dps': dict(self.dps)}
+        if self.envelope_replies:
+            return {'protocol': 4, 't': 1700000000, 'data': body}
+        return body
+
+    # -- 3.4 key negotiation ----------------------------------------------
+
+    def _handshake(self, sequence, command, payload):
+        """The three steps 3.4 requires before it will hear a command."""
+        if command == self.tuya_lan.CMD_SESS_KEY_NEG_START:
+            self.negotiations += 1
+            self.local_nonce = self._cipher().decrypt(payload, unpad=False)[:16]
+            self.remote_nonce = bytes(bytearray(range(0x40, 0x50)))
+            proof = hmac.new(self.key, self.local_nonce,
+                             hashlib.sha256).digest()
+            # Deliberately without a return code: real 3.4 devices omit it
+            # here and nothing in the header says so, which is exactly what
+            # the client has to cope with.
+            return self._packet(
+                sequence, self.tuya_lan.CMD_SESS_KEY_NEG_RESP,
+                self._cipher().encrypt(self.remote_nonce + proof),
+                retcode=None)
+
+        if command == self.tuya_lan.CMD_SESS_KEY_NEG_FINISH:
+            given = self._cipher().decrypt(payload, unpad=False)[:32]
+            expected = hmac.new(self.key, self.remote_nonce,
+                                hashlib.sha256).digest()
+            assert given == expected, 'client failed to prove it holds the key'
+            mixed = bytearray(self.local_nonce)
+            for index, byte in enumerate(bytearray(self.remote_nonce)):
+                mixed[index] ^= byte
+            self.session_key = self._cipher().encrypt(bytes(mixed), pad=False)
+            return b''
+        return None
+
+    # -- payloads ----------------------------------------------------------
+
     def _decode_request(self, command, payload):
+        if self.is_v34:
+            assert self.session_key, 'command sent before the key was agreed'
+            plain = self._cipher(self.session_key).decrypt(payload)
+            headerless = command in self.tuya_lan.V34_HEADERLESS
+            if headerless and plain[:3] == b'3.4':
+                raise ValueError('a 3.4 status query carries no header')
+            if not headerless:
+                if plain[:3] != b'3.4':
+                    raise ValueError('a 3.4 control needs the header')
+                plain = plain[15:]
+            return json.loads(plain.decode('utf-8'))
+
         if self.version.startswith('3.1'):
             if command == self.tuya_lan.CMD_STATUS:
                 if payload[:3] == b'3.1':
@@ -1950,6 +2039,9 @@ class FakeTuyaPlug(object):
 
     def _encode_reply(self, body):
         raw = json.dumps(body).encode('utf-8')
+        if self.is_v34:
+            return self._cipher(self.session_key).encrypt(
+                b'3.4' + (b'\x00' * 12) + raw)
         if self.version.startswith('3.1'):
             encoded = base64.b64encode(self._cipher().encrypt(raw))
             signature = hashlib.md5(
@@ -1962,12 +2054,21 @@ class FakeTuyaPlug(object):
         return self.version[:3].encode('utf-8') + (b'\x00' * 12) + encrypted
 
     def _packet(self, sequence, command, payload, retcode=0):
+        """Frame a reply. retcode=None omits it, as 3.4 does mid-handshake."""
+        head = bytearray()
+        if retcode is not None:
+            head.extend(struct.pack('>I', retcode))
+        head.extend(payload)
+
         body = bytearray(struct.pack('>4I', self.tuya_lan.PREFIX, sequence,
-                                     command, len(payload) + 12))
-        body.extend(struct.pack('>I', retcode))
-        body.extend(payload)
-        crc = zlib.crc32(bytes(body)) & 0xFFFFFFFF
-        body.extend(struct.pack('>I', crc))
+                                     command, len(head) + self.tail))
+        body.extend(head)
+        if self.is_v34:
+            key = self.session_key or self.key
+            body.extend(hmac.new(key, bytes(body), hashlib.sha256).digest())
+        else:
+            body.extend(struct.pack(
+                '>I', zlib.crc32(bytes(body)) & 0xFFFFFFFF))
         body.extend(struct.pack('>I', self.tuya_lan.SUFFIX))
         return bytes(body)
 
@@ -2171,7 +2272,12 @@ class TestTuyaControl(unittest.TestCase):
     def tearDown(self):
         self.tuya_lan.CONTROL_PORT = self.real_port
         if self.plug is not None:
+            crashed = self.plug.crashed
             self.plug.close()
+            # A fake that died in its thread answers nothing, which surfaces
+            # as a timeout and reads like a client bug. Fail on the real
+            # cause instead.
+            self.assertIsNone(crashed, 'the fake plug crashed: %r' % crashed)
         clean_profile()
 
     def start(self, **kwargs):
@@ -2278,10 +2384,116 @@ class TestTuyaControl(unittest.TestCase):
         driver = self.driver()
 
         with self.assertRaises(ControlError) as caught:
-            driver.turn(self.device(version='3.4'), True)
+            driver.turn(self.device(version='3.5'), True)
         message = str(caught.exception)
-        self.assertIn('3.4', message)
-        self.assertIn('session key', message)
+        self.assertIn('3.5', message)
+        self.assertIn('GCM', message)
+
+    # -- protocol 3.4 ------------------------------------------------------
+
+    def test_a_34_plug_switches_after_negotiating_a_session_key(self):
+        plug = self.start(version='3.4', dps={'1': False})
+        driver = self.driver()
+
+        driver.turn(self.device(version='3.4'), True)
+
+        self.assertTrue(plug.dps['1'])
+        self.assertEqual(plug.negotiations, 1)
+
+    def test_a_34_status_read_comes_back(self):
+        self.start(version='3.4', dps=self.WP9_DPS)
+
+        state = self.driver().get_state(self.device(dp='2', version='3.4'))
+
+        self.assertEqual(state['power'], 'on')
+
+    def test_a_34_reading_wrapped_in_an_envelope_is_unwrapped(self):
+        """3.4 sends {"data":{"dps":..}} where 3.3 sends {"dps":..} flat."""
+        self.start(version='3.4', dps=self.WP9_DPS, envelope_replies=True)
+
+        state = self.driver().get_state(self.device(dp='3', version='3.4'))
+
+        self.assertEqual(state['power'], 'off')
+        self.assertEqual(state['dps']['1'], False)
+
+    def test_a_34_connection_negotiates_every_time(self):
+        """The session key belongs to the connection, not to the device."""
+        plug = self.start(version='3.4', dps={'1': False})
+        driver = self.driver()
+
+        driver.turn(self.device(version='3.4'), True)
+        driver.turn(self.device(version='3.4'), False)
+
+        self.assertEqual(plug.negotiations, 2)
+        self.assertFalse(plug.dps['1'])
+
+    def test_a_34_session_key_is_not_kept_after_the_connection(self):
+        self.start(version='3.4', dps={'1': False})
+        session = self.tuya_lan.Session('127.0.0.1', 'wp9abc', self.KEY,
+                                        version='3.4')
+
+        session.set_switch(True)
+
+        self.assertIsNone(session.session_key)
+
+    def test_a_34_wrong_key_fails_at_the_handshake_not_five_steps_later(self):
+        """The HMAC is a definite answer where an unreadable reply is a guess."""
+        self.start(version='3.4', dps={'1': False})
+        driver = self.driver(keys={'wp9abc': 'ffffffffffffffff'})
+
+        with self.assertRaises(ControlError) as caught:
+            driver.turn(self.device(version='3.4'), True)
+        self.assertIn('local key', str(caught.exception))
+
+    def test_a_34_control_carries_the_header_inside_the_encryption(self):
+        """The counter-intuitive one: 3.3 puts it outside, 3.4 puts it inside.
+
+        Asserted from the client's own output rather than trusted, because
+        getting this backwards produces a packet the device rejects with an
+        error that reads like a wrong key.
+        """
+        self.start(version='3.4', dps={'1': False})
+        session = self.tuya_lan.Session('127.0.0.1', 'wp9abc', self.KEY,
+                                        version='3.4')
+        session.session_key = self.KEY.encode('utf-8')
+
+        control = session.build_command_payload(
+            self.tuya_lan.CMD_CONTROL,
+            session._body(self.tuya_lan.CMD_CONTROL, {'1': True}))
+        query = session.build_command_payload(
+            self.tuya_lan.CMD_STATUS, session._body(self.tuya_lan.CMD_STATUS))
+
+        self.assertNotEqual(control[:3], b'3.4')
+        from aes import AESECB
+        cipher = AESECB(self.KEY.encode('utf-8'))
+        self.assertEqual(cipher.decrypt(control)[:3], b'3.4')
+        self.assertNotEqual(cipher.decrypt(query)[:3], b'3.4')
+
+    def test_a_34_plug_splits_into_outlets_like_any_other(self):
+        """The version changes the wire, not what the device turns out to be."""
+        self.start(version='3.4', dps=self.WP9_DPS)
+
+        found = self.driver()._devices_for(
+            {'device_id': 'wp9abc', 'ip': '127.0.0.1', 'version': '3.4'})
+
+        self.assertEqual([d.driver_data['dp'] for d in found],
+                         ['1', '2', '3', '7'])
+        self.assertEqual(found[0].model, 'Tuya 3.4')
+
+    def test_a_34_reply_without_a_return_code_is_read_correctly(self):
+        """Nothing in the header says whether one is there; block size does."""
+        session = self.tuya_lan.Session('127.0.0.1', 'wp9abc', self.KEY,
+                                        version='3.4')
+        blocks = b'x' * 64
+
+        with_code = (struct.pack('>4I', self.tuya_lan.PREFIX, 1, 4,
+                                 len(blocks) + 4 + 36)
+                     + struct.pack('>I', 0) + blocks + b'z' * 36)
+        without = (struct.pack('>4I', self.tuya_lan.PREFIX, 1, 4,
+                               len(blocks) + 36) + blocks + b'z' * 36)
+
+        self.assertEqual(session._reply_payload(with_code), (0, blocks))
+        self.assertEqual(session._reply_payload(without), (0, blocks))
 
     # -- outlets -----------------------------------------------------------
 

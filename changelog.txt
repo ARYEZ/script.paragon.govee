@@ -1,3 +1,20 @@
+v2.4.0
+- Tuya protocol 3.4 is now driven, which is what the GHome WP9 speaks. 3.4 is
+  a different protocol wearing the same version number: it negotiates a
+  session key on every connection, signs each packet with HMAC-SHA256 rather
+  than a CRC32, renumbers both verbs, and moves the version header inside the
+  encryption instead of in front of it.
+- A wrong key on 3.4 is caught at the handshake, where the HMAC gives a
+  definite answer, rather than several steps later as a reply that will not
+  decrypt.
+- Not every 3.4 reply carries a return code and nothing in the header says
+  which do. Every payload is AES-ECB ciphertext, so the reading that leaves a
+  whole number of blocks is the right one -- a check against the format
+  rather than a guess between two options.
+- 3.5 is still not driven: it encrypts with AES-GCM, which is a different
+  cipher rather than a bigger version number. A 3.5 plug is discovered,
+  listed, and says which version it speaks.
+
 v2.3.0
 - Tuya smart plugs can now be switched, not just found. Control is LAN only:
   the cloud account is used once to fetch a local key and never again.

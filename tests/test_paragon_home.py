@@ -3124,6 +3124,367 @@ class TestKasaDiscovery(unittest.TestCase):
         self.assertIn('dropping broadcast', warnings[0])
 
 
+class _KlapHandler(BaseHTTPRequestHandler):
+    """The device half of the KLAP handshake, written from the spec.
+
+    Deliberately not sharing helpers with the client beyond the AES itself:
+    if both sides computed their hashes with the same function, the tests
+    would prove the two agree rather than that either is right.
+    """
+
+    protocol_version = 'HTTP/1.1'
+
+    def log_message(self, *args):
+        pass
+
+    def _body(self):
+        return self.rfile.read(int(self.headers.get('Content-Length') or 0))
+
+    def _send(self, payload, code=200, cookie=None):
+        self.send_response(code)
+        self.send_header('Content-Length', str(len(payload)))
+        if cookie:
+            self.send_header('Set-Cookie', '%s=%s;TIMEOUT=1440'
+                             % (kasa_klap.SESSION_COOKIE, cookie))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def do_POST(self):
+        plug = self.server.plug
+        path = self.path.split('?')[0]
+        body = self._body()
+
+        if path == '/app/handshake1':
+            if plug.refuse_handshake:
+                return self._send(b'', code=403)
+            plug.local_seed = body[:16]
+            digest = plug.digest()
+            proof = hashlib.sha256(
+                plug.local_seed + plug.remote_seed + digest).digest() \
+                if plug.scheme == 'v2' else \
+                hashlib.sha256(plug.local_seed + digest).digest()
+            return self._send(plug.remote_seed + proof, cookie='fake-session')
+
+        if path == '/app/handshake2':
+            digest = plug.digest()
+            expected = hashlib.sha256(
+                plug.remote_seed + plug.local_seed + digest).digest() \
+                if plug.scheme == 'v2' else \
+                hashlib.sha256(plug.remote_seed + digest).digest()
+            assert body == expected, 'client failed handshake2'
+            plug.cookie_seen = self.headers.get('Cookie') or ''
+            plug.derive(digest)
+            return self._send(b'')
+
+        if path == '/app/request':
+            assert plug.key, 'a request arrived before the handshake'
+            plug.cookie_seen = self.headers.get('Cookie') or ''
+            # The sequence travels in the URL and is part of the IV. A device
+            # answers under the same one it was asked with, so this is read
+            # rather than counted independently.
+            sequence = int(self.path.split('seq=')[1])
+            request = json.loads(plug.decrypt(body, sequence).decode('utf-8'))
+            plug.requests.append(request)
+            reply = json.dumps(plug.answer(request)).encode('utf-8')
+            return self._send(plug.encrypt(reply, sequence))
+
+        return self._send(b'', code=404)
+
+
+class FakeKlapPlug(object):
+    """An HS103 hardware v5, answering KLAP over HTTP."""
+
+    def __init__(self, username='me@example.com', password='hunter2',
+                 scheme='v1', relay_state=0):
+        import kasa_klap as klap_module
+
+        globals()['kasa_klap'] = klap_module
+        self.username = username
+        self.password = password
+        self.scheme = scheme
+        self.relay_state = relay_state
+        self.remote_seed = bytes(bytearray(range(0x10, 0x20)))
+        self.local_seed = b''
+        self.key = b''
+        self.iv = b''
+        self.signature = b''
+        self.requests = []
+        self.cookie_seen = ''
+        self.refuse_handshake = False
+
+        self.server = HTTPServer(('127.0.0.1', 0), _KlapHandler)
+        self.server.plug = self
+        self.port = self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.daemon = True
+        self.thread.start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(2.0)
+
+    def digest(self):
+        if self.scheme == 'v2':
+            return hashlib.sha256(
+                hashlib.sha1(self.username.encode()).digest()
+                + hashlib.sha1(self.password.encode()).digest()).digest()
+        return hashlib.md5(
+            hashlib.md5(self.username.encode()).digest()
+            + hashlib.md5(self.password.encode()).digest()).digest()
+
+    def derive(self, digest):
+        """The session key, worked out here rather than borrowed from the
+        client -- otherwise the tests would only prove the two agree."""
+        material = self.local_seed + self.remote_seed + digest
+        self.key = hashlib.sha256(b'lsk' + material).digest()[:16]
+        self.iv = hashlib.sha256(b'iv' + material).digest()[:12]
+        self.signature = hashlib.sha256(b'ldk' + material).digest()[:28]
+
+    def _cipher(self, sequence):
+        from aes import AES
+
+        return AES(self.key, self.iv + struct.pack('>i', sequence))
+
+    def decrypt(self, body, sequence):
+        plain = bytearray(self._cipher(sequence).decrypt(body[32:]))
+        return bytes(plain[:len(plain) - plain[-1]])
+
+    def encrypt(self, message, sequence):
+        padding = 16 - (len(message) % 16)
+        padded = message + bytes(bytearray([padding] * padding))
+        ciphertext = self._cipher(sequence).encrypt(padded)
+        signed = hashlib.sha256(
+            self.signature + struct.pack('>i', sequence) + ciphertext).digest()
+        return signed + ciphertext
+
+    def answer(self, request):
+        system = request.get('system') or {}
+        if 'get_sysinfo' in system:
+            return {'system': {'get_sysinfo': {
+                'deviceId': '8006KLAP', 'alias': 'Christmas Tree',
+                'model': 'HS103(US)', 'sw_ver': '1.1.3', 'hw_ver': '5.0',
+                'relay_state': self.relay_state}}}
+        relay = system.get('set_relay_state')
+        if relay is not None:
+            self.relay_state = relay.get('state')
+            return {'system': {'set_relay_state': {'err_code': 0}}}
+        return {'system': {}}
+
+
+class TestKasaKlap(unittest.TestCase):
+    """Later Kasa hardware: same model number, different protocol."""
+
+    USER = 'me@example.com'
+    PASSWORD = 'hunter2'
+
+    def setUp(self):
+        clean_profile()
+        xbmcaddon.reset()
+        for name in ('addon_utils', 'paragon_home', 'kasa_driver', 'kasa_lan',
+                     'kasa_klap'):
+            if name in sys.modules:
+                del sys.modules[name]
+        import kasa_klap
+
+        self.klap = kasa_klap
+        self.plug = None
+
+    def tearDown(self):
+        if self.plug is not None:
+            self.plug.close()
+        clean_profile()
+
+    def start(self, **kwargs):
+        kwargs.setdefault('username', self.USER)
+        kwargs.setdefault('password', self.PASSWORD)
+        self.plug = FakeKlapPlug(**kwargs)
+        return self.plug
+
+    def session(self, username=None, password=None):
+        return self.klap.Session(
+            '127.0.0.1',
+            self.USER if username is None else username,
+            self.PASSWORD if password is None else password,
+            port=self.plug.port, timeout=5.0)
+
+    # -- handshake ---------------------------------------------------------
+
+    def test_the_handshake_agrees_a_key_and_a_command_goes_through(self):
+        plug = self.start(relay_state=0)
+        session = self.session()
+
+        session.request({'system': {'set_relay_state': {'state': 1}}})
+
+        self.assertEqual(plug.relay_state, 1)
+
+    def test_the_hash_scheme_is_detected_rather_than_assumed(self):
+        """The device never says which it uses; its handshake hash does."""
+        self.start(scheme='v2')
+
+        session = self.session()
+        session.handshake()
+
+        self.assertEqual(session.scheme, 'v2')
+
+    def test_the_other_scheme_is_detected_too(self):
+        self.start(scheme='v1')
+
+        session = self.session()
+        session.handshake()
+
+        self.assertEqual(session.scheme, 'v1')
+
+    def test_a_wrong_password_is_named_as_the_cause(self):
+        self.start()
+
+        with self.assertRaises(self.klap.KlapAuthError) as caught:
+            self.session(password='wrong').handshake()
+        message = str(caught.exception)
+        self.assertIn('account it is registered to', message)
+
+    def test_a_refused_handshake_is_an_auth_error_not_a_network_one(self):
+        """HTTP 403 means the credentials, not the connection."""
+        plug = self.start()
+        plug.refuse_handshake = True
+
+        with self.assertRaises(self.klap.KlapAuthError):
+            self.session().handshake()
+
+    def test_the_session_cookie_is_carried_after_the_handshake(self):
+        plug = self.start()
+
+        self.session().request({'system': {'get_sysinfo': {}}})
+
+        self.assertIn(self.klap.SESSION_COOKIE, plug.cookie_seen)
+
+    def test_an_unreachable_device_is_a_plain_reach_error(self):
+        self.start()
+        session = self.klap.Session('127.0.0.1', self.USER, self.PASSWORD,
+                                    port=_free_port(), timeout=2.0)
+
+        with self.assertRaises(self.klap.KlapError) as caught:
+            session.handshake()
+        self.assertIn('Could not reach', str(caught.exception))
+
+    # -- through the driver ------------------------------------------------
+
+    def driver(self, username=None, password=None):
+        from kasa_driver import KasaDriver
+
+        return KasaDriver(
+            timeout=5.0,
+            username=self.USER if username is None else username,
+            password=self.PASSWORD if password is None else password)
+
+    def klap_device(self):
+        return Device('8006KLAP', name='Christmas Tree', driver='kasa',
+                      ip='127.0.0.1', lan=True, native_id='8006KLAP',
+                      driver_data={'protocol': 'klap',
+                                   'http_port': self.plug.port})
+
+    def test_a_klap_plug_switches_through_the_driver(self):
+        plug = self.start(relay_state=0)
+
+        self.driver().turn(self.klap_device(), True)
+
+        self.assertEqual(plug.relay_state, 1)
+
+    def test_a_klap_plug_reports_its_state(self):
+        self.start(relay_state=1)
+
+        self.assertEqual(self.driver().get_state(self.klap_device()),
+                         {'power': 'on'})
+
+    def test_without_credentials_it_says_what_is_needed_and_where(self):
+        """Listed and honest, rather than hidden or looking broken."""
+        self.start()
+
+        with self.assertRaises(ControlError) as caught:
+            self.driver(username='', password='').turn(self.klap_device(),
+                                                       True)
+        message = str(caught.exception)
+        self.assertIn('TP-Link account', message)
+        self.assertIn('Settings', message)
+        self.assertIn('nothing is sent to TP-Link', message)
+
+    def test_a_legacy_plug_is_untouched_by_any_of_this(self):
+        """Hardware v2 must keep working with no account at all."""
+        from kasa_driver import KasaDriver
+
+        legacy = Device('8006OLD', name='Egg Maker', driver='kasa',
+                        ip='10.0.0.25', lan=True, native_id='8006OLD',
+                        driver_data={'protocol': 'legacy'})
+        driver = KasaDriver(username='', password='')
+
+        self.assertFalse(driver.is_klap(legacy))
+        self.assertTrue(driver.is_klap(self.klap_device_stub()))
+
+    def klap_device_stub(self):
+        return Device('8006KLAP', name='Tree', driver='kasa',
+                      driver_data={'protocol': 'klap'})
+
+    def test_a_device_cached_before_klap_existed_is_treated_as_legacy(self):
+        """A devices.json written by v2.7 records no protocol at all."""
+        from kasa_driver import KasaDriver
+
+        old = Device('8006OLD', name='Egg Maker', driver='kasa',
+                     ip='10.0.0.25', lan=True, native_id='8006OLD')
+
+        self.assertFalse(KasaDriver().is_klap(old))
+
+    def test_discovery_warns_once_about_devices_needing_an_account(self):
+        from kasa_driver import KasaDriver
+
+        driver = KasaDriver(username='', password='')
+        found = driver._devices_for({
+            'device_id': '8006KLAP', 'ip': '10.0.0.31', 'model': 'HS103',
+            'alias': '', 'children': [], 'protocol': 'klap', 'http_port': 80})
+
+        self.assertEqual(len(found), 1)
+        self.assertTrue(driver.is_klap(found[0]))
+        # A KLAP announcement carries no alias, so a usable name is invented
+        # rather than leaving the row blank.
+        self.assertEqual(found[0].name, 'HS103 (KLAP)')
+
+    # -- the cipher --------------------------------------------------------
+
+    def test_each_request_uses_a_new_sequence_number(self):
+        """The sequence is part of the IV, so reusing one repeats an IV."""
+        session = self.klap.Encryption(b'a' * 16, b'b' * 16, b'c' * 16)
+
+        _first, one = session.encrypt(b'{}')
+        _second, two = session.encrypt(b'{}')
+
+        self.assertEqual(two, one + 1)
+
+    def test_the_sequence_stays_inside_a_signed_32_bit_range(self):
+        """The device packs it as a signed int; overflowing would break it."""
+        session = self.klap.Encryption(b'a' * 16, b'b' * 16, b'c' * 16)
+        session.seq = 0x7FFFFFFF
+
+        _body, sequence = session.encrypt(b'{}')
+
+        self.assertEqual(sequence, -0x80000000)
+
+    def test_a_payload_round_trips_through_the_cipher(self):
+        session = self.klap.Encryption(b'a' * 16, b'b' * 16, b'c' * 16)
+        mirror = self.klap.Encryption(b'a' * 16, b'b' * 16, b'c' * 16)
+
+        body, _sequence = session.encrypt(b'{"system":{}}')
+        mirror.seq = session.seq
+
+        self.assertEqual(mirror.decrypt(body), b'{"system":{}}')
+
+    def test_both_ends_derive_the_same_key_from_the_two_seeds(self):
+        one = self.klap.Encryption(b'x' * 16, b'y' * 16, b'z' * 16)
+        two = self.klap.Encryption(b'x' * 16, b'y' * 16, b'z' * 16)
+
+        self.assertEqual(one.key, two.key)
+        self.assertEqual(len(one.key), 16)
+        self.assertEqual(len(one.iv), 12)
+
+
 class TestKasaDiagnostics(unittest.TestCase):
     """A search that finds nothing has to say why, in order of likelihood."""
 

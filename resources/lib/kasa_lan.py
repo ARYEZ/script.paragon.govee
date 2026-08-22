@@ -27,6 +27,7 @@ wrong:
 Send a TCP command without the prefix and the device simply never answers.
 """
 
+import binascii
 import json
 import socket
 import struct
@@ -36,6 +37,17 @@ from govee_lan import local_addresses
 
 PORT = 9999
 BROADCAST_ADDRESS = '255.255.255.255'
+
+# Later hardware does not answer port 9999 at all. It announces on 20002
+# instead, in clear JSON behind a 16-byte header, and says in that reply which
+# protocol it actually speaks. An HS103 hardware v2 answers the first port; an
+# HS103 hardware v5 -- same model, same box -- answers only the second.
+PORT_2 = 20002
+DISCOVERY_QUERY_2 = binascii.unhexlify(b'020000010000000000000000463cb5d3')
+HEADER_2 = 16
+
+PROTOCOL_LEGACY = 'legacy'
+PROTOCOL_KLAP = 'klap'
 
 # The XOR chain starts here. Not a secret, and not treated as one.
 INITIAL_KEY = 0xAB
@@ -143,6 +155,9 @@ def parse_sysinfo(payload, ip=''):
         'model': (info.get('model') or '').split('(')[0].strip(),
         'relay_state': info.get('relay_state'),
         'children': children,
+        'protocol': PROTOCOL_LEGACY,
+        'encrypt_type': '',
+        'http_port': 80,
         'raw': info,
     }
 
@@ -187,6 +202,17 @@ def sweep_addresses(address):
             if '%s.%d' % (prefix, host) != address]
 
 
+def _queries():
+    """Both generations' searches: (port, payload) for each.
+
+    Sent together rather than one after the other. Which generation a plug is
+    cannot be known before asking, and asking twice costs one extra datagram
+    per host.
+    """
+    return [(PORT, encrypt(_dumps(INFO_COMMAND))),
+            (PORT_2, DISCOVERY_QUERY_2)]
+
+
 def _open_sockets(log):
     """One socket per local address, plus one on the default route.
 
@@ -212,7 +238,13 @@ def _open_sockets(log):
 
 
 def _collect(sockets, found):
-    """Read every reply waiting on every socket. Returns how many arrived."""
+    """Read every reply waiting on every socket. Returns how many arrived.
+
+    A reply may be either generation, and which port it came from is not
+    knowable here, so both readings are tried. They cannot be confused with
+    each other: one is XOR-obfuscated JSON and the other is clear JSON behind
+    a header, and neither parses as the other.
+    """
     arrived = 0
     for _address, sock in sockets:
         while True:
@@ -220,14 +252,22 @@ def _collect(sockets, found):
                 data, sender = sock.recvfrom(8192)
             except socket.error:
                 break
-            device = parse_sysinfo(_loads(decrypt(data)), ip=sender[0])
-            if device:
-                found[device['device_id']] = device
-                arrived += 1
+            device = (parse_sysinfo(_loads(decrypt(data)), ip=sender[0])
+                      or parse_announcement(data, ip=sender[0]))
+            if not device:
+                continue
+            known = found.get(device['device_id'])
+            # A device that answers both ports is one device. The legacy reply
+            # is the more useful of the two -- it carries the switch state --
+            # so it is not overwritten by an announcement.
+            if known and known.get('protocol') == PROTOCOL_LEGACY:
+                continue
+            found[device['device_id']] = device
+            arrived += 1
     return arrived
 
 
-def _run(sockets, plan, payload, window, found):
+def _run(sockets, plan, window, found):
     """Work through a send plan while reading throughout.
 
     Sending and listening are interleaved rather than sequential: a sweep is
@@ -240,9 +280,9 @@ def _run(sockets, plan, payload, window, found):
     deadline = time.time() + window
     while time.time() < deadline:
         if index < len(plan):
-            for sock, target in plan[index:index + SEND_BATCH]:
+            for sock, target, port, body in plan[index:index + SEND_BATCH]:
                 try:
-                    sock.sendto(payload, (target, PORT))
+                    sock.sendto(body, (target, port))
                 except socket.error:
                     pass
             index = min(len(plan), index + SEND_BATCH)
@@ -292,7 +332,6 @@ def search(timeout=5.0, log_func=None, sweep=True, hints=None):
     depend on broadcast working at all.
     """
     log = log_func or (lambda message: None)
-    payload = encrypt(_dumps(INFO_COMMAND))
     found = {}
     report = {'broadcast': 0, 'sweep': 0, 'subnets': [], 'targets': 0,
               'addresses': []}
@@ -308,11 +347,12 @@ def search(timeout=5.0, log_func=None, sweep=True, hints=None):
         for address, sock in sockets:
             for target in [BROADCAST_ADDRESS, directed_broadcast(address)]:
                 if target:
-                    plan.append((sock, target))
+                    for port, body in _queries():
+                        plan.append((sock, target, port, body))
         # Repeated because a broadcast is a single datagram with no
         # retransmission, and several devices answering at once is exactly
         # when one goes missing.
-        report['broadcast'] = _run(sockets, plan * BROADCAST_ROUNDS, payload,
+        report['broadcast'] = _run(sockets, plan * BROADCAST_ROUNDS,
                                    max(1.5, float(timeout) * 0.4), found)
         log('Kasa broadcast found %d device(s)' % report['broadcast'])
 
@@ -328,14 +368,15 @@ def search(timeout=5.0, log_func=None, sweep=True, hints=None):
                     # interface reaches a subnet is the routing table's
                     # business, and it is better at it than a guess here.
                     for _address, sock in sockets:
-                        plan.append((sock, target))
+                        for port, body in _queries():
+                            plan.append((sock, target, port, body))
             report['targets'] = len(plan)
             log('Kasa sweep: %d host(s) across %s'
                 % (len(plan), ', '.join('%s.0/24' % s
                                         for s in report['subnets'])
                    or 'no subnet'))
             if plan:
-                report['sweep'] = _run(sockets, plan, payload,
+                report['sweep'] = _run(sockets, plan,
                                        max(2.5, float(timeout) * 0.6), found)
                 log('Kasa sweep found %d more' % report['sweep'])
     finally:
@@ -344,6 +385,43 @@ def search(timeout=5.0, log_func=None, sweep=True, hints=None):
 
     log('Kasa discovery found %d device(s) in total' % len(found))
     return list(found.values()), report
+
+
+def parse_announcement(data, ip=''):
+    """Decode a port-20002 announcement into a device dict, or None.
+
+    These carry a 16-byte header before clear JSON, and describe the device
+    rather than its state -- including which protocol it speaks, which is the
+    part that matters. A device here is not necessarily usable; it is simply
+    present and honest about what it wants.
+    """
+    if len(data) <= HEADER_2:
+        return None
+    payload = _loads(bytes(data)[HEADER_2:])
+    if not isinstance(payload, dict):
+        return None
+    result = payload.get('result')
+    if not isinstance(result, dict):
+        return None
+
+    device_id = result.get('device_id') or result.get('mac') or ''
+    if not device_id:
+        return None
+
+    scheme = result.get('mgt_encrypt_schm') or {}
+    encrypt = str(scheme.get('encrypt_type') or '').upper()
+    return {
+        'device_id': device_id,
+        'ip': result.get('ip') or ip,
+        'alias': result.get('alias') or '',
+        'model': (result.get('device_model') or '').split('(')[0].strip(),
+        'relay_state': None,
+        'children': [],
+        'protocol': PROTOCOL_KLAP if encrypt == 'KLAP' else PROTOCOL_LEGACY,
+        'encrypt_type': encrypt,
+        'http_port': int(scheme.get('http_port') or 80),
+        'raw': result,
+    }
 
 
 def discover(timeout=5.0, log_func=None, sweep=True, hints=None):

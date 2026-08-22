@@ -401,14 +401,31 @@ Example `keymaps/govee.xml` in your Kodi userdata:
 
 ## Smart plugs (TP-Link Kasa)
 
-**Nothing to set up.** Run **Refresh devices** and they appear, already
-carrying the names you gave them in the Kasa app. No account, no local key, no
-protocol version to match — a Kasa plug that answers a search can be switched
-with what the search returned.
+**Older hardware needs nothing at all.** Run **Refresh devices** and it
+appears, already carrying the name you gave it in the Kasa app. No account, no
+local key, nothing to match.
 
-That is worth stating next to the Tuya section, which needs a cloud project
-and a 16-character key before a plug will do anything. The difference is the
-vendor's, not the add-on's.
+**Later hardware needs your TP-Link account.** Same model number, same box,
+same app — an HS103 hardware v2 answers an open protocol on port 9999, and an
+HS103 hardware v5 does not answer port 9999 at all. It speaks KLAP over HTTP
+and will not say a word until both ends have proved they know the password of
+the account the plug is registered to.
+
+Check which you have in the Kasa app: **device settings → Device Info →
+Hardware Version**. Both are supported; only the second needs a login, under
+**Settings → Kasa**.
+
+That login is used on your own network only — nothing is sent to TP-Link, and
+the plug is switched locally as before. It is stored in Kodi's add-on settings
+in plain text, which is worth knowing before you type it in. There is no way
+around it: TP-Link made a local protocol check a cloud credential, and the
+plug refuses to answer without it.
+
+A search sends both generations' queries together, since which one a plug is
+cannot be known before asking. Later hardware announces itself on a different
+UDP port and says in that announcement which protocol it speaks, so it is
+listed and named even before an account is entered — it simply says what it
+needs.
 
 Kasa's local protocol obfuscates its JSON with a running XOR rather than
 encrypting it. **Anything on your network can switch these plugs** — that was
@@ -453,10 +470,8 @@ responses, so they are reported differently. In short: these plugs are
 2.4GHz only and neither broadcast nor the sweep crosses subnets, so a plug on a
 guest SSID or a separate VLAN from Kodi will never be heard.
 
-One cause has no workaround. Newer TP-Link firmware on some models has closed
-the local protocol and talks only to the cloud. A plug that works in the Kasa
-app but answers nothing here is almost certainly that, and no add-on can get
-around it.
+A plug that works in the Kasa app but is not found here at all — by either
+generation's query — is on a different subnet or SSID from Kodi.
 
 ---
 

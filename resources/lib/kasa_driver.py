@@ -19,6 +19,7 @@ app comes back in its system info, so these arrive named rather than as
 "Kasa 1E3E" waiting to be identified one by one.
 """
 
+import kasa_klap
 import kasa_lan
 from devices import CAP_POWER, CAP_STATE, ControlError, Device
 
@@ -29,12 +30,17 @@ class KasaDriver(object):
     DRIVER_ID = 'kasa'
     DRIVER_LABEL = 'Kasa'
 
-    def __init__(self, log_func=None, timeout=5.0, known_ips=None):
+    def __init__(self, log_func=None, timeout=5.0, known_ips=None,
+                 username='', password=''):
         self.timeout = timeout
         self._log = log_func or (lambda message: None)
         # A callable rather than a list: the device cache is loaded lazily and
         # the drivers are built before it is read.
         self._known_ips = known_ips or (lambda: [])
+        # Only later hardware needs these, and only because TP-Link made a
+        # local protocol check a cloud credential.
+        self.username = username or ''
+        self.password = password or ''
 
     # -- discovery ---------------------------------------------------------
 
@@ -58,6 +64,13 @@ class KasaDriver(object):
             devices.extend(self._devices_for(entry))
 
         warnings = []
+        locked = [d for d in devices
+                  if self.is_klap(d) and not self.has_credentials()]
+        if locked:
+            warnings.append(
+                '%d Kasa device(s) are later hardware that needs your '
+                'TP-Link account before they can be switched. Settings -> '
+                'Kasa.' % len(locked))
         if counts.get('sweep'):
             # Worth saying rather than silently papering over: a network that
             # drops broadcast will keep doing it, and it explains why the Kasa
@@ -97,6 +110,15 @@ class KasaDriver(object):
             name = child.get('alias') or ''
             if not name:
                 name = '%s outlet' % (entry.get('alias') or 'Kasa')
+        protocol = entry.get('protocol') or kasa_lan.PROTOCOL_LEGACY
+        data['protocol'] = protocol
+        if protocol == kasa_lan.PROTOCOL_KLAP:
+            data['http_port'] = entry.get('http_port') or kasa_klap.HTTP_PORT
+        if not name:
+            # A KLAP announcement carries no alias -- the name lives behind
+            # the very handshake we may not be able to complete yet.
+            name = '%s (%s)' % (entry.get('model') or 'Kasa',
+                                device_id[-4:].upper())
         return Device(
             driver=self.DRIVER_ID,
             device_id='%s#%s' % (device_id, child['id']) if child
@@ -135,19 +157,48 @@ class KasaDriver(object):
         data = getattr(device, 'driver_data', None) or {}
         return data.get('child') or None
 
+    @staticmethod
+    def is_klap(device):
+        data = getattr(device, 'driver_data', None) or {}
+        return data.get('protocol') == kasa_lan.PROTOCOL_KLAP
+
+    def has_credentials(self):
+        return bool(self.username and self.password)
+
     def _session(self, device):
+        """The right client for whichever protocol this device speaks.
+
+        Two generations of the same model number need entirely different
+        transports, which is exactly why the protocol is recorded when the
+        device is found rather than worked out again at each command.
+        """
         if not device.ip:
             raise ControlError('%s has no address. Run a device refresh.'
                                % device.name)
-        return kasa_lan.Session(device.ip, timeout=self.timeout,
-                                log_func=self._log)
+
+        if not self.is_klap(device):
+            return kasa_lan.Session(device.ip, timeout=self.timeout,
+                                    log_func=self._log)
+
+        if not self.has_credentials():
+            raise ControlError(
+                '%s is later Kasa hardware, which will not answer without '
+                'the TP-Link account it is registered to.\n\nEnter that '
+                'account under Settings -> Kasa. It is used on your own '
+                'network only; nothing is sent to TP-Link.' % device.name)
+
+        data = getattr(device, 'driver_data', None) or {}
+        return _KlapAdapter(
+            kasa_klap.Session(device.ip, self.username, self.password,
+                              port=data.get('http_port'),
+                              timeout=self.timeout, log_func=self._log))
 
     # -- state verbs -------------------------------------------------------
 
     def turn(self, device, on):
         try:
             self._session(device).set_relay(bool(on), self.child_id(device))
-        except kasa_lan.KasaError as exc:
+        except (kasa_lan.KasaError, kasa_klap.KlapError) as exc:
             raise ControlError('%s: %s' % (device.name, exc))
         return True
 
@@ -183,7 +234,8 @@ class KasaDriver(object):
     def get_state(self, device):
         try:
             info = self._session(device).info()
-        except (kasa_lan.KasaError, ControlError) as exc:
+        except (kasa_lan.KasaError, kasa_klap.KlapError,
+                ControlError) as exc:
             self._log('Could not read %s: %s' % (device.name, exc))
             return None
         return self._state_from_info(device, info)
@@ -208,7 +260,8 @@ class KasaDriver(object):
             group = groups[plug]
             try:
                 info = self._session(group[0]).info()
-            except (kasa_lan.KasaError, ControlError) as exc:
+            except (kasa_lan.KasaError, kasa_klap.KlapError,
+                ControlError) as exc:
                 self._log('Could not read %s: %s' % (group[0].name, exc))
                 info = None
             for device in group:
@@ -219,7 +272,8 @@ class KasaDriver(object):
         """Read the device and report the result in words."""
         try:
             info = self._session(device).info()
-        except (kasa_lan.KasaError, ControlError) as exc:
+        except (kasa_lan.KasaError, kasa_klap.KlapError,
+                ControlError) as exc:
             return False, str(exc)
 
         state = self._state_from_info(device, info)
@@ -228,3 +282,38 @@ class KasaDriver(object):
         if state is None:
             return True, summary + '\n\nIt did not report a switch state.'
         return True, summary + '\n\nIt is currently %s.' % state['power']
+
+
+class _KlapAdapter(object):
+    """Presents a KLAP session with the same surface as the legacy one.
+
+    The JSON inside the envelope is identical between the two generations --
+    the same get_sysinfo, the same set_relay_state. Only the way it travels
+    changed, so only that is adapted here and the driver above stays free of
+    the distinction.
+    """
+
+    def __init__(self, session):
+        self.session = session
+
+    def info(self):
+        reply = self.session.request(kasa_lan.INFO_COMMAND)
+        info = (reply.get('system') or {}).get('get_sysinfo')
+        if not isinstance(info, dict):
+            raise kasa_klap.KlapError(
+                '%s did not report its system info' % self.session.ip)
+        return info
+
+    def set_relay(self, on, child_id=None):
+        body = {'system': {'set_relay_state': {'state': 1 if on else 0}}}
+        if child_id:
+            body = dict(body)
+            body['context'] = {'child_ids': [child_id]}
+        reply = self.session.request(body)
+        result = (reply.get('system') or {}).get('set_relay_state') or {}
+        if result.get('err_code'):
+            raise kasa_klap.KlapError(
+                '%s refused the request (error %s)%s'
+                % (self.session.ip, result['err_code'],
+                   ': %s' % result['err_msg'] if result.get('err_msg') else ''))
+        return True

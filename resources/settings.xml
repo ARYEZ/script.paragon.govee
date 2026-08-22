@@ -37,6 +37,14 @@ the add-on ships a single locale.
                  label="Verify the Govee TLS certificate" default="true"/>
     </category>
 
+    <category label="Kasa">
+        <setting type="lsep" label="Only needed for later TP-Link hardware"/>
+        <setting type="lsep" label="Used on your network only - never sent to TP-Link"/>
+        <setting id="kasa_username" type="text" label="TP-Link account e-mail" default=""/>
+        <setting id="kasa_password" type="text" option="hidden"
+                 label="TP-Link account password" default=""/>
+    </category>
+
     <category label="Playback lighting">
         <setting id="playback_sync" type="bool"
                  label="Change the lights with playback" default="false"/>

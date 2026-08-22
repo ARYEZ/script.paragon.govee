@@ -43,6 +43,8 @@ class ParagonHome(object):
         settings['tuya_keys'] = self._tuya_keys
         settings['save_tuya_keys'] = self.save_tuya_keys
         settings['known_ips'] = self.known_ips
+        settings['kasa_username'] = utils.get_setting('kasa_username')
+        settings['kasa_password'] = utils.get_setting('kasa_password')
         self.controller = build_hub(settings)
         self._devices = None
         self._scenes = None

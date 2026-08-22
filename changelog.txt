@@ -1,3 +1,25 @@
+v2.8.0
+- Later Kasa hardware is now supported. An HS103 hardware v2 and an HS103
+  hardware v5 are the same model number in the same box, and speak entirely
+  different protocols: the v2 answers an open protocol on port 9999, and the
+  v5 does not answer port 9999 at all. That is why a search found one plug and
+  not the others, and no amount of sweeping was ever going to fix it.
+- Later hardware speaks KLAP over HTTP, and will not answer until both ends
+  have proved they know the password of the TP-Link account the plug is
+  registered to. Enter that account under Settings -> Kasa. It is used on your
+  own network only -- nothing is sent to TP-Link -- but it is stored in Kodi's
+  settings in plain text, which is worth knowing.
+- A search now sends both generations' queries together, since which one a
+  plug is cannot be known before asking. Later hardware announces on a
+  different UDP port and says which protocol it speaks, so it is listed and
+  named before an account is entered, and says what it needs rather than
+  looking broken.
+- Two credential hash schemes exist and the device does not say which it
+  wants. Both are derived and compared against the hash the device returns in
+  its handshake, which is a definite answer rather than a guess.
+- Nothing changes for older hardware: no account, no key, exactly as before.
+  A device cached before this release is treated as the older protocol.
+
 v2.7.2
 - The Kasa sweep was covering the wrong subnet, so a search still found only
   the plugs broadcast could reach. It worked out which subnet to sweep from

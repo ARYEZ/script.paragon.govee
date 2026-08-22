@@ -1,7 +1,11 @@
-# Paragon Govee
+# Paragon Home
 
-Control your Govee lights from inside Kodi, instead of reaching for the Govee
-desktop or phone app.
+Control your LAN smart home from inside Kodi, instead of reaching for a
+separate app per brand.
+
+Started as Govee light control and grew a driver layer, so it now speaks
+Govee, Broadlink and Tuya. Adding a fourth vendor is a fourth driver, not a
+change to the menus, the scene engine or the device registry.
 
 Part of the **Paragon TV** project, alongside
 [`script.paragontv`](https://github.com/Aryez/script.paragontv),
@@ -14,8 +18,12 @@ Built for **Kodi 17.6 (Krypton)** — `xbmc.python 2.25.0`, Python 2.7.
 
 ## What it does
 
-* **Finds your lights** over the Govee LAN protocol, the Govee cloud API, or both.
-* **Controls them** — power, brightness, RGB colour and colour temperature.
+* **Govee lights** over the Govee LAN protocol, the Govee cloud API, or both —
+  power, brightness, RGB colour and colour temperature.
+* **Broadlink RM blasters** — learn an IR code from a remote and send it back,
+  over the LAN with no Broadlink account.
+* **Tuya smart plugs** — GHome, Gosund, Smart Life and most no-name plugs.
+  Multi-outlet plugs are listed one device per outlet.
 * **Scenes** — named presets (`Movie Night`, `Paused`, `All Off`, …) that you
   can edit in the add-on and re-use everywhere.
 * **Playback lighting** — an optional service that dims when playback starts,
@@ -365,6 +373,84 @@ Example `keymaps/govee.xml` in your Kodi userdata:
   </global>
 </keymap>
 ```
+
+---
+
+## Smart plugs (Tuya)
+
+Everything Tuya-branded is the same platform underneath, whatever the box
+says: GHome, Gosund, Smart Life, Teckin and most no-name plugs.
+
+**Discovery needs nothing.** Tuya devices announce themselves by UDP
+broadcast, so **Refresh devices** finds them with no account and no setup.
+
+**Switching one needs a local key.** This is the one genuine hurdle, and it is
+not something the add-on can work around: a Tuya device will not hand out its
+own key, and the only copy lives in Tuya's cloud. Discovery is still useful
+without it — it tells you the device id you need in order to go and fetch the
+key.
+
+### Getting the key
+
+On any PC with Python 3:
+
+```
+pip install tinytuya
+python -m tinytuya wizard
+```
+
+The wizard needs a free [Tuya IoT Platform](https://iot.tuya.com) account:
+
+1. **Cloud → Create Cloud Project**. Pick the data center that matches the
+   region your phone app account was *created* in — a US account is almost
+   always **Western America**, and this cannot be changed on the app side
+   afterwards. A mismatch here is the usual reason the next step fails.
+2. Accept the default API services. Three of them matter: IoT Core,
+   Authorization Token Management and Smart Home Basic Service.
+3. **Devices → Link App Account → Add App Account → Tuya App Account
+   Authorization**, then scan the QR from your phone app under **Me → scan**
+   (not the scanner inside "Add Device", which expects a device label).
+4. Run the wizard with the project's Access ID and Access Secret. It writes
+   `devices.json` with a 16 character `key` per device.
+
+Treat that file as a password file: anyone on your LAN holding the key can
+switch the plug.
+
+The cloud project is only ever used to fetch keys. Control is pure LAN, and a
+key keeps working after the project's free trial lapses — you would only need
+the portal again after re-pairing the plug, which regenerates its key.
+
+### Entering it
+
+**Manage devices → the plug → Set local key**, then **Test connection**, which
+reads the plug back and says whether the key was accepted. Worth doing: 16
+characters typed on a remote control is an easy thing to get one keystroke
+wrong, and a wrong key otherwise shows up later as a plug that will not
+switch.
+
+### Multi-outlet plugs
+
+A three-outlet strip is three independent switches in one box. Once a plug has
+its key, the next **Refresh devices** asks it what it has and lists one device
+per outlet — `Tuya 9ABC Outlet 1`, `Outlet 2`, `Outlet 3`, `USB` — so a scene
+can switch one outlet without touching the others. Rename them as you would
+any other device. The old single entry disappears at that refresh; it was the
+same hardware and would no longer switch anything.
+
+A single-outlet plug stays one device rather than being called "Outlet 1".
+
+### Plugs in scenes
+
+A plug has power and nothing else, so a scene that sets brightness and colour
+simply switches the plug and sends it nothing it cannot do. One scene can
+therefore drive bulbs and plugs together with no special handling.
+
+### Protocol versions
+
+The device list shows what each plug speaks (`Tuya 3.3`). Versions **3.1 to
+3.3** are driven; **3.4 and 3.5** negotiate a per-connection session key
+before anything else can be said and are not built yet. A plug on one of those
+is still discovered and listed, and says so rather than failing obscurely.
 
 ---
 

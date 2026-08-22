@@ -101,7 +101,18 @@ class ParagonGovee(object):
         return driver
 
     def test_device(self, device):
-        return self._emitter(device).test_connection(device)
+        """Prove a device answers, for drivers that can say so.
+
+        Not routed through _emitter: an IR blaster is not the only thing worth
+        testing, and a plug whose key has just been typed in by remote control
+        is the clearest case of all.
+        """
+        from devices import ControlError
+
+        driver = self.controller.driver_for(device)
+        if driver is None or not hasattr(driver, 'test_connection'):
+            raise ControlError('%s cannot be tested' % device.name)
+        return driver.test_connection(device)
 
     def start_learning(self, device):
         return self._emitter(device).start_learning(device)
@@ -185,6 +196,18 @@ class ParagonGovee(object):
         # light" in Manage devices.
         found_ids = set(d.device_id for d in found)
         missing = [d for d in self.devices if d.device_id not in found_ids]
+
+        # A plug that has just been split into its outlets leaves its old
+        # single entry behind. Keeping it would show a switch that no longer
+        # controls anything, so an entry superseded by the outlets of the same
+        # hardware is the one case where a device that did not answer is still
+        # dropped.
+        superseded = set()
+        for device in found:
+            native = (getattr(device, 'native_id', '') or '').upper()
+            if native and native != device.device_id:
+                superseded.add(native)
+        missing = [d for d in missing if d.device_id not in superseded]
         for device in missing:
             utils.log('%s did not answer this search; keeping its entry'
                       % device.name)

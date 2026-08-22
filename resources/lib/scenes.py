@@ -24,6 +24,9 @@ Fields:
 
 import random
 
+from devices import (CAP_BRIGHTNESS, CAP_COLOR, CAP_COLOR_TEMP,
+                     CAP_POWER)
+
 POWER_ON = 'on'
 POWER_OFF = 'off'
 POWER_KEEP = 'keep'
@@ -385,6 +388,23 @@ def capture_scene(name, devices, states):
     return scene, len(per_device), skipped
 
 
+def _can(controller, device, capability, command):
+    """Whether it is worth sending `command` to this device.
+
+    A scene is written once and applied to whatever is enabled, which now
+    includes devices that have no colour and no brightness at all. Asking the
+    driver what a device claims keeps a plug in a scene from being sent a
+    brightness it can only refuse -- the Govee-era question, "does the bulb
+    list this command", is now the fallback rather than the rule.
+    """
+    getter = getattr(controller, 'capabilities', None)
+    if getter is not None:
+        capabilities = getter(device)
+        if capabilities is not None:
+            return capability in capabilities
+    return device.supports_cmd(command)
+
+
 def apply_settings(controller, device, settings, colors_only=False):
     """Drive one device to one settings dict. Raises ControlError on failure.
 
@@ -398,29 +418,36 @@ def apply_settings(controller, device, settings, colors_only=False):
     at once and a dropped packet leaves a bulb visibly stuck on the last
     colour until the next tick.
     """
+    can_color = _can(controller, device, CAP_COLOR, 'color')
+    can_temp = _can(controller, device, CAP_COLOR_TEMP, 'colorTem')
+
     if colors_only:
-        if settings['mode'] == MODE_COLOR and device.supports_cmd('color'):
+        if settings['mode'] == MODE_COLOR and can_color:
             controller.set_color(device, *settings['color'])
-        elif settings['mode'] == MODE_TEMP and device.supports_cmd('colorTem'):
+        elif settings['mode'] == MODE_TEMP and can_temp:
             controller.set_color_temp(device, settings['kelvin'])
         return
 
+    can_power = _can(controller, device, CAP_POWER, 'turn')
+
     if settings['power'] == POWER_OFF:
-        controller.turn(device, False)
+        if can_power:
+            controller.turn(device, False)
         return
 
-    if settings['power'] == POWER_ON:
+    if settings['power'] == POWER_ON and can_power:
         controller.turn(device, True)
 
     # Brightness before colour: on several Govee models a colour command
     # re-asserts the previous brightness, so setting colour last keeps the
     # two from fighting.
-    if settings['brightness'] is not None and device.supports_cmd('brightness'):
+    if settings['brightness'] is not None \
+            and _can(controller, device, CAP_BRIGHTNESS, 'brightness'):
         controller.set_brightness(device, settings['brightness'])
 
-    if settings['mode'] == MODE_COLOR and device.supports_cmd('color'):
+    if settings['mode'] == MODE_COLOR and can_color:
         controller.set_color(device, *settings['color'])
-    elif settings['mode'] == MODE_TEMP and device.supports_cmd('colorTem'):
+    elif settings['mode'] == MODE_TEMP and can_temp:
         controller.set_color_temp(device, settings['kelvin'])
 
 

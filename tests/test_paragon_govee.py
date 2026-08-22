@@ -10,14 +10,18 @@ transport-selection logic and the scene engine without needing hardware.
     python3 tests/test_paragon_govee.py
 """
 
+import base64
+import hashlib
 import json
 import os
 import shutil
 import socket
+import struct
 import sys
 import threading
 import time
 import unittest
+import zlib
 
 try:
     from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -210,13 +214,21 @@ class RecordingController(object):
     scene engine talk to.
     """
 
-    def __init__(self, fail_on=None):
+    def __init__(self, fail_on=None, caps=None):
         self.calls = []
         self.fail_on = fail_on or set()
+        self.caps = caps
 
-    @staticmethod
-    def capabilities(device):
-        return set(['power', 'brightness', 'color', 'color_temp', 'state'])
+    def capabilities(self, device):
+        """The real implementation unless a test asks for something else.
+
+        Deliberately not a fixed set of everything: a stub that claims every
+        capability for every device cannot catch a scene sending a plug a
+        brightness, which is one of the things this stub exists to watch.
+        """
+        if self.caps is not None:
+            return set(self.caps)
+        return GoveeController.capabilities(device)
 
     @staticmethod
     def commands(device):
@@ -354,6 +366,62 @@ class TestScenes(unittest.TestCase):
         self.assertEqual(applied, 0)
         self.assertEqual(controller.calls, [])
         self.assertTrue(errors)
+
+
+class TestPlugsInScenes(unittest.TestCase):
+    """A scene is written once and applied to whatever is enabled.
+
+    Once that includes plugs, "what commands does this bulb list" is the wrong
+    question -- a plug lists nothing and would be sent everything.
+    """
+
+    def plug(self):
+        return Device('wp9abc#1', name='Office Plug', driver='tuya',
+                      native_id='wp9abc', driver_data={'dp': '1'})
+
+    def test_a_plug_in_a_scene_is_only_switched(self):
+        controller = RecordingController(caps=['power', 'state'])
+        settings = scene_lib.make_scene(
+            'Evening', power=scene_lib.POWER_ON, brightness=40,
+            mode=scene_lib.MODE_COLOR, color=[255, 0, 0])
+
+        scene_lib.apply_settings(controller, self.plug(), settings)
+
+        self.assertEqual([call[0] for call in controller.calls], ['turn'])
+
+    def test_a_plug_still_turns_off_with_the_rest(self):
+        controller = RecordingController(caps=['power', 'state'])
+        settings = scene_lib.make_scene(
+            'All off', power=scene_lib.POWER_OFF)
+
+        scene_lib.apply_settings(controller, self.plug(), settings)
+
+        self.assertEqual(controller.calls, [('turn', 'WP9ABC#1', False)])
+
+    def test_a_cycle_step_passes_a_plug_by(self):
+        """A colour-only step has nothing to say to something with no colour."""
+        controller = RecordingController(caps=['power', 'state'])
+        settings = scene_lib.make_scene(
+            'Mix', power=scene_lib.POWER_ON,
+            mode=scene_lib.MODE_COLOR, color=[0, 255, 0])
+
+        scene_lib.apply_settings(controller, self.plug(), settings,
+                                 colors_only=True)
+
+        self.assertEqual(controller.calls, [])
+
+    def test_a_bulb_is_unaffected_by_the_capability_gate(self):
+        """The Govee path must behave exactly as it did before."""
+        controller = RecordingController()
+        bulb = Device('AA:BB', name='Lamp', supports=['turn', 'brightness'])
+        settings = scene_lib.make_scene(
+            'Evening', power=scene_lib.POWER_ON, brightness=40,
+            mode=scene_lib.MODE_COLOR, color=[255, 0, 0])
+
+        scene_lib.apply_settings(controller, bulb, settings)
+
+        self.assertEqual([call[0] for call in controller.calls],
+                         ['turn', 'brightness'])
 
 
 class TestHexColours(unittest.TestCase):
@@ -1752,6 +1820,158 @@ class TestTuyaDiagnostics(unittest.TestCase):
         self.assertEqual(report['devices'], [])
 
 
+class FakeTuyaPlug(object):
+    """A Tuya plug that speaks the real wire protocol over loopback TCP.
+
+    It is strict on purpose. The 3.3 rule that a status query carries no
+    version header while a control does is the single easiest thing to get
+    wrong in this protocol, and a lenient fake would accept both and prove
+    nothing -- so a request framed the wrong way is answered with the same
+    error a real device gives.
+    """
+
+    def __init__(self, key=b'0123456789abcdef', version='3.3', dps=None,
+                 header_on_status_reply=True):
+        import tuya_lan
+
+        self.tuya_lan = tuya_lan
+        self.key = key
+        self.version = version
+        self.dps = dict(dps or {'1': False})
+        self.header_on_status_reply = header_on_status_reply
+        self.requests = []
+        self.connections = 0
+        self.refuse = None
+
+        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server.bind(('127.0.0.1', 0))
+        self.server.listen(5)
+        self.server.settimeout(0.3)
+        self.port = self.server.getsockname()[1]
+
+        self.running = True
+        self.thread = threading.Thread(target=self._serve)
+        self.thread.daemon = True
+        self.thread.start()
+
+    # -- lifecycle ---------------------------------------------------------
+
+    def close(self):
+        self.running = False
+        self.thread.join(2.0)
+        self.server.close()
+
+    def _serve(self):
+        while self.running:
+            try:
+                conn, _addr = self.server.accept()
+            except (socket.timeout, socket.error):
+                continue
+            self.connections += 1
+            try:
+                conn.settimeout(1.0)
+                data = conn.recv(4096)
+                if data:
+                    reply = self._handle(data)
+                    if reply:
+                        conn.sendall(reply)
+            except socket.error:
+                pass
+            finally:
+                try:
+                    conn.close()
+                except socket.error:
+                    pass
+
+    # -- protocol ----------------------------------------------------------
+
+    def _cipher(self):
+        from aes import AESECB
+
+        return AESECB(self.key)
+
+    def _handle(self, data):
+        prefix, sequence, command, length = struct.unpack('>4I', data[0:16])
+        assert prefix == self.tuya_lan.PREFIX
+        payload = data[16:16 + length - 8]
+        self.requests.append((command, payload))
+
+        if self.refuse is not None:
+            return self._packet(sequence, command, b'device busy',
+                                retcode=self.refuse)
+
+        try:
+            body = self._decode_request(command, payload)
+        except ValueError:
+            # A real device encrypts its error under its own key, so a client
+            # whose key is wrong cannot read the reason either. Returning
+            # plain text here would hand the client a legibility it does not
+            # have on the wire.
+            return self._packet(sequence, command,
+                                self._encode_reply({'err': 'decrypt failed'}),
+                                retcode=1)
+
+        if command == self.tuya_lan.CMD_STATUS:
+            return self._packet(sequence, command,
+                                self._encode_reply({'dps': dict(self.dps)}))
+
+        for key, value in (body.get('dps') or {}).items():
+            self.dps[str(key)] = value
+        return self._packet(sequence, command, b'')
+
+    def _decode_request(self, command, payload):
+        if self.version.startswith('3.1'):
+            if command == self.tuya_lan.CMD_STATUS:
+                if payload[:3] == b'3.1':
+                    raise ValueError('3.1 status queries are sent in clear')
+                return json.loads(payload.decode('utf-8'))
+            if payload[:3] != b'3.1':
+                raise ValueError('3.1 controls need the version header')
+            signature, encoded = payload[3:19], payload[19:]
+            expected = hashlib.md5(
+                b'data=' + encoded + b'||lpv=3.1||' + self.key
+            ).hexdigest()[8:24].encode('utf-8')
+            if signature != expected:
+                raise ValueError('bad signature')
+            return json.loads(
+                self._cipher().decrypt(base64.b64decode(encoded))
+                .decode('utf-8'))
+
+        header = self.version[:3].encode('utf-8')
+        if command == self.tuya_lan.CMD_STATUS:
+            if payload[:3] == header:
+                raise ValueError('status queries carry no version header')
+        else:
+            if payload[:3] != header:
+                raise ValueError('controls need the version header')
+            payload = payload[15:]
+        return json.loads(self._cipher().decrypt(payload).decode('utf-8'))
+
+    def _encode_reply(self, body):
+        raw = json.dumps(body).encode('utf-8')
+        if self.version.startswith('3.1'):
+            encoded = base64.b64encode(self._cipher().encrypt(raw))
+            signature = hashlib.md5(
+                b'data=' + encoded + b'||lpv=3.1||' + self.key
+            ).hexdigest()[8:24].encode('utf-8')
+            return b'3.1' + signature + encoded
+        encrypted = self._cipher().encrypt(raw)
+        if not self.header_on_status_reply:
+            return encrypted
+        return self.version[:3].encode('utf-8') + (b'\x00' * 12) + encrypted
+
+    def _packet(self, sequence, command, payload, retcode=0):
+        body = bytearray(struct.pack('>4I', self.tuya_lan.PREFIX, sequence,
+                                     command, len(payload) + 12))
+        body.extend(struct.pack('>I', retcode))
+        body.extend(payload)
+        crc = zlib.crc32(bytes(body)) & 0xFFFFFFFF
+        body.extend(struct.pack('>I', crc))
+        body.extend(struct.pack('>I', self.tuya_lan.SUFFIX))
+        return bytes(body)
+
+
 class TestTuyaDriver(unittest.TestCase):
     """A plug is discoverable long before it is controllable."""
 
@@ -1921,6 +2141,270 @@ class TestTuyaDriver(unittest.TestCase):
         with self.assertRaises(t.TuyaError) as caught:
             session.parse_packet(reply)
         self.assertIn('error 1', str(caught.exception))
+
+
+class TestTuyaControl(unittest.TestCase):
+    """Switching a plug, against a device that speaks the real protocol."""
+
+    KEY = '0123456789abcdef'
+    WP9_DPS = {
+        '1': False, '2': True, '3': False,   # the three mains outlets
+        '7': True,                           # the USB bank
+        '9': 0, '10': 0, '11': 0, '15': 0,   # countdown timers
+        '38': 'last', '40': False,           # relay memory, child lock
+    }
+
+    def setUp(self):
+        clean_profile()
+        xbmcaddon.reset()
+        xbmcgui.reset()
+        for name in ('addon_utils', 'paragon_govee', 'tuya_driver',
+                     'tuya_lan', 'hub'):
+            if name in sys.modules:
+                del sys.modules[name]
+        import tuya_lan
+
+        self.tuya_lan = tuya_lan
+        self.real_port = tuya_lan.CONTROL_PORT
+        self.plug = None
+
+    def tearDown(self):
+        self.tuya_lan.CONTROL_PORT = self.real_port
+        if self.plug is not None:
+            self.plug.close()
+        clean_profile()
+
+    def start(self, **kwargs):
+        kwargs.setdefault('key', self.KEY.encode('utf-8'))
+        self.plug = FakeTuyaPlug(**kwargs)
+        self.tuya_lan.CONTROL_PORT = self.plug.port
+        return self.plug
+
+    def driver(self, keys=None):
+        from tuya_driver import TuyaDriver
+
+        return TuyaDriver(keys=keys if keys is not None else
+                          {'wp9abc': self.KEY}, timeout=3.0)
+
+    def device(self, dp=None, version='3.3'):
+        data = {'version': version}
+        if dp:
+            data['dp'] = dp
+        return Device('wp9abc%s' % ('#%s' % dp if dp else ''),
+                      name='Office Plug', driver='tuya', ip='127.0.0.1',
+                      lan=True, native_id='wp9abc', driver_data=data)
+
+    # -- the wire ----------------------------------------------------------
+
+    def test_a_33_plug_switches_on_and_off(self):
+        plug = self.start(dps={'1': False})
+        driver = self.driver()
+
+        driver.turn(self.device(), True)
+        self.assertTrue(plug.dps['1'])
+
+        driver.turn(self.device(), False)
+        self.assertFalse(plug.dps['1'])
+
+    def test_a_31_plug_switches_too(self):
+        """3.1 signs its payloads and sends status in clear; 3.3 does neither."""
+        plug = self.start(version='3.1', dps={'1': False})
+        driver = self.driver()
+
+        driver.turn(self.device(version='3.1'), True)
+        self.assertTrue(plug.dps['1'])
+        self.assertEqual(driver.get_state(self.device(version='3.1')),
+                         {'power': 'on', 'dps': {'1': True}})
+
+    def test_a_status_query_carries_no_version_header_on_33(self):
+        """The rule that catches everyone, asserted rather than assumed.
+
+        A 3.3 control needs the version header and a 3.3 status query must not
+        have it. Sending the header on a query comes back as a device error,
+        which reads exactly like a wrong key and is not one.
+        """
+        self.start(dps={'1': True})
+        driver = self.driver()
+
+        driver.turn(self.device(), False)
+        driver.get_state(self.device())
+
+        by_command = dict((command, payload)
+                          for command, payload in self.plug.requests)
+        self.assertEqual(by_command[self.tuya_lan.CMD_CONTROL][:3], b'3.3')
+        self.assertNotEqual(by_command[self.tuya_lan.CMD_STATUS][:3], b'3.3')
+
+    def test_a_reply_without_the_version_header_is_read_too(self):
+        """Devices differ on whether a status reply is headered. Both work."""
+        self.start(dps={'1': True}, header_on_status_reply=False)
+
+        self.assertEqual(self.driver().get_state(self.device()),
+                         {'power': 'on', 'dps': {'1': True}})
+
+    def test_a_wrong_key_is_named_as_the_likely_cause(self):
+        """An unreadable reply on this protocol means one thing."""
+        self.start(dps={'1': True})
+        driver = self.driver(keys={'wp9abc': 'ffffffffffffffff'})
+
+        self.assertIsNone(driver.get_state(self.device()))
+        with self.assertRaises(ControlError) as caught:
+            driver.turn(self.device(), True)
+        self.assertIn('local key', str(caught.exception).lower())
+
+    def test_a_device_error_reaches_the_user_as_words(self):
+        plug = self.start()
+        plug.refuse = 1
+        driver = self.driver()
+
+        with self.assertRaises(ControlError) as caught:
+            driver.turn(self.device(), True)
+        message = str(caught.exception)
+        self.assertIn('Office Plug', message)
+        self.assertIn('device busy', message)
+
+    def test_a_reply_split_across_reads_is_reassembled(self):
+        """TCP may cut anywhere; framing is by declared length, not by read."""
+        packet = self.tuya_lan.Session(
+            '127.0.0.1', 'wp9abc', self.KEY).build_packet(0x0A, b'payload')
+        stream = b'\x00\x00' + packet + packet[:9]
+
+        packets, leftover = self.tuya_lan.Session.split_packets(stream)
+        self.assertEqual(len(packets), 1)
+        self.assertEqual(packets[0], packet)
+        self.assertEqual(leftover, packet[:9])
+
+    def test_an_unsupported_version_says_which_and_why(self):
+        self.start()
+        driver = self.driver()
+
+        with self.assertRaises(ControlError) as caught:
+            driver.turn(self.device(version='3.4'), True)
+        message = str(caught.exception)
+        self.assertIn('3.4', message)
+        self.assertIn('session key', message)
+
+    # -- outlets -----------------------------------------------------------
+
+    def test_a_multi_outlet_plug_is_listed_once_per_outlet(self):
+        """A WP9 is four switches in a box, not one."""
+        self.start(dps=self.WP9_DPS)
+        driver = self.driver()
+
+        found = driver._devices_for(
+            {'device_id': 'wp9abc', 'ip': '127.0.0.1', 'version': '3.3'})
+
+        self.assertEqual([d.driver_data['dp'] for d in found],
+                         ['1', '2', '3', '7'])
+        self.assertEqual([d.name for d in found],
+                         ['Tuya 9ABC Outlet 1', 'Tuya 9ABC Outlet 2',
+                          'Tuya 9ABC Outlet 3', 'Tuya 9ABC USB'])
+        # Countdowns, relay memory and the child lock are not outlets.
+        for device in found:
+            self.assertNotIn(device.driver_data['dp'],
+                             ('9', '10', '11', '15', '38', '40'))
+
+    def test_every_outlet_keeps_the_plug_id_for_the_wire(self):
+        """The suffix is ours; the device would disown it."""
+        self.start(dps=self.WP9_DPS)
+
+        found = self.driver()._devices_for(
+            {'device_id': 'wp9abc', 'ip': '127.0.0.1', 'version': '3.3'})
+
+        self.assertEqual(set(d.native_id for d in found), set(['wp9abc']))
+        self.assertEqual(len(set(d.device_id for d in found)), 4)
+
+    def test_each_outlet_switches_only_itself(self):
+        plug = self.start(dps=self.WP9_DPS)
+        driver = self.driver()
+
+        driver.turn(self.device(dp='2'), False)
+
+        self.assertFalse(plug.dps['2'])
+        self.assertFalse(plug.dps['1'])
+        self.assertTrue(plug.dps['7'])
+
+    def test_one_key_covers_every_outlet(self):
+        """The key belongs to the plug, so it is not typed in four times."""
+        self.start(dps=self.WP9_DPS)
+        driver = self.driver(keys={})
+        outlets = [self.device(dp=dp) for dp in ('1', '2', '3')]
+
+        self.assertTrue(driver.set_local_key(outlets[0], self.KEY))
+        for outlet in outlets:
+            self.assertFalse(driver.needs_key(outlet))
+
+    def test_outlets_of_one_plug_share_a_single_round_trip(self):
+        """Three outlets, one conversation -- and one consistent reading."""
+        plug = self.start(dps=self.WP9_DPS)
+        driver = self.driver()
+        outlets = [self.device(dp=dp) for dp in ('1', '2', '3')]
+
+        states = driver.get_states(outlets)
+
+        self.assertEqual(plug.connections, 1)
+        self.assertEqual(states['WP9ABC#1'],
+                         {'power': 'off', 'dps': plug.dps})
+        self.assertEqual(states['WP9ABC#2']['power'], 'on')
+        self.assertEqual(states['WP9ABC#3']['power'], 'off')
+
+    def test_a_single_outlet_plug_stays_one_device(self):
+        """A one-outlet plug should not be called "Outlet 1"."""
+        self.start(dps={'1': False, '9': 0})
+
+        found = self.driver()._devices_for(
+            {'device_id': 'wp9abc', 'ip': '127.0.0.1', 'version': '3.3'})
+
+        self.assertEqual(len(found), 1)
+        self.assertNotIn('dp', found[0].driver_data)
+        self.assertEqual(found[0].device_id, 'WP9ABC')
+
+    def test_an_unkeyed_plug_is_listed_whole_rather_than_guessed_at(self):
+        """Without a key it cannot be asked, and guessing would invent outlets."""
+        self.start(dps=self.WP9_DPS)
+
+        found = self.driver(keys={})._devices_for(
+            {'device_id': 'wp9abc', 'ip': '127.0.0.1', 'version': '3.3'})
+
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].device_id, 'WP9ABC')
+
+    def test_a_plug_that_will_not_answer_is_still_listed(self):
+        plug = self.start(dps=self.WP9_DPS)
+        plug.refuse = 1
+
+        found = self.driver()._devices_for(
+            {'device_id': 'wp9abc', 'ip': '127.0.0.1', 'version': '3.3'})
+
+        self.assertEqual(len(found), 1)
+
+    def test_an_entry_from_before_outlets_still_switches(self):
+        """A devices.json written by v2.2 has no datapoint recorded."""
+        plug = self.start(dps={'1': False})
+        old = Device('wp9abc', name='Old Entry', driver='tuya',
+                     ip='127.0.0.1', lan=True, native_id='wp9abc')
+
+        self.driver().turn(old, True)
+
+        self.assertTrue(plug.dps['1'])
+
+    # -- test connection ---------------------------------------------------
+
+    def test_test_connection_reports_what_it_found(self):
+        self.start(dps=self.WP9_DPS)
+
+        ok, message = self.driver().test_connection(self.device(dp='2'))
+
+        self.assertTrue(ok)
+        self.assertIn('on', message)
+
+    def test_test_connection_explains_a_refusal(self):
+        plug = self.start()
+        plug.refuse = 1
+
+        ok, message = self.driver().test_connection(self.device())
+
+        self.assertFalse(ok)
+        self.assertIn('device busy', message)
 
 
 class FakeBlaster(object):
@@ -2229,6 +2713,33 @@ class TestDeviceModel(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # LAN protocol
 # ---------------------------------------------------------------------------
+
+class TestDriverData(unittest.TestCase):
+    """What a driver must remember about a device has to survive a restart."""
+
+    def test_driver_data_survives_a_round_trip(self):
+        device = Device('wp9abc#2', driver='tuya', native_id='wp9abc',
+                        driver_data={'version': '3.3', 'dp': '2'})
+
+        restored = Device.from_dict(json.loads(json.dumps(device.to_dict())))
+
+        self.assertEqual(restored.driver_data, {'version': '3.3', 'dp': '2'})
+        self.assertEqual(restored.native_id, 'wp9abc')
+
+    def test_a_device_cached_before_driver_data_existed_still_loads(self):
+        restored = Device.from_dict({'device_id': 'AA:BB', 'name': 'Lamp'})
+
+        self.assertEqual(restored.driver_data, {})
+
+    def test_a_fresh_discovery_replaces_stale_driver_data(self):
+        """A plug that has been re-flashed announces a new version."""
+        cached = Device('wp9abc', driver='tuya', driver_data={'version': '3.1'})
+        found = Device('wp9abc', driver='tuya', driver_data={'version': '3.3'})
+
+        cached.merge(found)
+
+        self.assertEqual(cached.driver_data['version'], '3.3')
+
 
 class TestLANMessages(unittest.TestCase):
 
@@ -2594,6 +3105,37 @@ class TestSession(unittest.TestCase):
 
     def tearDown(self):
         clean_profile()
+
+    def app(self):
+        from paragon_govee import ParagonGovee
+
+        return ParagonGovee()
+
+    def test_a_plug_split_into_outlets_drops_its_old_single_entry(self):
+        """The pre-split entry is the same hardware; it would switch nothing."""
+        app = self.app()
+        app._devices = [Device('wp9abc', name='Office Plug', driver='tuya',
+                               native_id='wp9abc')]
+
+        outlets = [Device('wp9abc#%s' % dp, name='Outlet %s' % dp,
+                          driver='tuya', native_id='wp9abc')
+                   for dp in ('1', '2', '3')]
+        app.controller.discover = lambda timeout=3.0: (outlets, [])
+
+        listed, _warnings = app.refresh_devices()
+
+        self.assertEqual(sorted(d.device_id for d in listed),
+                         ['WP9ABC#1', 'WP9ABC#2', 'WP9ABC#3'])
+
+    def test_a_device_that_merely_missed_a_search_is_still_kept(self):
+        """Superseding is narrow: it is not a licence to forget quiet lights."""
+        app = self.app()
+        app._devices = [Device('AA:BB', name='Hall Lamp')]
+        app.controller.discover = lambda timeout=3.0: ([], [])
+
+        listed, _warnings = app.refresh_devices()
+
+        self.assertEqual([d.name for d in listed], ['Hall Lamp'])
 
     def test_transport_mode_setting_maps_to_constants(self):
         from paragon_govee import ParagonGovee

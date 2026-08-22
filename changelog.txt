@@ -1,3 +1,37 @@
+v2.3.0
+- Tuya smart plugs can now be switched, not just found. Control is LAN only:
+  the cloud account is used once to fetch a local key and never again.
+- Multi-outlet plugs are listed one device per outlet. A three-outlet strip is
+  three independent switches in one box, and listing it as a single device
+  would mean a scene could only turn all of it on or all of it off.
+- Which outlets exist is read from the plug rather than guessed from a table
+  of product ids, so a plug nobody has heard of splits correctly too. Mains
+  outlets and USB banks are told apart from countdown timers, relay memory and
+  the child lock.
+- A single-outlet plug stays a single device rather than being called
+  "Outlet 1", and an entry cached before this release still switches.
+- Outlets of one plug share a single status round trip, which also keeps their
+  readings consistent with each other.
+- One key covers every outlet of a plug: it belongs to the hardware, so it is
+  not typed in three times.
+- New "Test connection" on a keyed device, and "Switch on"/"Switch off" in its
+  own menu. Sixteen characters typed on a remote is an easy thing to get one
+  keystroke wrong, and this says so immediately instead of leaving a plug that
+  silently will not switch.
+- A wrong key is now named as the likely cause. The device refuses the request
+  and its reason comes back encrypted under the key we do not have, so the
+  honest reading of an unreadable error on this protocol is a key mismatch --
+  better than showing the user a character decoding failure.
+- Protocol 3.1 through 3.3 are driven. 3.4 and 3.5 negotiate a session key
+  first; a plug on one of those is still discovered and says which version it
+  speaks rather than failing obscurely.
+- Scenes ask the driver what a device can do instead of what a Govee bulb
+  lists. A plug in a scene is switched and sent nothing else, so one scene can
+  drive bulbs and plugs together.
+- The device menu is built from what the device actually is, rather than a
+  list read back by position. Every new device type used to shift the
+  numbering under the rows below it.
+
 v2.2.2
 - Dialogs say "Paragon Home" rather than "Paragon Govee". The rename in
   v2.0.0 changed the manifest but left the name hardcoded in every dialog, so

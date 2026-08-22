@@ -57,7 +57,8 @@ class Device(object):
 
     def __init__(self, device_id, name='', model='', ip='', lan=False,
                  cloud=False, supports=None, temp_range=None, enabled=True,
-                 driver=DEFAULT_DRIVER, devtype=None, native_id=None):
+                 driver=DEFAULT_DRIVER, devtype=None, native_id=None,
+                 driver_data=None):
         # device_id is upper-cased so matching is case-insensitive, which is
         # what a Govee or Broadlink MAC wants. Tuya ids are lower-case strings
         # that go on the wire verbatim, and upper-casing one would produce an
@@ -77,6 +78,11 @@ class Device(object):
         # puts it in every packet header, so it has to survive a restart --
         # guessing it would build packets the device ignores.
         self.devtype = devtype
+        # Anything else a driver must remember about this device across a
+        # restart, in that driver's own terms -- a Tuya protocol version, or
+        # which outlet of a multi-outlet plug this entry is. Kept as an opaque
+        # dict so a new driver needs no change here.
+        self.driver_data = dict(driver_data or {})
         self.name = name or self._fallback_name()
 
     def _fallback_name(self):
@@ -121,6 +127,7 @@ class Device(object):
             'enabled': self.enabled,
             'devtype': self.devtype,
             'native_id': self.native_id,
+            'driver_data': self.driver_data,
         }
 
     @classmethod
@@ -138,6 +145,7 @@ class Device(object):
             enabled=data.get('enabled', True),
             devtype=data.get('devtype'),
             native_id=data.get('native_id'),
+            driver_data=data.get('driver_data'),
         )
 
     def merge(self, other):
@@ -147,6 +155,8 @@ class Device(object):
         self.ip = other.ip or self.ip
         self.model = self.model or other.model
         self.supports = other.supports or self.supports
+        if other.driver_data:
+            self.driver_data = dict(other.driver_data)
         if other.temp_range:
             self.temp_range = other.temp_range
         # A cloud name is the one the user chose in the Govee app, so it wins

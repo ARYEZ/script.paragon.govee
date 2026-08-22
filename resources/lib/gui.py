@@ -1007,61 +1007,90 @@ class ControlPanel(object):
                       % (device.name, exc))
 
     def _edit_device(self, device):
-        from devices import CAP_COMMANDS
+        """The menu for one device, built from what that device actually is.
+
+        Rows are (label, handler) pairs rather than a list read back by
+        index: which rows exist depends on the driver, so every new device
+        type used to shift the numbering under the rows below it.
+        """
+        from devices import CAP_COMMANDS, CAP_POWER
 
         capabilities = self.app.controller.capabilities(device)
+        driver = self.app.controller.driver_for(device)
         emitter = CAP_COMMANDS in capabilities
+        keyed = hasattr(driver, 'set_local_key')
 
-        options = [
-            'Rename (currently "%s")' % device.name,
-            'Disable' if device.enabled else 'Enable',
+        rows = [
+            ('Rename (currently "%s")' % device.name,
+             lambda: self._rename_device(device)),
+            ('Disable' if device.enabled else 'Enable',
+             lambda: self._toggle_enabled(device)),
         ]
-        keyed = hasattr(self.app.controller.driver_for(device),
-                        'set_local_key')
+
         if emitter:
             # An IR blaster has no light to flash and nothing to identify by,
             # so its menu is about the codes it knows instead.
-            options.append('Commands (%d learned)...'
-                           % len(self.app.controller.commands(device)))
+            rows.append(('Commands (%d learned)...'
+                         % len(self.app.controller.commands(device)),
+                         lambda: self.command_menu(device)))
         elif keyed:
-            options.append('Set local key%s'
-                           % (' (needed)' if self.app.needs_local_key(device)
-                              else ''))
+            rows.append(('Set local key%s'
+                         % (' (needed)' if self.app.needs_local_key(device)
+                            else ''),
+                         lambda: self.set_local_key(device)))
+            if not self.app.needs_local_key(device):
+                rows.append(('Test connection',
+                             lambda: self.test_device(device)))
         else:
-            options.append('Identify (flash this light)')
-        options.append('Forget this light')
+            rows.append(('Identify (flash this light)',
+                         lambda: self._identify(device)))
 
-        choice = _select(device.name, options)
+        if keyed and CAP_POWER in capabilities:
+            rows.append(('Switch on', lambda: self._switch(device, True)))
+            rows.append(('Switch off', lambda: self._switch(device, False)))
+
+        rows.append(('Forget this device',
+                     lambda: self._forget_device(device)))
+
+        choice = _select(device.name, [label for label, _handler in rows])
         if choice == BACK:
             return
-        if choice == 2 and emitter:
-            self.command_menu(device)
-            return
-        if choice == 2 and keyed:
-            self.set_local_key(device)
-            return
+        rows[choice][1]()
 
-        if choice == 0:
-            name = _dialog().input('Light name', device.name)
-            if name and name.strip():
-                device.name = name.strip()
-                self.app.save_devices()
-                utils.notify('Renamed to %s' % device.name)
-        elif choice == 1:
-            device.enabled = not device.enabled
+    def _rename_device(self, device):
+        name = _dialog().input('Device name', device.name)
+        if name and name.strip():
+            device.name = name.strip()
             self.app.save_devices()
-            utils.notify('%s %s' % (device.name,
-                                    'enabled' if device.enabled else 'disabled'))
-        elif choice == 2:
-            self._identify(device)
-        elif choice == 3:
-            if _dialog().yesno(
-                    utils.ADDON_NAME,
-                    'Forget "%s"?\n\nIts name and settings are removed. A '
-                    'later search will find it again as an unnamed light.'
-                    % device.name):
-                self.app.forget_device(device)
-                utils.notify('Forgot %s' % device.name)
+            utils.notify('Renamed to %s' % device.name)
+
+    def _toggle_enabled(self, device):
+        device.enabled = not device.enabled
+        self.app.save_devices()
+        utils.notify('%s %s' % (device.name,
+                                'enabled' if device.enabled else 'disabled'))
+
+    def _switch(self, device, on):
+        """Power one device from its own menu.
+
+        The place a plug most wants testing is right after its key is typed
+        in, which is exactly where this sits.
+        """
+        try:
+            self.app.controller.turn(device, on)
+        except ControlError as exc:
+            utils.force_notify(str(exc))
+            return
+        utils.notify('%s %s' % (device.name, 'on' if on else 'off'))
+
+    def _forget_device(self, device):
+        if _dialog().yesno(
+                utils.ADDON_NAME,
+                'Forget "%s"?\n\nIts name and settings are removed. A '
+                'later search will find it again as an unnamed device.'
+                % device.name):
+            self.app.forget_device(device)
+            utils.notify('Forgot %s' % device.name)
 
     def set_local_key(self, device):
         """Paste in the local key a Tuya device needs before it can be used."""

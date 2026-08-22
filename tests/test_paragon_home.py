@@ -3465,7 +3465,28 @@ class TestKasaKlap(unittest.TestCase):
                                password='whatever')
         session.handshake()
 
-        self.assertTrue(session._blank)
+        # The distinction that matters when some plugs work and others do
+        # not: this one was reached without the account, so the account being
+        # wrong would not have shown up here.
+        self.assertFalse(session.used_account)
+
+    def test_a_plug_reached_with_the_entered_account_says_so(self):
+        """The other half of the same distinction."""
+        self.start()
+
+        session = self.session()
+        session.handshake()
+
+        self.assertTrue(session.used_account)
+
+    def test_tp_links_own_setup_credentials_are_tried(self):
+        """A device in setup state answers to those and nothing else."""
+        self.start(username='kasa@tp-link.net', password='kasaSetup')
+
+        session = self.session()
+        session.handshake()
+
+        self.assertFalse(session.used_account)
 
     def test_the_failure_message_has_real_line_breaks(self):
         """A quoted heredoc doubled the escape once; this pins it.

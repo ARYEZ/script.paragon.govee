@@ -1,3 +1,22 @@
+v2.9.0
+- When some Kasa plugs accept the account and others refuse it, the add-on now
+  says which of two quite different things is happening. A plug never bound to
+  a TP-Link account answers with no credentials at all, so it works whether
+  the details in Settings are right or wrong -- which means a mix of working
+  and failing plugs can have a single cause, and it looks like nonsense until
+  you know which kind each plug is.
+- "Test connection" now reports whether your account was what got in, or
+  whether that plug needed no account and so proves nothing.
+- TP-Link's own published setup credentials are tried as well, which a device
+  in setup state answers to.
+- A failed handshake logs its seeds and the hash the device returned. Those
+  contain no password and cannot be used to derive one, but they are enough to
+  work out offline what the device actually wants.
+- New tools/kasa_klap_probe.py asks a plug directly which credentials and
+  which hash scheme it wants, trying more variants than the add-on
+  implements. The password is prompted for and never printed, stored or sent
+  anywhere but the plug.
+
 v2.8.2
 - Fixed "'ascii' codec can't decode byte 0xcc in position 0" when switching a
   later Kasa plug. A Python 2 trap, and the ordinary case rather than an edge

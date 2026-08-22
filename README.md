@@ -473,6 +473,30 @@ guest SSID or a separate VLAN from Kodi will never be heard.
 A plug that works in the Kasa app but is not found here at all — by either
 generation's query — is on a different subnet or SSID from Kodi.
 
+### If some plugs accept the account and others do not
+
+**Test connection** on a plug that works says which of two things happened:
+
+* *"Your TP-Link account was accepted"* — the details are right, and a plug
+  that refuses them is bound to a different account. Remove it in the Kasa app
+  and add it again.
+* *"This plug needed no account at all"* — it was never bound to an account,
+  so it answers regardless and proves nothing about the details. In that case
+  the plugs that refuse are the honest ones and the details are wrong.
+
+That second case is why some can work while others fail with the same
+settings, and it looks like nonsense until you know which kind each plug is.
+
+If neither explains it, `tools/kasa_klap_probe.py` asks the plug directly
+which credentials and which hash scheme it wants:
+
+```
+python3 tools/kasa_klap_probe.py 10.0.0.195 you@example.com
+```
+
+The password is prompted for, never printed, never written down and never
+sent anywhere but the plug on your own network.
+
 ---
 
 ## Smart plugs (Tuya)

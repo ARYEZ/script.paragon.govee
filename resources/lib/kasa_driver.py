@@ -41,6 +41,7 @@ class KasaDriver(object):
         # local protocol check a cloud credential.
         self.username = username or ''
         self.password = password or ''
+        self._last_session = None
 
     # -- discovery ---------------------------------------------------------
 
@@ -188,10 +189,11 @@ class KasaDriver(object):
                 'network only; nothing is sent to TP-Link.' % device.name)
 
         data = getattr(device, 'driver_data', None) or {}
-        return _KlapAdapter(
-            kasa_klap.Session(device.ip, self.username, self.password,
-                              port=data.get('http_port'),
-                              timeout=self.timeout, log_func=self._log))
+        session = kasa_klap.Session(device.ip, self.username, self.password,
+                                    port=data.get('http_port'),
+                                    timeout=self.timeout, log_func=self._log)
+        self._last_session = session
+        return _KlapAdapter(session)
 
     # -- state verbs -------------------------------------------------------
 
@@ -268,6 +270,21 @@ class KasaDriver(object):
                 states[device.device_id] = self._state_from_info(device, info)
         return states
 
+    def _account_note(self, device):
+        """Whether the entered account was what got in, for a KLAP device.
+
+        Worth saying plainly. When some plugs work and others do not, the
+        useful question is whether the ones that work actually needed the
+        account -- a plug never bound to one answers regardless, so it proves
+        nothing about the details being right.
+        """
+        if not self.is_klap(device) or self._last_session is None:
+            return ''
+        if self._last_session.used_account:
+            return 'Your TP-Link account was accepted.'
+        return ('This plug needed no account at all, so it does not tell you '
+                'whether the details in Settings are right.')
+
     def test_connection(self, device):
         """Read the device and report the result in words."""
         try:
@@ -279,6 +296,9 @@ class KasaDriver(object):
         state = self._state_from_info(device, info)
         summary = '%s answered.\n\nModel %s, firmware %s.' % (
             device.name, info.get('model') or '?', info.get('sw_ver') or '?')
+        note = self._account_note(device)
+        if note:
+            summary += '\n\n%s' % note
         if state is None:
             return True, summary + '\n\nIt did not report a switch state.'
         return True, summary + '\n\nIt is currently %s.' % state['power']

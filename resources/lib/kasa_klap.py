@@ -49,6 +49,12 @@ SCHEME_V1 = 'v1'   # Kasa: md5 over md5s
 SCHEME_V2 = 'v2'   # Tapo and later: sha256 over sha1s
 SCHEMES = (SCHEME_V1, SCHEME_V2)
 
+# TP-Link's own setup credentials, which a device that has never been bound
+# to an account answers to. Published in every open-source client; not a
+# secret and not treated as one.
+SETUP_CREDENTIALS = (('kasa@tp-link.net', 'kasaSetup'),
+                     ('test@tp-link.net', 'test'))
+
 SESSION_COOKIE = 'TP_SESSIONID'
 
 
@@ -166,7 +172,12 @@ class Session(object):
         self.cookie = ''
         self.scheme = None
         self.encryption = None
-        self._blank = False
+        # Whether the account entered in settings was the thing that worked,
+        # as opposed to a device that needed no account at all. The difference
+        # matters when some plugs work and others do not: it says whether the
+        # details are right and one plug is odd, or the details are wrong and
+        # the plugs that work never needed them.
+        self.used_account = False
 
     # -- HTTP --------------------------------------------------------------
 
@@ -234,6 +245,9 @@ class Session(object):
                 pairs.append((self.username, self.password, scheme))
         for scheme in SCHEMES:
             pairs.append(('', '', scheme))
+        for username, password in SETUP_CREDENTIALS:
+            for scheme in SCHEMES:
+                pairs.append((username, password, scheme))
         return pairs
 
     def handshake(self):
@@ -254,24 +268,35 @@ class Session(object):
                                        scheme)
             if _constant_equal(expected, server_hash):
                 digest, self.scheme = candidate, scheme
-                self._blank = not (username or password)
+                self.used_account = (username == self.username
+                                     and password == self.password
+                                     and bool(username or password))
                 break
 
         if digest is None:
+            # Everything needed to work out offline which scheme and which
+            # credentials this device wants -- without the password ever
+            # leaving the machine. tools/kasa_klap_probe.py reads these.
+            self._log('KLAP handshake with %s failed. local_seed=%s '
+                      'remote_seed=%s server_hash=%s tried=%d candidates'
+                      % (self.ip, _hex(local_seed), _hex(remote_seed),
+                         _hex(server_hash), len(self.candidates())))
             raise KlapAuthError(
                 '%s did not accept the TP-Link account details.\n\n'
                 'The plug answers only to the account it is registered to. '
-                'Check the e-mail address and password are exactly the ones '
-                'you sign in to the Kasa app with -- the e-mail address, not '
-                'a display name.' % self.ip)
+                'If other plugs work with the same details, this one is bound '
+                'to a different account -- remove it in the Kasa app and add '
+                'it again.\n\nThe handshake values are in kodi.log for '
+                'tools/kasa_klap_probe.py.' % self.ip)
 
         self._post('/app/handshake2',
                    handshake2_hash(local_seed, remote_seed, digest,
                                    self.scheme))
         self.encryption = Encryption(local_seed, remote_seed, digest)
-        self._log('KLAP handshake with %s succeeded (%s%s)'
+        self._log('KLAP handshake with %s succeeded: scheme %s, %s'
                   % (self.ip, self.scheme,
-                     ', no account needed' if self._blank else ''))
+                     'your account' if self.used_account
+                     else 'NO account needed -- this plug is not bound to one'))
         return self.scheme
 
     # -- requests ----------------------------------------------------------
@@ -293,6 +318,10 @@ class Session(object):
         if not isinstance(parsed, dict):
             raise KlapError('%s sent an unexpected reply' % self.ip)
         return parsed
+
+
+def _hex(data):
+    return ''.join('%02x' % byte for byte in bytearray(data))
 
 
 def _constant_equal(left, right):

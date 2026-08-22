@@ -3367,6 +3367,31 @@ class TestKasaKlap(unittest.TestCase):
             session.handshake()
         self.assertIn('Could not reach', str(caught.exception))
 
+    def test_a_plug_never_bound_to_an_account_is_handled(self):
+        """Blank credentials are a real case, and the hash still settles it."""
+        self.start(username='', password='')
+
+        session = self.session(username='someone@example.com',
+                               password='whatever')
+        session.handshake()
+
+        self.assertTrue(session._blank)
+
+    def test_the_failure_message_has_real_line_breaks(self):
+        """A quoted heredoc doubled the escape once; this pins it.
+
+        The dialog is where a user reads this, and a literal backslash-n in
+        the middle of a sentence is worse than no formatting at all.
+        """
+        self.start()
+
+        with self.assertRaises(self.klap.KlapAuthError) as caught:
+            self.session(password='wrong').handshake()
+        message = str(caught.exception)
+
+        self.assertIn('\n\n', message)
+        self.assertNotIn('\\n', message)
+
     # -- through the driver ------------------------------------------------
 
     def driver(self, username=None, password=None):
@@ -5638,6 +5663,55 @@ class TestControlPanel(unittest.TestCase):
             lambda: self.panel().driver_menu('govee'), 'Lamp')
 
         self.assertIn('Lamp  [LAN+CLOUD]', labels)
+
+    def test_an_unreadable_plug_is_explained_in_its_own_terms(self):
+        """Not Govee's. A Kasa plug has never heard of UDP 4002."""
+        plug = Device('8006KLAP', name='Christmas Tree', driver='kasa',
+                      lan=True, ip='10.0.0.31')
+        self.app._devices = [plug]
+        self.recorder.caps = ['power', 'state']
+        self.recorder.get_state = lambda d: None
+        self.app.test_device = lambda d: (False, 'It needs your TP-Link '
+                                                 'account. Settings -> Kasa.')
+
+        xbmcgui.SELECT_QUEUE.extend([-1])
+        self.panel().show_status(plug)
+
+        text = xbmcgui.OK_DIALOGS[-1][1]
+        self.assertIn('TP-Link account', text)
+        self.assertNotIn('4002', text)
+
+    def test_a_govee_bulb_keeps_the_explanation_that_fits_it(self):
+        """Govee is the one driver with no connection test and a busy port."""
+        from devices import ControlError as _Error
+
+        bulb = self.app.devices[0]
+        self.recorder.get_state = lambda d: None
+
+        def no_test(device):
+            raise _Error('%s cannot be tested' % device.name)
+        self.app.test_device = no_test
+
+        self.panel().show_status(bulb)
+
+        self.assertIn('4002', xbmcgui.OK_DIALOGS[-1][1])
+
+    def test_a_plug_is_offered_a_connection_test_not_a_flash(self):
+        plug = Device('8006KLAP', name='Christmas Tree', driver='kasa',
+                      lan=True, ip='10.0.0.31')
+        self.app._devices = [plug]
+        self.recorder.caps = ['power', 'state']
+
+        class _Kasa(object):
+            def test_connection(self, device):
+                return True, 'ok'
+        self.recorder.driver_for = lambda device: _Kasa()
+
+        _row, labels = menu_row(lambda: self.panel()._edit_device(plug),
+                                'Rename')
+
+        self.assertIn('Test connection', labels)
+        self.assertNotIn('Identify (flash this light)', labels)
 
     def test_main_menu_shows_the_version(self):
         xbmcgui.SELECT_QUEUE.extend([-1])

@@ -426,6 +426,39 @@ class ControlPanel(object):
                 return
             rows[choice][1]()
 
+    def _explain_no_status(self, device):
+        """Say why a state read failed, in the terms of the device that failed.
+
+        A read returns None whatever went wrong, so this asks the driver
+        again through its own connection test, which does report a reason.
+        Without it every driver inherited Govee's explanation -- a Kasa plug
+        that could not be reached was blamed on a UDP port Govee uses and
+        Kasa has never heard of.
+        """
+        message = ''
+        ok = False
+        try:
+            ok, message = self.app.test_device(device)
+        except ControlError:
+            message = ''
+
+        if ok and message:
+            # It answered on the second attempt, so the reading is the answer.
+            _dialog().ok(utils.ADDON_NAME, message)
+            return
+        if message:
+            _dialog().ok(utils.ADDON_NAME,
+                         'Could not read the state of %s.\n\n%s'
+                         % (device.name, message))
+            return
+
+        # Only Govee gets here: it is the one driver with no connection test,
+        # and the one whose status read contends for a well-known port.
+        _dialog().ok(utils.ADDON_NAME,
+                     'Could not read the state of %s.\n\n'
+                     'LAN status needs UDP port 4002, which another '
+                     'program may be holding.' % device.name)
+
     def brightness_menu(self, targets, heading):
         options = ['%d%%' % step for step in BRIGHTNESS_STEPS]
         options.append('Custom...')
@@ -587,10 +620,7 @@ class ControlPanel(object):
     def show_status(self, device):
         state = self.app.controller.get_state(device)
         if not state:
-            _dialog().ok(utils.ADDON_NAME,
-                         'Could not read the state of %s.\n\n'
-                         'LAN status needs UDP port 4002, which another '
-                         'program may be holding.' % device.name)
+            self._explain_no_status(device)
             return
 
         lines = ['Power: %s' % state.get('power', 'unknown')]
@@ -1172,6 +1202,7 @@ class ControlPanel(object):
         driver = self.app.controller.driver_for(device)
         emitter = CAP_COMMANDS in capabilities
         keyed = hasattr(driver, 'set_local_key')
+        testable = hasattr(driver, 'test_connection')
 
         rows = [
             ('Rename (currently "%s")' % device.name,
@@ -1186,17 +1217,20 @@ class ControlPanel(object):
             rows.append(('Commands (%d learned)...'
                          % len(self.app.controller.commands(device)),
                          lambda: self.command_menu(device)))
-        elif keyed:
-            rows.append(('Set local key%s'
-                         % (' (needed)' if self.app.needs_local_key(device)
-                            else ''),
-                         lambda: self.set_local_key(device)))
-            if not self.app.needs_local_key(device):
+        else:
+            if keyed:
+                rows.append(('Set local key%s'
+                             % (' (needed)' if self.app.needs_local_key(device)
+                                else ''),
+                             lambda: self.set_local_key(device)))
+            if CAP_COLOR in capabilities:
+                # Only something that can show a colour has anything to flash.
+                rows.append(('Identify (flash this light)',
+                             lambda: self._identify(device)))
+            if testable and not (keyed
+                                 and self.app.needs_local_key(device)):
                 rows.append(('Test connection',
                              lambda: self.test_device(device)))
-        else:
-            rows.append(('Identify (flash this light)',
-                         lambda: self._identify(device)))
 
         if keyed and CAP_POWER in capabilities:
             rows.append(('Switch on', lambda: self._switch(device, True)))

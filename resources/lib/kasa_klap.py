@@ -164,6 +164,7 @@ class Session(object):
         self.cookie = ''
         self.scheme = None
         self.encryption = None
+        self._blank = False
 
     # -- HTTP --------------------------------------------------------------
 
@@ -207,39 +208,62 @@ class Session(object):
 
     # -- handshake ---------------------------------------------------------
 
-    def handshake(self):
-        """Agree a session key, working out which hash scheme applies.
+    def candidates(self):
+        """Credential and scheme pairs to try, in order of likelihood.
 
-        The device never says which it wants. It does return a hash computed
-        under whichever one it uses, and that hash is a definite answer -- so
-        both are derived and compared rather than one being assumed.
+        Two hash schemes exist and the device announces neither. Blank
+        credentials come last because a device never bound to a TP-Link
+        account uses them, and nothing in the announcement distinguishes such
+        a device from a bound one.
+
+        This is not guesswork in the end. The device returns a hash computed
+        under whichever pair is right, so each candidate costs one comparison
+        and the answer is definite.
         """
+        pairs = []
+        if self.username or self.password:
+            for scheme in SCHEMES:
+                pairs.append((self.username, self.password, scheme))
+        for scheme in SCHEMES:
+            pairs.append(('', '', scheme))
+        return pairs
+
+    def handshake(self):
+        """Agree a session key for this connection."""
         local_seed = os.urandom(16)
         reply = self._post('/app/handshake1', local_seed)
         if len(reply) < 48:
-            raise KlapError('%s cut the handshake short (%d bytes)'
-                            % (self.ip, len(reply)))
+            raise KlapError(
+                '%s answered the handshake with %d bytes, and it should be at '
+                'least 48. It may not be a KLAP device after all.'
+                % (self.ip, len(reply)))
 
         remote_seed, server_hash = reply[:16], reply[16:48]
-        for scheme in SCHEMES:
-            digest = auth_hash(self.username, self.password, scheme)
-            expected = handshake1_hash(local_seed, remote_seed, digest, scheme)
+        digest = None
+        for username, password, scheme in self.candidates():
+            candidate = auth_hash(username, password, scheme)
+            expected = handshake1_hash(local_seed, remote_seed, candidate,
+                                       scheme)
             if _constant_equal(expected, server_hash):
-                self.scheme = scheme
+                digest, self.scheme = candidate, scheme
+                self._blank = not (username or password)
                 break
-        else:
+
+        if digest is None:
             raise KlapAuthError(
-                '%s did not accept the TP-Link account details.\\n\\nThe plug '
-                'answers only to the account it is registered to. Check the '
-                'e-mail address and password are the ones you use in the Kasa '
-                'app.' % self.ip)
+                '%s did not accept the TP-Link account details.\n\n'
+                'The plug answers only to the account it is registered to. '
+                'Check the e-mail address and password are exactly the ones '
+                'you sign in to the Kasa app with -- the e-mail address, not '
+                'a display name.' % self.ip)
 
         self._post('/app/handshake2',
                    handshake2_hash(local_seed, remote_seed, digest,
                                    self.scheme))
         self.encryption = Encryption(local_seed, remote_seed, digest)
-        self._log('KLAP handshake with %s succeeded (%s)'
-                  % (self.ip, self.scheme))
+        self._log('KLAP handshake with %s succeeded (%s%s)'
+                  % (self.ip, self.scheme,
+                     ', no account needed' if self._blank else ''))
         return self.scheme
 
     # -- requests ----------------------------------------------------------

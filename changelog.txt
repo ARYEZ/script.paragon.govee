@@ -1,3 +1,22 @@
+v2.8.1
+- A device whose state could not be read was always blamed on Govee. The
+  dialog named UDP port 4002 -- the port Govee's status reply uses and which a
+  Kasa plug has never heard of -- so a Kasa or Tuya failure was reported as a
+  Govee one and the real reason was thrown away.
+- It now asks the driver again through its own connection test, which does
+  report a reason, and shows that instead. Govee keeps the port explanation,
+  because Govee is the one driver with no connection test and the one whose
+  status read contends for a well-known port.
+- A plug was being offered "Identify (flash this light)", which it cannot do,
+  and no connection test, which it can. Identify is now offered only to
+  something that can show a colour, and a connection test to any device whose
+  driver has one.
+- Fixed a KLAP error message printing a literal backslash-n instead of a line
+  break.
+- The KLAP handshake now also tries blank credentials, which is what a device
+  never bound to a TP-Link account uses. Nothing in the announcement
+  distinguishes one, and the device's own handshake hash says which is right.
+
 v2.8.0
 - Later Kasa hardware is now supported. An HS103 hardware v2 and an HS103
   hardware v5 are the same model number in the same box, and speak entirely

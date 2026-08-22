@@ -399,6 +399,55 @@ Example `keymaps/govee.xml` in your Kodi userdata:
 
 ---
 
+## Reracks
+
+A **rerack** is ten ordered steps run as one. Named after the Paragon TV
+preset macro system, and shaped like it on purpose: a fixed number of numbered
+slots rather than a list you grow, so a rerack has the same shape every time
+you open it and slot 4 is always slot 4. Empty slots are normal.
+
+A step is three choices, in the order you would say them aloud — what kind of
+thing, which one, and what to do to it:
+
+```
+Wind Down
+   1. Scene: Warshade
+   2. Office Plug All outlets: On  (+3s)
+   3. Bedroom Broadlink: TV power
+   4. Empty
+   ...
+  10. Empty
+```
+
+Steps run top to bottom. Each can hold a **pause afterwards**, which matters
+more than it sounds: a television told to switch on and change channel in the
+same breath will miss the second command, because it is still waking up.
+
+**A failing step does not stop the ones after it.** A plug that has been
+unplugged is no reason to leave the rest of the room untouched — every failure
+is collected and reported together at the end.
+
+Reracks live under **Reracks...** on the first screen, and each one is also a
+`RunScript()` target:
+
+```
+RunScript(script.paragon.govee,action=rerack,name=Wind Down)
+```
+
+### A rerack is not a scene
+
+A **scene** describes a state — how the lights should look. It can be
+captured, mixed and cycled, and a rerack step can apply one.
+
+A **rerack** describes a sequence of things to do, including things with no
+state to describe at all, like an infrared button press. Steps refer to
+devices by id, so renaming a device does not break a rerack that used it.
+
+There is no starter set. A rerack refers to this house's own devices, and an
+invented one would be ten slots pointing at nothing.
+
+---
+
 ## Smart plugs (TP-Link Kasa)
 
 **Older hardware needs nothing at all.** Run **Refresh devices** and it

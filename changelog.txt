@@ -1,3 +1,23 @@
+v2.10.0
+- Reracks: ten ordered steps run as one, under "Reracks..." on the first
+  screen. Named after the Paragon TV preset macro system and shaped like it --
+  a fixed set of numbered slots rather than a list you grow, so a rerack has
+  the same shape every time you open it and slot 4 is always slot 4.
+- A step is three choices in the order you would say them: what kind of thing,
+  which one, and what to do to it. Scene, or a device of any driver with On,
+  Off, Toggle or one of its learned infrared commands.
+- Each step can hold a pause afterwards. A television told to switch on and
+  change channel in the same breath will miss the second command, and this is
+  the only way to say so.
+- A failing step does not stop the ones after it. Every failure is collected
+  and reported together at the end, because a rerack is a list of separate
+  intentions and an unplugged plug is no reason to leave the room dark.
+- Steps refer to devices by id, so renaming a device does not break a rerack
+  that used it. A rerack written by hand can name a device instead.
+- A long rerack runs behind a progress dialog that can be cancelled part way.
+- Every rerack is a RunScript() target:
+  RunScript(script.paragon.govee,action=rerack,name=Wind Down)
+
 v2.9.0
 - When some Kasa plugs accept the account and others refuse it, the add-on now
   says which of two quite different things is happening. A plug never bound to

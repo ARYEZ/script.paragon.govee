@@ -290,6 +290,12 @@ class RecordingController(object):
     def set_color_temp(self, device, kelvin):
         self._record('temp', device, kelvin)
 
+    def send_command(self, device, name):
+        # The Hub has this; leaving it off meant a rerack step that fires an
+        # infrared code failed against the stub for a reason the real code
+        # would never have had.
+        self._record('command', device, name)
+
 
 # ---------------------------------------------------------------------------
 # Scenes
@@ -458,6 +464,313 @@ class TestPlugsInScenes(unittest.TestCase):
 
         self.assertEqual([call[0] for call in controller.calls],
                          ['turn', 'brightness'])
+
+
+class TestReracks(unittest.TestCase):
+    """Ten ordered steps, run as one."""
+
+    def setUp(self):
+        clean_profile()
+        xbmcaddon.reset()
+        xbmcgui.reset()
+        for name in ('addon_utils', 'paragon_home', 'reracks', 'gui'):
+            if name in sys.modules:
+                del sys.modules[name]
+        import reracks
+
+        self.reracks = reracks
+
+    def tearDown(self):
+        clean_profile()
+
+    def app(self):
+        from paragon_home import ParagonHome
+
+        app = ParagonHome()
+        self.recorder = RecordingController()
+        # Per driver, as the real Hub reports it. A blaster has commands and
+        # no power; giving every device the same set would have let a scene
+        # send a blaster a power command and called it correct.
+        by_driver = {'govee': ['power', 'brightness', 'color', 'color_temp',
+                               'state'],
+                     'tuya': ['power', 'state'],
+                     'broadlink': ['commands']}
+        self.recorder.capabilities = lambda d: set(by_driver[d.driver])
+        self.recorder.commands = lambda device: ['TV power', 'Volume up']
+        app.controller = self.recorder
+        app._devices = [
+            Device('AA:BB', name='Back Office Left Low', driver='govee',
+                   lan=True),
+            Device('WP9ABC#ALL', name='Office Plug All outlets',
+                   driver='tuya', lan=True, native_id='wp9abc'),
+            Device('EE:FF', name='Bedroom Broadlink', driver='broadlink',
+                   lan=True),
+        ]
+        app._scenes = [scene_lib.make_scene('Warshade',
+                                            power=scene_lib.POWER_ON,
+                                            mode=scene_lib.MODE_COLOR,
+                                            color=[80, 0, 120],
+                                            targets=['AA:BB'])]
+        return app
+
+    def example(self):
+        """The rerack from the request, written the way it was described."""
+        return self.reracks.make_rerack('Wind Down', [
+            {'kind': 'scene', 'target': 'Warshade'},
+            {'kind': 'power', 'driver': 'tuya', 'target': 'WP9ABC#ALL',
+             'action': 'on'},
+            {'kind': 'command', 'driver': 'broadlink', 'target': 'EE:FF',
+             'action': 'TV power'},
+        ])
+
+    # -- shape -------------------------------------------------------------
+
+    def test_a_rerack_always_has_ten_slots(self):
+        """Named after the preset system, and fixed like it: slot 4 is slot 4."""
+        rerack = self.reracks.make_rerack('Wind Down')
+
+        self.assertEqual(len(rerack['steps']), self.reracks.STEP_COUNT)
+        self.assertEqual(self.reracks.STEP_COUNT, 10)
+        self.assertTrue(all(s['kind'] == 'none' for s in rerack['steps']))
+
+    def test_three_steps_leave_seven_empty_slots(self):
+        rerack = self.example()
+
+        self.assertEqual(len(self.reracks.filled_steps(rerack)), 3)
+        self.assertEqual(len(rerack['steps']), 10)
+
+    def test_more_than_ten_steps_are_trimmed(self):
+        rerack = self.reracks.make_rerack(
+            'Too many',
+            [{'kind': 'scene', 'target': 'Warshade'}] * 14)
+
+        self.assertEqual(len(rerack['steps']), 10)
+
+    def test_a_half_filled_step_becomes_empty_rather_than_broken(self):
+        """A slot that looks filled but cannot run is worse than a blank one."""
+        for raw in ({'kind': 'power', 'target': ''},
+                    {'kind': 'power', 'target': 'AA:BB', 'action': 'sideways'},
+                    {'kind': 'command', 'target': 'EE:FF', 'action': ''},
+                    {'kind': 'scene', 'target': '   '}):
+            self.assertEqual(self.reracks.normalise_step(raw)['kind'], 'none',
+                             'accepted %r' % (raw,))
+
+    def test_a_rerack_with_no_name_is_not_a_rerack(self):
+        self.assertIsNone(self.reracks.normalise({'name': '  '}))
+
+    # -- running -----------------------------------------------------------
+
+    def test_the_example_runs_top_to_bottom_in_order(self):
+        app = self.app()
+
+        done, errors = self.reracks.run(app, self.example())
+
+        self.assertEqual((done, errors), (3, []))
+        self.assertEqual(
+            [call[:2] for call in self.recorder.calls],
+            [('turn', 'AA:BB'),          # 1. Govee, scene, Warshade
+             ('color', 'AA:BB'),         #    (the scene's colour)
+             ('turn', 'WP9ABC#ALL'),     # 2. Tuya, all outlets, on
+             ('command', 'EE:FF')])      # 3. Broadlink, bedroom, TV power
+
+    def test_a_scene_step_applies_the_scene_to_whatever_the_scene_says(self):
+        """A rerack step runs a scene; it does not redefine one.
+
+        The scene here names one bulb, so the plug beside it is untouched --
+        the rerack's own step 2 is what switches that.
+        """
+        app = self.app()
+        rerack = self.reracks.make_rerack(
+            'Just the scene', [{'kind': 'scene', 'target': 'Warshade'}])
+
+        self.reracks.run(app, rerack)
+
+        self.assertEqual(set(call[1] for call in self.recorder.calls),
+                         set(['AA:BB']))
+
+    def test_a_failing_step_does_not_stop_the_ones_after_it(self):
+        """A plug that has been unplugged is no reason to leave the room dark."""
+        app = self.app()
+        self.recorder.fail_on = set(['WP9ABC#ALL'])
+
+        done, errors = self.reracks.run(app, self.example())
+
+        self.assertEqual(done, 2)
+        self.assertEqual(len(errors), 1)
+        self.assertIn('Step 2', errors[0])
+        self.assertIn(('command', 'EE:FF'),
+                      [call[:2] for call in self.recorder.calls])
+
+    def test_a_step_pointing_at_nothing_says_so_and_carries_on(self):
+        app = self.app()
+        rerack = self.reracks.make_rerack('Gone', [
+            {'kind': 'power', 'driver': 'tuya', 'target': 'NOT:HERE',
+             'action': 'on'},
+            {'kind': 'scene', 'target': 'Warshade'},
+        ])
+
+        done, errors = self.reracks.run(app, rerack)
+
+        self.assertEqual(done, 1)
+        self.assertIn('Nothing matches', errors[0])
+
+    def test_a_missing_scene_is_reported_rather_than_silently_skipped(self):
+        app = self.app()
+        rerack = self.reracks.make_rerack(
+            'Ghost', [{'kind': 'scene', 'target': 'No Such Scene'}])
+
+        done, errors = self.reracks.run(app, rerack)
+
+        self.assertEqual(done, 0)
+        self.assertIn('No scene called', errors[0])
+
+    def test_a_pause_waits_after_its_step_not_before(self):
+        """A television told to wake and change channel at once misses one."""
+        app = self.app()
+        slept = []
+        rerack = self.reracks.make_rerack('Slow', [
+            {'kind': 'command', 'driver': 'broadlink', 'target': 'EE:FF',
+             'action': 'TV power', 'pause': 4},
+            {'kind': 'command', 'driver': 'broadlink', 'target': 'EE:FF',
+             'action': 'Volume up'},
+        ])
+
+        self.reracks.run(app, rerack, sleep_func=slept.append)
+
+        self.assertEqual(slept, [4])
+        self.assertEqual(len(self.recorder.calls), 2)
+
+    def test_empty_slots_cost_nothing_and_are_skipped(self):
+        app = self.app()
+        rerack = self.reracks.make_rerack('Sparse')
+        rerack['steps'][7] = {'kind': 'scene', 'target': 'Warshade',
+                              'pause': 0}
+        slept = []
+
+        done, errors = self.reracks.run(app, rerack, sleep_func=slept.append)
+
+        self.assertEqual((done, errors), (1, []))
+        self.assertEqual(slept, [])
+
+    def test_all_of_a_driver_is_a_valid_target(self):
+        app = self.app()
+        app._devices.append(Device('WP9ABC#1', name='Outlet 1', driver='tuya',
+                                   lan=True, native_id='wp9abc'))
+        rerack = self.reracks.make_rerack('Plugs off', [
+            {'kind': 'power', 'driver': 'tuya',
+             'target': self.reracks.TARGET_ALL, 'action': 'off'}])
+
+        self.reracks.run(app, rerack)
+
+        self.assertEqual([call[:2] for call in self.recorder.calls],
+                         [('turn', 'WP9ABC#ALL'), ('turn', 'WP9ABC#1')])
+
+    def test_a_renamed_device_is_still_found_by_id(self):
+        """Reracks refer to ids, so renaming a device does not break one."""
+        app = self.app()
+        rerack = self.example()
+        app._devices[1].name = 'Something Else Entirely'
+
+        done, errors = self.reracks.run(app, rerack)
+
+        self.assertEqual((done, errors), (3, []))
+
+    def test_a_step_written_by_hand_can_name_a_device(self):
+        app = self.app()
+        rerack = self.reracks.make_rerack('By name', [
+            {'kind': 'power', 'target': 'Office Plug All outlets',
+             'action': 'on'}])
+
+        done, errors = self.reracks.run(app, rerack)
+
+        self.assertEqual((done, errors), (1, []))
+
+    def test_a_run_can_be_stopped_part_way(self):
+        app = self.app()
+        seen = []
+
+        def stop_after_first(index, step):
+            seen.append(index)
+            return len(seen) <= 1
+
+        done, _errors = self.reracks.run(app, self.example(),
+                                         on_step=stop_after_first)
+
+        self.assertEqual(done, 1)
+
+    # -- persistence -------------------------------------------------------
+
+    def test_a_rerack_survives_a_restart(self):
+        app = self.app()
+        app.save_rerack(self.example())
+
+        from paragon_home import ParagonHome
+        again = ParagonHome()
+
+        saved = again.rerack_by_name('Wind Down')
+        self.assertIsNotNone(saved)
+        self.assertEqual(len(saved['steps']), 10)
+        self.assertEqual(saved['steps'][0]['target'], 'Warshade')
+
+    def test_saving_the_same_name_replaces_rather_than_duplicates(self):
+        app = self.app()
+        app.save_rerack(self.example())
+        app.save_rerack(self.reracks.make_rerack(
+            'Wind Down', [{'kind': 'scene', 'target': 'Warshade'}]))
+
+        self.assertEqual(len(app.reracks), 1)
+        self.assertEqual(len(self.reracks.filled_steps(app.reracks[0])), 1)
+
+    def test_a_rerack_is_found_however_its_name_is_typed(self):
+        app = self.app()
+        app.save_rerack(self.example())
+
+        self.assertIsNotNone(app.rerack_by_name('  wind DOWN '))
+
+    def test_deleting_one_leaves_the_others(self):
+        app = self.app()
+        app.save_rerack(self.example())
+        app.save_rerack(self.reracks.make_rerack('Other'))
+
+        self.assertTrue(app.delete_rerack({'name': 'Other'}))
+        self.assertEqual([r['name'] for r in app.reracks], ['Wind Down'])
+
+    def test_a_fresh_install_has_no_reracks_rather_than_invented_ones(self):
+        """A starter rerack would be ten slots pointing at nobody's devices."""
+        self.assertEqual(self.app().reracks, [])
+
+    def test_run_by_name_reports_a_name_that_is_not_there(self):
+        app = self.app()
+
+        self.assertFalse(app.run_rerack_by_name('Nothing', announce=False))
+
+    # -- how it reads ------------------------------------------------------
+
+    def test_the_summary_keeps_the_names_as_they_were_typed(self):
+        self.assertEqual(self.reracks.describe(self.example()),
+                         '3 steps, first: Scene: Warshade')
+
+    def test_a_step_reads_back_in_the_order_it_was_chosen(self):
+        rerack = self.example()
+
+        self.assertEqual(
+            [self.reracks.describe_step(s) for s in rerack['steps'][:3]],
+            ['Scene: Warshade', 'WP9ABC#ALL: On', 'EE:FF: TV power'])
+
+    def test_a_pause_is_shown_on_the_step_it_follows(self):
+        step = self.reracks.normalise_step(
+            {'kind': 'scene', 'target': 'Warshade', 'pause': 30})
+
+        self.assertEqual(self.reracks.describe_step(step),
+                         'Scene: Warshade  (+30s)')
+
+    def test_an_all_target_reads_as_all_of_them(self):
+        step = self.reracks.normalise_step(
+            {'kind': 'power', 'driver': 'tuya',
+             'target': self.reracks.TARGET_ALL, 'action': 'off'})
+
+        self.assertEqual(self.reracks.describe_step(step),
+                         'all tuya devices: Off')
 
 
 class TestHexColours(unittest.TestCase):
@@ -5823,6 +6136,123 @@ class TestControlPanel(unittest.TestCase):
 
         self.assertIn('Test connection', labels)
         self.assertNotIn('Identify (flash this light)', labels)
+
+    def _rerack_app(self):
+        by_driver = {'govee': ['power', 'brightness', 'color', 'color_temp',
+                               'state'],
+                     'tuya': ['power', 'state'],
+                     'broadlink': ['commands']}
+        self.recorder.capabilities = lambda d: set(by_driver[d.driver])
+        self.recorder.commands = lambda device: ['TV power', 'Volume up']
+        self.app._devices = [
+            Device('AA:BB', name='Back Office Left Low', driver='govee',
+                   lan=True),
+            Device('WP9ABC#ALL', name='Office Plug All outlets',
+                   driver='tuya', lan=True, native_id='wp9abc'),
+            Device('EE:FF', name='Bedroom Broadlink', driver='broadlink',
+                   lan=True),
+        ]
+        self.app._scenes = [scene_lib.make_scene('Warshade',
+                                                 targets=['AA:BB'])]
+
+    def test_the_main_menu_offers_reracks(self):
+        _row, labels = menu_row(self.panel().main_menu, 'Reracks')
+
+        self.assertIn('Reracks...', labels)
+
+    def test_a_rerack_is_built_through_three_choices_per_step(self):
+        """Driver, then which one, then what it does -- as spoken aloud."""
+        import reracks as rerack_lib
+
+        self._rerack_app()
+        self.app._reracks = [rerack_lib.make_rerack('Wind Down')]
+        panel = self.panel()
+
+        # Step 1 -- Scene, Warshade.
+        kinds = menu_row(lambda: panel.edit_step(self.app.reracks[0], 0),
+                         'Scene')[1]
+        xbmcgui.SELECT_QUEUE.extend([kinds.index('Scene'), 0])
+        panel.edit_step(self.app.reracks[0], 0)
+
+        # Step 2 -- Tuya, the plug, On.
+        xbmcgui.reset()
+        xbmcgui.SELECT_QUEUE.extend([kinds.index('Tuya'), 1, 0])
+        panel.edit_step(self.app.reracks[0], 1)
+
+        # Step 3 -- Broadlink, the blaster, TV power.
+        xbmcgui.reset()
+        xbmcgui.SELECT_QUEUE.extend([kinds.index('Broadlink'), 1, 0])
+        panel.edit_step(self.app.reracks[0], 2)
+
+        steps = self.app.reracks[0]['steps']
+        self.assertEqual(
+            [rerack_lib.describe_step(s) for s in steps[:3]],
+            ['Scene: Warshade', 'WP9ABC#ALL: On', 'EE:FF: TV power'])
+        self.assertEqual(steps[2]['kind'], 'command')
+
+    def test_the_editor_shows_all_ten_slots_including_the_empty_ones(self):
+        import reracks as rerack_lib
+
+        self._rerack_app()
+        rerack = rerack_lib.make_rerack('Wind Down', [
+            {'kind': 'scene', 'target': 'Warshade'}])
+        self.app._reracks = [rerack]
+
+        _row, labels = menu_row(lambda: self.panel().edit_rerack(rerack),
+                                ' 1.')
+
+        slots = [l for l in labels if l[:3].strip().rstrip('.').isdigit()]
+        self.assertEqual(len(slots), 10)
+        self.assertIn('Scene: Warshade', slots[0])
+        self.assertIn('Empty', slots[1])
+
+    def test_clearing_a_step_empties_that_slot_and_no_other(self):
+        import reracks as rerack_lib
+
+        self._rerack_app()
+        rerack = rerack_lib.make_rerack('Wind Down', [
+            {'kind': 'scene', 'target': 'Warshade'},
+            {'kind': 'power', 'driver': 'tuya', 'target': 'WP9ABC#ALL',
+             'action': 'on'}])
+        self.app._reracks = [rerack]
+        panel = self.panel()
+
+        kinds = menu_row(lambda: panel.edit_step(rerack, 0), 'Scene')[1]
+        xbmcgui.SELECT_QUEUE.extend([kinds.index('Clear this step')])
+        panel.edit_step(rerack, 0)
+
+        self.assertEqual(rerack['steps'][0]['kind'], 'none')
+        self.assertEqual(rerack['steps'][1]['action'], 'on')
+
+    def test_a_pause_survives_the_step_being_changed(self):
+        """The gap belongs to the slot, not to what happens to be in it."""
+        import reracks as rerack_lib
+
+        self._rerack_app()
+        rerack = rerack_lib.make_rerack('Wind Down', [
+            {'kind': 'scene', 'target': 'Warshade', 'pause': 12}])
+        self.app._reracks = [rerack]
+        panel = self.panel()
+
+        kinds = menu_row(lambda: panel.edit_step(rerack, 0), 'Scene')[1]
+        xbmcgui.SELECT_QUEUE.extend([kinds.index('Tuya'), 1, 1])
+        panel.edit_step(rerack, 0)
+
+        self.assertEqual(rerack['steps'][0]['action'], 'off')
+        self.assertEqual(rerack['steps'][0]['pause'], 12)
+
+    def test_a_new_rerack_will_not_take_a_name_already_used(self):
+        import reracks as rerack_lib
+
+        self._rerack_app()
+        self.app._reracks = [rerack_lib.make_rerack('Wind Down')]
+
+        xbmcgui.INPUT_QUEUE.append('wind down')
+        xbmcgui.SELECT_QUEUE.extend([-1])
+        self.panel().new_rerack()
+
+        self.assertEqual(len(self.app.reracks), 1)
+        self.assertIn('already a rerack', xbmcgui.OK_DIALOGS[-1][1])
 
     def test_main_menu_shows_the_version(self):
         xbmcgui.SELECT_QUEUE.extend([-1])

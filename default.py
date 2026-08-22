@@ -13,6 +13,7 @@ button, a keymap or a favourite:
 
     RunScript(script.paragon.govee,action=toggle)
     RunScript(script.paragon.govee,action=scene,name=Movie Night)
+    RunScript(script.paragon.govee,action=rerack,name=Bedtime)
     RunScript(script.paragon.govee,action=brightness,value=20)
     RunScript(script.paragon.govee,action=color,value=FF8800)
     RunScript(script.paragon.govee,action=color,value=Paragon Purple)
@@ -143,6 +144,12 @@ def run_action(app, params, utils):
             utils.force_notify('scene needs name=<scene name>')
         else:
             app.apply_scene_by_name(name)
+    elif action == 'rerack':
+        name = params.get('name') or params.get('value')
+        if not name:
+            utils.force_notify('rerack needs name=<rerack name>')
+        else:
+            app.run_rerack_by_name(name)
     elif action == 'refresh':
         devices, warnings = app.refresh_devices()
         if warnings and not devices:

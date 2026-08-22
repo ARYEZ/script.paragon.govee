@@ -18,6 +18,7 @@ import xbmcgui
 
 import addon_utils as utils
 import palette as palette_lib
+import reracks as rerack_lib
 import scenes as scene_lib
 from devices import (CAP_BRIGHTNESS, CAP_COLOR, CAP_COLOR_TEMP,
                      CAP_COMMANDS, CAP_POWER, CAP_STATE,
@@ -170,6 +171,7 @@ class ControlPanel(object):
 
         rows.extend([
             ('Scenes...', self.scene_menu),
+            ('Reracks...', self.rerack_menu),
             ('Refresh devices', self.refresh_devices),
             # Stays at the top level rather than inside a driver: the time you
             # need it is when a driver found nothing and so has no menu.
@@ -1294,6 +1296,228 @@ class ControlPanel(object):
             _dialog().ok(utils.ADDON_NAME,
                          'A Tuya local key is exactly 16 characters.\n\n'
                          'You gave %d.' % len(value.strip()))
+
+    # -- reracks -----------------------------------------------------------
+
+    def rerack_menu(self):
+        """The saved reracks. Picking one runs it."""
+        while True:
+            reracks = self.app.reracks
+            rows = [('%s  -  %s' % (r['name'], rerack_lib.describe(r)),
+                     lambda r=r: self.run_rerack(r)) for r in reracks]
+            rows.append(('New rerack...', self.new_rerack))
+            if reracks:
+                rows.append(('Manage reracks...', self.manage_reracks))
+
+            choice = _select('Reracks', [label for label, _h in rows])
+            if choice == BACK:
+                return
+            rows[choice][1]()
+
+    def run_rerack(self, rerack):
+        """Run a rerack, showing progress and letting a long one be stopped.
+
+        A rerack can hold pauses that add up to minutes, so it runs behind a
+        cancellable progress dialog rather than freezing the menu.
+        """
+        steps = rerack_lib.filled_steps(rerack)
+        if not steps:
+            utils.force_notify('%s has no steps yet' % rerack['name'])
+            return
+
+        progress = xbmcgui.DialogProgress()
+        progress.create(utils.ADDON_NAME, 'Running %s...' % rerack['name'])
+        total = len(rerack.get('steps') or [])
+
+        def announce(index, step):
+            if progress.iscanceled():
+                return False
+            progress.update(int(100.0 * index / max(1, total)),
+                            'Running %s...' % rerack['name'],
+                            rerack_lib.describe_step(
+                                step, self._target_name(step)))
+            return True
+
+        try:
+            self.app.run_rerack(rerack, on_step=announce)
+        finally:
+            progress.close()
+
+    def _target_name(self, step):
+        """The friendly name of a step's target, for showing it back."""
+        if step.get('kind') == rerack_lib.KIND_SCENE:
+            return step.get('target')
+        if step.get('target') == rerack_lib.TARGET_ALL:
+            return None
+        found = rerack_lib.resolve_targets(step, self.app.devices)
+        return found[0].name if found else None
+
+    def new_rerack(self):
+        name = _dialog().input('Name for the new rerack', '')
+        if not name or not name.strip():
+            return
+        if self.app.rerack_by_name(name):
+            _dialog().ok(utils.ADDON_NAME,
+                         'There is already a rerack called "%s".'
+                         % name.strip())
+            return
+        rerack = self.app.save_rerack(rerack_lib.make_rerack(name.strip()))
+        if rerack:
+            self.edit_rerack(rerack)
+
+    def manage_reracks(self):
+        while True:
+            reracks = self.app.reracks
+            if not reracks:
+                return
+            rows = [(r['name'], lambda r=r: self.edit_rerack(r))
+                    for r in reracks]
+            choice = _select('Manage reracks', [label for label, _h in rows])
+            if choice == BACK:
+                return
+            rows[choice][1]()
+
+    def edit_rerack(self, rerack):
+        """The ten slots, always all ten, numbered as they run."""
+        while True:
+            rows = []
+            for index, step in enumerate(rerack['steps']):
+                rows.append(('%2d. %s'
+                             % (index + 1,
+                                rerack_lib.describe_step(
+                                    step, self._target_name(step))),
+                             lambda i=index: self.edit_step(rerack, i)))
+            rows.append(('Run it now', lambda: self.run_rerack(rerack)))
+            rows.append(('Rename', lambda: self._rename_rerack(rerack)))
+            rows.append(('Delete this rerack',
+                         lambda: self._delete_rerack(rerack)))
+
+            choice = _select(rerack['name'], [label for label, _h in rows])
+            if choice == BACK:
+                return
+            if rows[choice][1]() is False:
+                return
+
+    def _rename_rerack(self, rerack):
+        name = _dialog().input('Rerack name', rerack['name'])
+        if not name or not name.strip() or name.strip() == rerack['name']:
+            return
+        if self.app.rerack_by_name(name):
+            _dialog().ok(utils.ADDON_NAME,
+                         'There is already a rerack called "%s".'
+                         % name.strip())
+            return
+        self.app.delete_rerack(rerack)
+        rerack['name'] = name.strip()
+        self.app.save_rerack(rerack)
+
+    def _delete_rerack(self, rerack):
+        if not _dialog().yesno(utils.ADDON_NAME,
+                               'Delete the rerack "%s"?' % rerack['name']):
+            return
+        self.app.delete_rerack(rerack)
+        utils.notify('Deleted %s' % rerack['name'])
+        return False
+
+    # -- one step ----------------------------------------------------------
+
+    def edit_step(self, rerack, index):
+        """Pick a step in the order you would say it: kind, target, action."""
+        kinds = [('Scene', self._step_scene)]
+        for driver_id in self._driver_ids(self.app.enabled_devices):
+            kinds.append((self._driver_label(driver_id),
+                          lambda d=driver_id: self._step_device(d)))
+        kinds.append(('Pause after this step', self._step_pause))
+        kinds.append(('Clear this step', lambda: rerack_lib.empty_step()))
+
+        choice = _select('Step %d' % (index + 1),
+                         [label for label, _h in kinds])
+        if choice == BACK:
+            return
+
+        step = kinds[choice][1]()
+        if step is None:
+            return
+        if step == 'pause':
+            self._ask_pause(rerack, index)
+            return
+
+        # A step's pause belongs to the slot rather than to what is in it, so
+        # replacing the action does not silently drop the gap after it.
+        step['pause'] = rerack['steps'][index].get('pause', 0)
+        rerack['steps'][index] = rerack_lib.normalise_step(step)
+        self.app.save_rerack(rerack)
+
+    def _step_scene(self):
+        scenes = self.app.scenes
+        if not scenes:
+            utils.force_notify('No scenes to choose from yet')
+            return None
+        choice = _select('Which scene', [s['name'] for s in scenes])
+        if choice == BACK:
+            return None
+        return {'kind': rerack_lib.KIND_SCENE,
+                'target': scenes[choice]['name']}
+
+    def _step_device(self, driver_id):
+        """Which device of this driver, then what to do to it."""
+        from devices import CAP_COMMANDS, CAP_POWER
+
+        label = self._driver_label(driver_id)
+        devices = self._devices_for(driver_id, self.app.enabled_devices)
+        if not devices:
+            utils.force_notify('No %s devices' % label)
+            return None
+
+        rows = [('All %s' % label, None)]
+        rows.extend((device.name, device) for device in devices)
+        choice = _select('Which %s device' % label,
+                         [row_label for row_label, _d in rows])
+        if choice == BACK:
+            return None
+
+        device = rows[choice][1]
+        target = device.device_id if device is not None \
+            else rerack_lib.TARGET_ALL
+        sample = device if device is not None else devices[0]
+        capabilities = self.app.controller.capabilities(sample)
+
+        actions = []
+        if CAP_POWER in capabilities:
+            actions.extend([('On', rerack_lib.ACTION_ON),
+                            ('Off', rerack_lib.ACTION_OFF),
+                            ('Toggle', rerack_lib.ACTION_TOGGLE)])
+        commands = []
+        if device is not None and CAP_COMMANDS in capabilities:
+            commands = self.app.controller.commands(device)
+            actions.extend((name, name) for name in commands)
+
+        if not actions:
+            utils.force_notify('%s has nothing to switch or send' % label)
+            return None
+
+        pick = _select('What should it do',
+                       [action_label for action_label, _v in actions])
+        if pick == BACK:
+            return None
+
+        chosen = actions[pick][1]
+        kind = rerack_lib.KIND_COMMAND if chosen in commands \
+            else rerack_lib.KIND_POWER
+        return {'kind': kind, 'driver': driver_id, 'target': target,
+                'action': chosen}
+
+    def _step_pause(self):
+        return 'pause'
+
+    def _ask_pause(self, rerack, index):
+        current = str(rerack['steps'][index].get('pause') or 0)
+        value = self._ask_number('Seconds to wait after this step', current)
+        if value is None:
+            return
+        rerack['steps'][index]['pause'] = max(0, min(rerack_lib.MAX_PAUSE,
+                                                     value))
+        self.app.save_rerack(rerack)
 
     # -- learned commands ---------------------------------------------------
 

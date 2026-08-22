@@ -17,6 +17,7 @@ import time
 
 import addon_utils as utils
 import palette as palette_lib
+import reracks as rerack_lib
 import scenes as scene_lib
 from devices import (DEVICE_CACHE, Device, TRANSPORT_AUTO, TRANSPORT_CLOUD,
                      TRANSPORT_LAN, build_hub)
@@ -48,6 +49,7 @@ class ParagonHome(object):
         self.controller = build_hub(settings)
         self._devices = None
         self._scenes = None
+        self._reracks = None
         self._palette = None
         # How many known lights failed to answer the last refresh, so the
         # control panel can say so rather than silently showing a short list.
@@ -536,6 +538,76 @@ class ParagonHome(object):
                 utils.force_notify('No scene named "%s"' % name)
             return False
         return self.apply_scene(scene, announce=announce)
+
+    # -- reracks -----------------------------------------------------------
+
+    @property
+    def reracks(self):
+        """The saved reracks. Empty on a fresh install rather than seeded.
+
+        Unlike scenes, there is no sensible starter set: a rerack refers to
+        this house's own devices by name, and an invented one would be ten
+        slots pointing at nothing.
+        """
+        if self._reracks is None:
+            raw = utils.read_json(rerack_lib.RERACK_FILE, default=None)
+            self._reracks = rerack_lib.normalise_all(raw or [])
+        return self._reracks
+
+    def save_reracks(self):
+        utils.write_json(rerack_lib.RERACK_FILE, self.reracks)
+
+    def rerack_by_name(self, name):
+        return rerack_lib.find(self.reracks, name)
+
+    def save_rerack(self, rerack):
+        """Add or replace a rerack by name. Returns the cleaned rerack."""
+        cleaned = rerack_lib.normalise(rerack)
+        if cleaned is None:
+            return None
+        existing = rerack_lib.find(self.reracks, cleaned['name'])
+        if existing is not None:
+            self._reracks[self._reracks.index(existing)] = cleaned
+        else:
+            self._reracks.append(cleaned)
+        self.save_reracks()
+        return cleaned
+
+    def delete_rerack(self, rerack):
+        existing = rerack_lib.find(self.reracks, rerack.get('name'))
+        if existing is None:
+            return False
+        self._reracks.remove(existing)
+        self.save_reracks()
+        return True
+
+    def run_rerack(self, rerack, announce=True, sleep_func=None,
+                   on_step=None):
+        """Run a rerack and report the outcome. Returns True if any step ran."""
+        done, errors = rerack_lib.run(self, rerack, log_func=utils.log,
+                                      sleep_func=sleep_func, on_step=on_step)
+        if announce:
+            if done and not errors:
+                utils.notify('%s: %d step(s) done'
+                             % (rerack.get('name'), done))
+            elif done:
+                utils.force_notify('%s: %d done, %d failed'
+                                   % (rerack.get('name'), done, len(errors)))
+            elif errors:
+                utils.force_notify(errors[0])
+            else:
+                utils.force_notify('%s has no steps yet'
+                                   % rerack.get('name'))
+        return done > 0
+
+    def run_rerack_by_name(self, name, announce=True):
+        rerack = self.rerack_by_name(name)
+        if rerack is None:
+            utils.log('No rerack named "%s"' % name)
+            if announce:
+                utils.force_notify('No rerack named "%s"' % name)
+            return False
+        return self.run_rerack(rerack, announce=announce)
 
     # -- bulk actions ------------------------------------------------------
 

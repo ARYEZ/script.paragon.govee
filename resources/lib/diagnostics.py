@@ -363,3 +363,66 @@ def run_tuya(app, timeout=8.0):
     for line in tuya_lines(report):
         utils.log(line)
     return tuya_summary(report), report
+
+
+# ---------------------------------------------------------------------------
+# Kasa search
+# ---------------------------------------------------------------------------
+
+def kasa_summary(report):
+    """Short, actionable text for the on-screen dialog."""
+    devices = report.get('devices') or []
+    if devices:
+        rows = ['%s  %s  (%s)' % (d.get('alias') or d.get('device_id'),
+                                  d.get('ip'), d.get('model') or '?')
+                for d in devices[:8]]
+        return ('Found %d Kasa device(s):\n\n%s\n\nRun "Refresh devices" to '
+                'add them.' % (len(devices), '\n'.join(rows)))
+
+    if report.get('error'):
+        return ('The search could not be sent.\n\n%s' % report['error'])
+
+    return ('No Kasa device answered in %.0f seconds.\n\n'
+            'A Kasa plug replies to a broadcast straight away, so silence '
+            'means the broadcast never reached it or its reply never came '
+            'back:\n\n'
+            '1. The plug is on a different network from Kodi -- a 2.4GHz '
+            'guest SSID or a separate VLAN. Broadcasts do not cross subnets, '
+            'and these plugs are 2.4GHz only.\n'
+            '2. Inbound UDP is blocked for Kodi by the firewall. This is the '
+            'most common cause on Windows.\n'
+            '3. "Local control" or the local API is switched off in the Kasa '
+            'app, under the device settings.\n'
+            '4. The firmware has closed the local protocol. Newer TP-Link '
+            'firmware on some models talks only to the cloud. Check the plug '
+            'still works in the Kasa app first -- if it does, this is the '
+            'likely answer, and it is not something the add-on can work '
+            'around.\n\n'
+            'Addresses the search went out from:\n%s'
+            % (report.get('listened', 0),
+               '\n'.join(report.get('addresses') or ['(none found)'])))
+
+
+def run_kasa(app, timeout=6.0):
+    """Search for Kasa devices, log the detail, return (summary, report)."""
+    import kasa_lan
+    from govee_lan import local_addresses
+
+    report = {'listened': timeout, 'devices': [], 'error': '',
+              'addresses': list(local_addresses()) + ['default route']}
+    utils.log('--- Paragon Home Kasa diagnostics ---')
+    utils.log('Broadcasting UDP %d from: %s'
+              % (kasa_lan.PORT, ', '.join(report['addresses'])))
+    try:
+        report['devices'] = kasa_lan.discover(timeout=timeout,
+                                              log_func=utils.debug)
+    except kasa_lan.KasaError as exc:
+        report['error'] = str(exc)
+        utils.log('Kasa search failed: %s' % exc)
+
+    for device in report['devices']:
+        utils.log('  %s  %s  %s  relay=%s'
+                  % (device.get('device_id'), device.get('ip'),
+                     device.get('model'), device.get('relay_state')))
+    utils.log('--- end Kasa diagnostics ---')
+    return kasa_summary(report), report

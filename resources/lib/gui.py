@@ -43,9 +43,9 @@ BACK = -1
 # The order the kinds of device are offered in, and what to call one
 # when its driver is not loaded. A driver not listed here still
 # appears, after these, under its own name.
-DRIVER_ORDER = ('govee', 'broadlink', 'tuya')
+DRIVER_ORDER = ('govee', 'broadlink', 'tuya', 'kasa')
 DRIVER_LABELS = {'govee': 'Govee', 'broadlink': 'Broadlink',
-                 'tuya': 'Tuya'}
+                 'tuya': 'Tuya', 'kasa': 'Kasa'}
 
 HIGHLIGHT_COLOR = (255, 0, 255)
 HIGHLIGHT_BRIGHTNESS = 100
@@ -292,12 +292,33 @@ class ControlPanel(object):
     def diagnose_menu(self):
         """Which search to look into. Each driver fails its own way."""
         rows = [('Govee lights', self.diagnose),
-                ('Tuya plugs', self.diagnose_tuya)]
+                ('Tuya plugs', self.diagnose_tuya),
+                ('Kasa plugs', self.diagnose_kasa)]
         choice = _select('Diagnose device search',
                          [label for label, _handler in rows])
         if choice == BACK:
             return
         rows[choice][1]()
+
+    def diagnose_kasa(self):
+        """Broadcast for Kasa devices and explain what came back."""
+        import diagnostics
+
+        self._diagnose('Kasa', 'Searching for Kasa devices...',
+                       lambda: diagnostics.run_kasa(self.app))
+
+    def _diagnose(self, label, busy, run):
+        progress = xbmcgui.DialogProgressBG()
+        progress.create(utils.ADDON_NAME, busy)
+        try:
+            text, _report = run()
+        except Exception as exc:
+            utils.log('%s diagnostics failed: %s' % (label, exc))
+            progress.close()
+            _dialog().ok(utils.ADDON_NAME, 'Diagnostics failed:\n\n%s' % exc)
+            return
+        progress.close()
+        _dialog().ok('%s - %s search' % (utils.ADDON_NAME, label), text)
 
     def diagnose_tuya(self):
         """Listen for Tuya announcements and explain what was heard."""

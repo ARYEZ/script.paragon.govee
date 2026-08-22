@@ -1,3 +1,24 @@
+v2.7.0
+- TP-Link Kasa plugs are now supported, as the fourth driver: HS100, HS103,
+  HS110 and the KP series.
+- Nothing to set up. No account, no local key, no protocol version to match --
+  a Kasa plug that answers a search can be switched with what the search
+  returned. Next to Tuya, which needs a cloud project and a 16-character key
+  first, that difference is the vendor's rather than the add-on's.
+- Devices arrive already named. Whatever a plug is called in the Kasa app comes
+  back in its system info, so there is nothing to identify one bulb at a time.
+- Multi-outlet models report their outlets in system info, so a KP303 or HS300
+  is listed one device per outlet under the names those outlets already have.
+  A single plug stays a single device.
+- Kasa obfuscates its JSON with a running XOR rather than encrypting it, which
+  is why no key is needed and why anything on your network can switch these
+  plugs. True before this add-on existed, and worth knowing on a shared
+  network.
+- New Kasa entry under "Diagnose device search": it reports which addresses the
+  broadcast went out from and names the causes in order. It also names the one
+  cause with no workaround -- newer TP-Link firmware on some models has closed
+  the local protocol and talks only to the cloud.
+
 v2.6.1
 - Renamed the last of "Paragon Govee" to "Paragon Home": every file header, the
   settings page, the README, and the session module and class, which were still

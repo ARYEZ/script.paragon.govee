@@ -53,6 +53,15 @@ TEST_LISTEN_PORT = 44002
 TEST_COMMAND_PORT = 44003
 
 
+def _free_port():
+    """A port nothing is listening on, for testing an unreachable device."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(('127.0.0.1', 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
 def gui_highlight():
     import gui
     return tuple(gui.HIGHLIGHT_COLOR)
@@ -2739,6 +2748,403 @@ class TestTuyaControl(unittest.TestCase):
 
         self.assertFalse(ok)
         self.assertIn('device busy', message)
+
+
+class FakeKasaPlug(object):
+    """An HS103 that speaks the real Kasa protocol over loopback TCP.
+
+    Strict about the framing difference on purpose: a TCP request without the
+    4-byte length prefix is the classic way to get this wrong, and a real
+    device answers it with silence rather than an error.
+    """
+
+    def __init__(self, alias='Office Lamp', model='HS103(US)',
+                 relay_state=0, children=None, device_id='8006ABCD1234'):
+        import kasa_lan
+
+        self.kasa_lan = kasa_lan
+        self.device_id = device_id
+        self.info = {
+            'sw_ver': '1.0.6 Build 210524 Rel.162228',
+            'hw_ver': '2.0',
+            'model': model,
+            'deviceId': device_id,
+            'alias': alias,
+            'mac': 'AA:BB:CC:DD:EE:FF',
+            'relay_state': relay_state,
+        }
+        if children is not None:
+            self.info['children'] = children
+            del self.info['relay_state']
+        self.requests = []
+        self.connections = 0
+        self.err_code = 0
+        self.crashed = None
+
+        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server.bind(('127.0.0.1', 0))
+        self.server.listen(5)
+        self.server.settimeout(0.3)
+        self.port = self.server.getsockname()[1]
+
+        self.running = True
+        self.thread = threading.Thread(target=self._serve)
+        self.thread.daemon = True
+        self.thread.start()
+
+    def close(self):
+        self.running = False
+        self.thread.join(2.0)
+        self.server.close()
+
+    def _serve(self):
+        while self.running:
+            try:
+                conn, _addr = self.server.accept()
+            except (socket.timeout, socket.error):
+                continue
+            self.connections += 1
+            try:
+                conn.settimeout(1.0)
+                data = conn.recv(8192)
+                if data:
+                    reply = self._handle(data)
+                    if reply:
+                        conn.sendall(reply)
+            except socket.error:
+                pass
+            except Exception as exc:  # surfaced by the test, not swallowed
+                self.crashed = exc
+            finally:
+                try:
+                    conn.close()
+                except socket.error:
+                    pass
+
+    def _handle(self, data):
+        assert len(data) >= 4, 'TCP requests carry a 4-byte length prefix'
+        length = struct.unpack('>I', data[:4])[0]
+        assert length == len(data) - 4, 'declared length did not match'
+
+        body = json.loads(self.kasa_lan.decrypt(data[4:]).decode('utf-8'))
+        self.requests.append(body)
+
+        system = body.get('system') or {}
+        if 'get_sysinfo' in system:
+            return self._reply({'system': {'get_sysinfo': dict(self.info)}})
+
+        relay = system.get('set_relay_state')
+        if relay is not None:
+            if self.err_code:
+                return self._reply({'system': {'set_relay_state': {
+                    'err_code': self.err_code, 'err_msg': 'device busy'}}})
+            self._apply(body, relay.get('state'))
+            return self._reply(
+                {'system': {'set_relay_state': {'err_code': 0}}})
+        return self._reply({'system': {}})
+
+    def _apply(self, body, state):
+        wanted = list((body.get('context') or {}).get('child_ids') or [])
+        if not wanted:
+            self.info['relay_state'] = state
+            return
+        for child in self.info.get('children') or []:
+            if self.device_id + child['id'] in wanted \
+                    or child['id'] in wanted:
+                child['state'] = state
+
+    def _reply(self, body):
+        payload = self.kasa_lan.encrypt(json.dumps(body))
+        return struct.pack('>I', len(payload)) + payload
+
+
+class TestKasaProtocol(unittest.TestCase):
+    """The cipher and the two framings, which is most of this protocol."""
+
+    def setUp(self):
+        for name in ('kasa_lan', 'kasa_driver'):
+            if name in sys.modules:
+                del sys.modules[name]
+        import kasa_lan
+        self.kasa_lan = kasa_lan
+
+    def test_the_cipher_round_trips(self):
+        text = '{"system":{"set_relay_state":{"state":1}}}'
+        self.assertEqual(
+            self.kasa_lan.decrypt(self.kasa_lan.encrypt(text)).decode('utf-8'),
+            text)
+
+    def test_the_cipher_matches_the_published_prefix(self):
+        """Every Kasa request starts {"system": and so encrypts identically.
+
+        Pinned against the known bytes rather than only against my own
+        decrypt, which would agree with itself however wrong it was.
+        """
+        encrypted = self.kasa_lan.encrypt('{"system":')
+        self.assertEqual(''.join('%02x' % b for b in bytearray(encrypted)),
+                         'd0f281f88bff9af7d5ef')
+
+    def test_the_chain_runs_off_the_output_not_the_input(self):
+        """Two identical plaintext bytes must not encrypt identically."""
+        encrypted = bytearray(self.kasa_lan.encrypt('aa'))
+        self.assertNotEqual(encrypted[0], encrypted[1])
+
+    def test_tcp_framing_declares_the_length_and_udp_does_not(self):
+        payload = 'ab'
+        framed = self.kasa_lan.framed(payload)
+
+        self.assertEqual(struct.unpack('>I', framed[:4])[0], len(payload))
+        self.assertEqual(framed[4:], self.kasa_lan.encrypt(payload))
+
+    def test_sysinfo_without_an_id_is_not_a_device(self):
+        self.assertIsNone(self.kasa_lan.parse_sysinfo({'alias': 'No id'}))
+
+    def test_sysinfo_is_read_whether_wrapped_or_bare(self):
+        bare = {'deviceId': '8006', 'alias': 'Lamp', 'relay_state': 1}
+        wrapped = {'system': {'get_sysinfo': bare}}
+
+        self.assertEqual(self.kasa_lan.parse_sysinfo(bare)['alias'], 'Lamp')
+        self.assertEqual(self.kasa_lan.parse_sysinfo(wrapped)['alias'], 'Lamp')
+
+    def test_a_child_id_is_made_whole_when_reported_relative(self):
+        """Firmware differs on this and the device wants the whole one."""
+        parsed = self.kasa_lan.parse_sysinfo({
+            'deviceId': '8006ABCD',
+            'children': [{'id': '00', 'alias': 'Left'},
+                         {'id': '8006ABCD01', 'alias': 'Right'}],
+        })
+
+        self.assertEqual([c['id'] for c in parsed['children']],
+                         ['8006ABCD00', '8006ABCD01'])
+
+
+class TestKasaDiagnostics(unittest.TestCase):
+    """A search that finds nothing has to say why, in order of likelihood."""
+
+    def setUp(self):
+        clean_profile()
+        xbmcaddon.reset()
+        for name in ('addon_utils', 'diagnostics', 'kasa_lan'):
+            if name in sys.modules:
+                del sys.modules[name]
+
+    def tearDown(self):
+        clean_profile()
+
+    def summary(self, report):
+        import diagnostics
+
+        return diagnostics.kasa_summary(report)
+
+    def test_devices_found_are_listed_with_what_to_do_next(self):
+        text = self.summary({'devices': [
+            {'alias': 'Office Lamp', 'ip': '10.0.0.9', 'model': 'HS103'}]})
+
+        self.assertIn('Office Lamp', text)
+        self.assertIn('10.0.0.9', text)
+        self.assertIn('Refresh devices', text)
+
+    def test_silence_names_the_causes_and_the_one_with_no_workaround(self):
+        text = self.summary({'devices': [], 'listened': 6,
+                             'addresses': ['10.0.0.5']})
+
+        self.assertIn('different network', text)
+        self.assertIn('firewall', text)
+        # Closed firmware is the one outcome the add-on cannot fix, so it says
+        # so rather than leaving the user retrying a search forever.
+        self.assertIn('firmware has closed the local protocol', text)
+        self.assertIn('not something the add-on can work around', text)
+        self.assertIn('10.0.0.5', text)
+
+    def test_a_send_failure_is_reported_rather_than_read_as_silence(self):
+        text = self.summary({'devices': [], 'error': 'no interfaces'})
+
+        self.assertIn('could not be sent', text)
+        self.assertIn('no interfaces', text)
+
+
+class TestKasaDriver(unittest.TestCase):
+    """Switching a Kasa plug, against a device speaking the real protocol."""
+
+    def setUp(self):
+        clean_profile()
+        xbmcaddon.reset()
+        xbmcgui.reset()
+        for name in ('addon_utils', 'paragon_home', 'kasa_driver', 'kasa_lan',
+                     'hub'):
+            if name in sys.modules:
+                del sys.modules[name]
+        import kasa_lan
+
+        self.kasa_lan = kasa_lan
+        self.real_port = kasa_lan.PORT
+        self.plug = None
+
+    def tearDown(self):
+        self.kasa_lan.PORT = self.real_port
+        if self.plug is not None:
+            crashed = self.plug.crashed
+            self.plug.close()
+            self.assertIsNone(crashed, 'the fake plug crashed: %r' % crashed)
+        clean_profile()
+
+    def start(self, **kwargs):
+        self.plug = FakeKasaPlug(**kwargs)
+        self.kasa_lan.PORT = self.plug.port
+        return self.plug
+
+    def driver(self):
+        from kasa_driver import KasaDriver
+
+        return KasaDriver(timeout=3.0)
+
+    def device(self, child=None):
+        return Device('8006ABCD1234%s' % ('#%s' % child if child else ''),
+                      name='Office Lamp', driver='kasa', ip='127.0.0.1',
+                      lan=True, native_id='8006ABCD1234',
+                      driver_data={'child': child} if child else {})
+
+    # -- switching ---------------------------------------------------------
+
+    def test_a_plug_switches_on_and_off(self):
+        plug = self.start(relay_state=0)
+        driver = self.driver()
+
+        driver.turn(self.device(), True)
+        self.assertEqual(plug.info['relay_state'], 1)
+
+        driver.turn(self.device(), False)
+        self.assertEqual(plug.info['relay_state'], 0)
+
+    def test_a_plug_reports_its_state(self):
+        self.start(relay_state=1)
+
+        self.assertEqual(self.driver().get_state(self.device()),
+                         {'power': 'on'})
+
+    def test_switching_needs_no_key_and_no_setup(self):
+        """The whole difference from Tuya: found is the same as usable.
+
+        A Tuya plug is discovered long before it can be switched, and the
+        driver has to carry that half-state. A Kasa plug that answers a
+        search can be switched with what the search already returned.
+        """
+        plug = self.start(relay_state=0)
+        driver = self.driver()
+
+        found = driver._devices_for({
+            'device_id': plug.device_id, 'ip': '127.0.0.1',
+            'alias': 'Office Lamp', 'model': 'HS103', 'children': []})
+
+        driver.turn(found[0], True)
+
+        self.assertEqual(plug.info['relay_state'], 1)
+
+    def test_a_device_error_reaches_the_user_as_words(self):
+        plug = self.start()
+        plug.err_code = -3
+        driver = self.driver()
+
+        with self.assertRaises(ControlError) as caught:
+            driver.turn(self.device(), True)
+        message = str(caught.exception)
+        self.assertIn('Office Lamp', message)
+        self.assertIn('device busy', message)
+
+    def test_silence_is_explained_as_closed_firmware(self):
+        """A device that answers discovery but not a command has moved on."""
+        self.kasa_lan.PORT = _free_port()
+        driver = self.driver()
+
+        with self.assertRaises(ControlError) as caught:
+            driver.turn(self.device(), True)
+        self.assertIn('Could not reach', str(caught.exception))
+
+    def test_a_long_sysinfo_split_across_reads_is_reassembled(self):
+        """Real sysinfo runs to a couple of kilobytes; one recv may not cover it."""
+        self.start(alias='x' * 3000)
+
+        state = self.driver().get_state(self.device())
+
+        self.assertEqual(state, {'power': 'off'})
+
+    # -- naming ------------------------------------------------------------
+
+    def test_a_plug_arrives_with_the_name_it_already_has(self):
+        """Kasa devices are named at pairing, so there is nothing to identify."""
+        found = self.driver()._devices_for({
+            'device_id': '8006ABCD1234', 'ip': '10.0.0.9',
+            'alias': 'Christmas Tree', 'model': 'HS103', 'children': []})
+
+        self.assertEqual(found[0].name, 'Christmas Tree')
+        self.assertEqual(found[0].model, 'HS103')
+
+    def test_a_single_outlet_plug_stays_one_device(self):
+        found = self.driver()._devices_for({
+            'device_id': '8006ABCD1234', 'ip': '10.0.0.9',
+            'alias': 'Office Lamp', 'model': 'HS103', 'children': []})
+
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].device_id, '8006ABCD1234')
+        self.assertIsNone(self.driver().child_id(found[0]))
+
+    # -- power strips ------------------------------------------------------
+
+    def test_a_strip_is_listed_once_per_outlet_under_its_own_names(self):
+        found = self.driver()._devices_for({
+            'device_id': '8006AAAA', 'ip': '10.0.0.9', 'model': 'KP303',
+            'alias': 'Desk Strip',
+            'children': [{'id': '8006AAAA00', 'alias': 'Monitor'},
+                         {'id': '8006AAAA01', 'alias': 'Speakers'}],
+        })
+
+        self.assertEqual([d.name for d in found], ['Monitor', 'Speakers'])
+        self.assertEqual(set(d.native_id for d in found), set(['8006AAAA']))
+
+    def test_each_outlet_of_a_strip_switches_only_itself(self):
+        plug = self.start(children=[{'id': '00', 'alias': 'Monitor',
+                                     'state': 0},
+                                    {'id': '01', 'alias': 'Speakers',
+                                     'state': 0}])
+
+        self.driver().turn(self.device(child='8006ABCD123401'), True)
+
+        states = dict((c['id'], c['state']) for c in plug.info['children'])
+        self.assertEqual(states, {'00': 0, '01': 1})
+
+    def test_outlets_of_one_strip_share_a_single_round_trip(self):
+        plug = self.start(children=[{'id': '00', 'alias': 'Monitor',
+                                     'state': 1},
+                                    {'id': '01', 'alias': 'Speakers',
+                                     'state': 0}])
+        outlets = [self.device(child='8006ABCD1234%s' % n)
+                   for n in ('00', '01')]
+
+        states = self.driver().get_states(outlets)
+
+        self.assertEqual(plug.connections, 1)
+        self.assertEqual(states[outlets[0].device_id], {'power': 'on'})
+        self.assertEqual(states[outlets[1].device_id], {'power': 'off'})
+
+    # -- capabilities ------------------------------------------------------
+
+    def test_a_plug_claims_power_and_state_only(self):
+        from devices import CAP_COLOR, CAP_COMMANDS, CAP_POWER, CAP_STATE
+
+        caps = self.driver().capabilities(self.device())
+        self.assertEqual(caps, set([CAP_POWER, CAP_STATE]))
+        self.assertNotIn(CAP_COLOR, caps)
+        self.assertNotIn(CAP_COMMANDS, caps)
+
+    def test_test_connection_reports_the_model_and_state(self):
+        self.start(relay_state=1)
+
+        ok, message = self.driver().test_connection(self.device())
+
+        self.assertTrue(ok)
+        self.assertIn('HS103', message)
+        self.assertIn('on', message)
 
 
 class FakeBlaster(object):

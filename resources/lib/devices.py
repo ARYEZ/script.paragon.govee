@@ -467,8 +467,8 @@ def build_controller(settings):
 def build_hub(settings):
     """The device layer: every driver, addressed as one.
 
-    Govee is the only driver today. A second vendor is added here and nowhere
-    else -- the registry, the scene engine and the menus go through the Hub.
+    A vendor is added here and nowhere else -- the registry, the scene engine
+    and the menus go through the Hub and never learn what a Govee bulb is.
     """
     from broadlink_driver import BroadlinkDriver
     from broadlink_lan import BroadlinkTransport
@@ -482,6 +482,10 @@ def build_hub(settings):
             keys=settings.get('tuya_keys'),
             save_keys=settings.get('save_tuya_keys'),
             log_func=settings.get('log_func')))
+
+    if settings.get('kasa_enabled', True):
+        from kasa_driver import KasaDriver
+        drivers.append(KasaDriver(log_func=settings.get('log_func')))
 
     if settings.get('broadlink_enabled', True):
         drivers.append(BroadlinkDriver(

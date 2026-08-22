@@ -24,6 +24,8 @@ Built for **Kodi 17.6 (Krypton)** — `xbmc.python 2.25.0`, Python 2.7.
   over the LAN with no Broadlink account.
 * **Tuya smart plugs** — GHome, Gosund, Smart Life and most no-name plugs,
   protocol 3.1 to 3.4. Multi-outlet plugs are listed one device per outlet.
+* **TP-Link Kasa plugs** — HS100, HS103, HS110 and the KP series. No account,
+  no key, no setup: found is the same as usable.
 * **Scenes** — named presets (`Movie Night`, `Paused`, `All Off`, …) that you
   can edit in the add-on and re-use everywhere.
 * **Playback lighting** — an optional service that dims when playback starts,
@@ -394,6 +396,40 @@ Example `keymaps/govee.xml` in your Kodi userdata:
   </global>
 </keymap>
 ```
+
+---
+
+## Smart plugs (TP-Link Kasa)
+
+**Nothing to set up.** Run **Refresh devices** and they appear, already
+carrying the names you gave them in the Kasa app. No account, no local key, no
+protocol version to match — a Kasa plug that answers a search can be switched
+with what the search returned.
+
+That is worth stating next to the Tuya section, which needs a cloud project
+and a 16-character key before a plug will do anything. The difference is the
+vendor's, not the add-on's.
+
+Kasa's local protocol obfuscates its JSON with a running XOR rather than
+encrypting it. **Anything on your network can switch these plugs** — that was
+true before this add-on existed, and it is why they need no key. Worth knowing
+if your network is shared.
+
+Multi-outlet models — the KP303 and HS300 strips — report their outlets in
+their system info, so they are listed one device per outlet under the names
+each outlet already has. A single plug like the HS103 stays one device.
+
+### If a search finds nothing
+
+**Diagnose device search → Kasa plugs** says which addresses the broadcast went
+out from and lists the causes in order of likelihood. In short: these plugs are
+2.4GHz only and broadcasts do not cross subnets, so a plug on a guest SSID or a
+separate VLAN from Kodi will never be heard.
+
+One cause has no workaround. Newer TP-Link firmware on some models has closed
+the local protocol and talks only to the cloud. A plug that works in the Kasa
+app but answers nothing here is almost certainly that, and no add-on can get
+around it.
 
 ---
 

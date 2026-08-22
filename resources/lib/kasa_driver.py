@@ -1,0 +1,215 @@
+# -*- coding: utf-8 -*-
+"""
+Paragon Home
+Creator: Aryez
+Year: 2026
+Part of: Paragon TV Project
+
+The TP-Link Kasa driver: HS100, HS103, HS110 and the KP series.
+
+The second plug driver, and the one that shows how much of Tuya's difficulty
+was Tuya's rather than the shape of the problem. There is no local key to
+fetch, no cloud account to link and no protocol version to negotiate: a plug
+found is a plug that can be switched. Which means, unlike Tuya, discovery and
+control arrive together -- there is no useful half-state where a device is
+listed but not usable.
+
+A Kasa device already knows its own name. Whatever it is called in the Kasa
+app comes back in its system info, so these arrive named rather than as
+"Kasa 1E3E" waiting to be identified one by one.
+"""
+
+import kasa_lan
+from devices import CAP_POWER, CAP_STATE, ControlError, Device
+
+
+class KasaDriver(object):
+    """Discovers Kasa devices and switches them."""
+
+    DRIVER_ID = 'kasa'
+    DRIVER_LABEL = 'Kasa'
+
+    def __init__(self, log_func=None, timeout=5.0):
+        self.timeout = timeout
+        self._log = log_func or (lambda message: None)
+
+    # -- discovery ---------------------------------------------------------
+
+    def discover(self, timeout=3.0):
+        """Broadcast for Kasa devices.
+
+        The wait is longer than the caller's default: a broadcast that goes
+        out of several interfaces wants time for the slowest to answer, and a
+        plug behind a mesh access point is not always prompt.
+        """
+        listen = max(4.0, float(timeout) + 1.0)
+        try:
+            heard = kasa_lan.discover(timeout=listen, log_func=self._log)
+        except kasa_lan.KasaError as exc:
+            return [], [str(exc)]
+
+        devices = []
+        for entry in heard:
+            devices.extend(self._devices_for(entry))
+        return devices, []
+
+    def _devices_for(self, entry):
+        """One entry per outlet, or one for a single-outlet plug.
+
+        Multi-outlet Kasa hardware -- the KP303 and HS300 strips -- reports
+        its outlets as `children` in system info, each with its own name and
+        its own state. A single plug has no children and stays one device
+        rather than being called "Outlet 1".
+        """
+        children = entry.get('children') or []
+        if not children:
+            return [self._build_device(entry)]
+
+        found = [self._build_device(entry, child) for child in children]
+        self._log('%s has %d outlets' % (entry.get('alias') or 'Kasa device',
+                                         len(children)))
+        return found
+
+    def _build_device(self, entry, child=None):
+        device_id = entry['device_id']
+        data = {}
+        # The name the device already answers to. Kasa devices are named in
+        # the app at pairing time, so unlike a Govee bulb there is nothing to
+        # work out by flashing it.
+        name = entry.get('alias') or ''
+        if child:
+            data['child'] = child['id']
+            name = child.get('alias') or ''
+            if not name:
+                name = '%s outlet' % (entry.get('alias') or 'Kasa')
+        return Device(
+            driver=self.DRIVER_ID,
+            device_id='%s#%s' % (device_id, child['id']) if child
+            else device_id,
+            native_id=device_id,
+            name=name,
+            model=entry.get('model') or 'Kasa',
+            ip=entry.get('ip', ''),
+            lan=True,
+            driver_data=data,
+        )
+
+    # -- capabilities ------------------------------------------------------
+
+    @staticmethod
+    def capabilities(device):
+        """A plug switches, and reports whether it is on. That is all."""
+        return set([CAP_POWER, CAP_STATE])
+
+    @staticmethod
+    def commands(device):
+        return []
+
+    def send_command(self, device, name):
+        raise ControlError('%s does not send commands' % device.name)
+
+    # -- helpers -----------------------------------------------------------
+
+    @staticmethod
+    def native_id(device):
+        return getattr(device, 'native_id', None) or device.device_id
+
+    @staticmethod
+    def child_id(device):
+        """Which outlet this entry is, or None for a whole plug."""
+        data = getattr(device, 'driver_data', None) or {}
+        return data.get('child') or None
+
+    def _session(self, device):
+        if not device.ip:
+            raise ControlError('%s has no address. Run a device refresh.'
+                               % device.name)
+        return kasa_lan.Session(device.ip, timeout=self.timeout,
+                                log_func=self._log)
+
+    # -- state verbs -------------------------------------------------------
+
+    def turn(self, device, on):
+        try:
+            self._session(device).set_relay(bool(on), self.child_id(device))
+        except kasa_lan.KasaError as exc:
+            raise ControlError('%s: %s' % (device.name, exc))
+        return True
+
+    def set_brightness(self, device, percent):
+        raise ControlError('%s has no brightness' % device.name)
+
+    def set_color(self, device, red, green, blue):
+        raise ControlError('%s has no colour' % device.name)
+
+    def set_color_temp(self, device, kelvin):
+        raise ControlError('%s has no colour' % device.name)
+
+    def _state_from_info(self, device, info):
+        """This entry's switch, as the state dict the rest of the add-on uses."""
+        if not info:
+            return None
+        child = self.child_id(device)
+        if child:
+            for entry in info.get('children') or []:
+                found = entry.get('id') or ''
+                if found == child or child.endswith(found):
+                    value = entry.get('state')
+                    break
+            else:
+                return None
+        else:
+            value = info.get('relay_state')
+
+        if value not in (0, 1, True, False):
+            return None
+        return {'power': 'on' if value else 'off'}
+
+    def get_state(self, device):
+        try:
+            info = self._session(device).info()
+        except (kasa_lan.KasaError, ControlError) as exc:
+            self._log('Could not read %s: %s' % (device.name, exc))
+            return None
+        return self._state_from_info(device, info)
+
+    def get_states(self, devices, timeout=3.0):
+        """Read every listed device, one round trip per physical plug.
+
+        Outlets of the same strip share a reply, which also keeps their
+        readings consistent with each other.
+        """
+        states = {}
+        groups = {}
+        order = []
+        for device in devices:
+            plug = self.native_id(device)
+            if plug not in groups:
+                groups[plug] = []
+                order.append(plug)
+            groups[plug].append(device)
+
+        for plug in order:
+            group = groups[plug]
+            try:
+                info = self._session(group[0]).info()
+            except (kasa_lan.KasaError, ControlError) as exc:
+                self._log('Could not read %s: %s' % (group[0].name, exc))
+                info = None
+            for device in group:
+                states[device.device_id] = self._state_from_info(device, info)
+        return states
+
+    def test_connection(self, device):
+        """Read the device and report the result in words."""
+        try:
+            info = self._session(device).info()
+        except (kasa_lan.KasaError, ControlError) as exc:
+            return False, str(exc)
+
+        state = self._state_from_info(device, info)
+        summary = '%s answered.\n\nModel %s, firmware %s.' % (
+            device.name, info.get('model') or '?', info.get('sw_ver') or '?')
+        if state is None:
+            return True, summary + '\n\nIt did not report a switch state.'
+        return True, summary + '\n\nIt is currently %s.' % state['power']

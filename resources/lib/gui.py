@@ -19,7 +19,9 @@ import xbmcgui
 import addon_utils as utils
 import palette as palette_lib
 import scenes as scene_lib
-from devices import ControlError, TRANSPORT_CLOUD
+from devices import (CAP_BRIGHTNESS, CAP_COLOR, CAP_COLOR_TEMP,
+                     CAP_COMMANDS, CAP_POWER, CAP_STATE,
+                     ControlError, DEFAULT_DRIVER, TRANSPORT_CLOUD)
 
 # Presets offered before the user has to type anything.
 BRIGHTNESS_STEPS = [5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
@@ -38,6 +40,13 @@ BACK = -1
 # What a light is set to while the naming walkthrough is asking about it.
 # Full brightness magenta reads clearly against normal room lighting and
 # against the warm whites these bulbs usually sit at.
+# The order the kinds of device are offered in, and what to call one
+# when its driver is not loaded. A driver not listed here still
+# appears, after these, under its own name.
+DRIVER_ORDER = ('govee', 'broadlink', 'tuya')
+DRIVER_LABELS = {'govee': 'Govee', 'broadlink': 'Broadlink',
+                 'tuya': 'Tuya'}
+
 HIGHLIGHT_COLOR = (255, 0, 255)
 HIGHLIGHT_BRIGHTNESS = 100
 
@@ -135,6 +144,12 @@ class ControlPanel(object):
     def main_menu(self):
         """Top-level menu, built as (label, handler) rows.
 
+        One row per kind of device rather than one row per device. With three
+        drivers and forty devices the flat list ran off the screen, and a
+        Broadlink blaster sat among the bulbs offering a brightness it does
+        not have. Sorting by driver first means every menu below this point
+        can offer only what that kind of device actually does.
+
         The version is in the heading on purpose: the add-on is normally
         installed as a git clone and updated with `git pull`, and this is the
         quickest way to confirm which version is actually running.
@@ -142,32 +157,22 @@ class ControlPanel(object):
         devices = self.app.enabled_devices
         rows = []
 
-        if devices:
-            rows.append(('All Lights (%d)' % len(devices),
-                         lambda: self.control_menu(None, 'All Lights')))
-
-        for device in devices:
-            label = device.name
-            transports = device.transports()
-            if transports:
-                label = '%s  [%s]' % (device.name,
-                                      '+'.join(t.upper() for t in transports))
-            # Bind the device to this row rather than closing over the loop
-            # variable, which would otherwise leave every row pointing at the
-            # last light.
-            rows.append((label,
-                         lambda d=device: self.control_menu([d], d.name)))
-
         cycle = self.app.read_cycle()
         if cycle:
             rows.append(('Stop cycling (%s)' % cycle.get('scene'),
                          self.stop_cycling))
 
+        for driver_id in self._driver_ids(devices):
+            owned = self._devices_for(driver_id, devices)
+            rows.append(('%s (%d)' % (self._driver_label(driver_id),
+                                      len(owned)),
+                         lambda d=driver_id: self.driver_menu(d)))
+
         rows.extend([
             ('Scenes...', self.scene_menu),
-            ('Capture lights as a scene...', self.capture_scene),
             ('Refresh devices', self.refresh_devices),
-            ('Manage devices...', self.manage_devices),
+            # Stays at the top level rather than inside a driver: the time you
+            # need it is when a driver found nothing and so has no menu.
             ('Diagnose device search...', self.diagnose_menu),
             ('Settings', utils.open_settings),
         ])
@@ -178,6 +183,106 @@ class ControlPanel(object):
             return BACK
         rows[choice][1]()
         return None
+
+    # -- drivers -----------------------------------------------------------
+
+    @staticmethod
+    def _driver_of(device):
+        return getattr(device, 'driver', None) or DEFAULT_DRIVER
+
+    @classmethod
+    def _devices_for(cls, driver_id, devices):
+        return [d for d in devices if cls._driver_of(d) == driver_id]
+
+    @classmethod
+    def _driver_ids(cls, devices):
+        """Which drivers own something, in a stable, familiar order.
+
+        Taken from the devices rather than from the installed drivers so a
+        driver with nothing found does not sit on the menu as a dead row.
+        """
+        seen = []
+        for device in devices:
+            driver_id = cls._driver_of(device)
+            if driver_id not in seen:
+                seen.append(driver_id)
+        known = [d for d in DRIVER_ORDER if d in seen]
+        return known + sorted(d for d in seen if d not in DRIVER_ORDER)
+
+    def _driver_label(self, driver_id):
+        lookup = getattr(self.app.controller, 'driver', None)
+        driver = lookup(driver_id) if lookup is not None else None
+        return (getattr(driver, 'DRIVER_LABEL', None)
+                or DRIVER_LABELS.get(driver_id)
+                or driver_id.title())
+
+    def driver_menu(self, driver_id):
+        """Everything belonging to one kind of device, and nothing else."""
+        while True:
+            label = self._driver_label(driver_id)
+            devices = self._devices_for(driver_id, self.app.enabled_devices)
+            if not devices:
+                utils.force_notify('No %s devices are enabled' % label)
+                return
+
+            rows = []
+            if CAP_POWER in self._capabilities(devices):
+                rows.append(('All %s (%d)' % (label, len(devices)),
+                             lambda: self.control_menu(devices,
+                                                       'All %s' % label)))
+
+            for device in devices:
+                # Bind the device to this row rather than closing over the
+                # loop variable, which would leave every row pointing at the
+                # last one.
+                rows.append((self._device_label(device),
+                             lambda d=device: self.device_menu(d)))
+
+            rows.append(('Manage %s devices...' % label,
+                         lambda: self.manage_devices(driver_id)))
+
+            choice = _select(label, [row_label for row_label, _h in rows])
+            if choice == BACK:
+                return
+            rows[choice][1]()
+
+    def _device_label(self, device):
+        """A device row: its name, and how it is reached when that varies.
+
+        Only Govee can be reached more than one way. Tagging a Tuya plug
+        [LAN] states the only possibility it has, which is noise on a menu
+        whose whole point is that every row earns its place.
+        """
+        transports = device.transports()
+        if not transports or not self._has_transport_choice(device):
+            return device.name
+        return '%s  [%s]' % (device.name,
+                             '+'.join(t.upper() for t in transports))
+
+    def _has_transport_choice(self, device):
+        lookup = getattr(self.app.controller, 'driver_for', None)
+        driver = lookup(device) if lookup is not None else None
+        return bool(getattr(driver, 'HAS_TRANSPORTS', False))
+
+    def device_menu(self, device):
+        """Open the menu that fits what this device is.
+
+        A blaster has codes, not brightness; a plug has power, not colour.
+        Routing here is what stops one menu having to apologise for rows that
+        do not apply.
+        """
+        if CAP_COMMANDS in self.app.controller.capabilities(device):
+            return self.command_menu(device)
+        return self.control_menu([device], device.name)
+
+    def _capabilities(self, targets):
+        """The union of what the targets can do."""
+        devices = (targets if targets is not None
+                   else self.app.enabled_devices)
+        found = set()
+        for device in devices:
+            found |= set(self.app.controller.capabilities(device) or [])
+        return found
 
     def stop_cycling(self):
         name = self.app.stop_cycle()
@@ -260,27 +365,40 @@ class ControlPanel(object):
         below it.
         """
         while True:
-            rows = [
-                ('Toggle',
-                 lambda: _report(self.app.toggle_all(targets),
-                                 'Toggled %s' % heading)),
-                ('On',
-                 lambda: _report(self.app.power_all(True, targets),
-                                 '%s on' % heading)),
-                ('Off',
-                 lambda: _report(self.app.power_all(False, targets),
-                                 '%s off' % heading)),
-                ('Brightness...',
-                 lambda: self.brightness_menu(targets, heading)),
-                ('Colour...', lambda: self.color_menu(targets, heading)),
-                ('Colour temperature...',
-                 lambda: self.temp_menu(targets, heading)),
-            ]
+            capabilities = self._capabilities(targets)
+            rows = []
+
+            if CAP_POWER in capabilities:
+                rows.extend([
+                    ('Toggle',
+                     lambda: _report(self.app.toggle_all(targets),
+                                     'Toggled %s' % heading)),
+                    ('On',
+                     lambda: _report(self.app.power_all(True, targets),
+                                     '%s on' % heading)),
+                    ('Off',
+                     lambda: _report(self.app.power_all(False, targets),
+                                     '%s off' % heading)),
+                ])
+            if CAP_BRIGHTNESS in capabilities:
+                rows.append(('Brightness...',
+                             lambda: self.brightness_menu(targets, heading)))
+            if CAP_COLOR in capabilities:
+                rows.append(('Colour...',
+                             lambda: self.color_menu(targets, heading)))
+            if CAP_COLOR_TEMP in capabilities:
+                rows.append(('Colour temperature...',
+                             lambda: self.temp_menu(targets, heading)))
+
             if targets and len(targets) == 1:
-                rows.append(('Show status',
-                             lambda: self.show_status(targets[0])))
-                rows.append(('Check status reporting...',
-                             lambda: self.verify_status(targets[0])))
+                if CAP_STATE in capabilities:
+                    rows.append(('Show status',
+                                 lambda: self.show_status(targets[0])))
+                if CAP_COLOR in capabilities:
+                    # The round trip drives the device to a known colour and
+                    # reads it back, so it has nothing to say about a plug.
+                    rows.append(('Check status reporting...',
+                                 lambda: self.verify_status(targets[0])))
 
             choice = _select(heading, [label for label, _handler in rows])
             if choice == BACK:
@@ -884,14 +1002,26 @@ class ControlPanel(object):
         else:
             utils.notify(summary)
 
-    def manage_devices(self):
+    def manage_devices(self, driver_id=None):
+        """Rename, enable, identify and forget. Scoped to one kind of device
+        when it is reached from that kind's menu."""
         while True:
             devices = self.app.devices
+            if driver_id is not None:
+                devices = self._devices_for(driver_id, devices)
             if not devices:
                 utils.force_notify('No devices known yet')
                 return
 
-            rows = [('Name lights one by one...', self.name_lights)]
+            heading = 'Manage devices'
+            rows = []
+            if driver_id is not None:
+                heading = 'Manage %s devices' % self._driver_label(driver_id)
+            # The walkthrough lights each device in turn and asks what it is,
+            # which needs something that can show a colour.
+            if CAP_COLOR in self._capabilities(devices):
+                rows.append(('Name lights one by one...',
+                             lambda: self.name_lights(driver_id)))
             for device in devices:
                 mark = '[x]' if device.enabled else '[ ]'
                 label = '%s %s  (%s)' % (mark, device.name,
@@ -900,12 +1030,12 @@ class ControlPanel(object):
                 rows.append((label,
                              lambda d=device: self._edit_device(d)))
 
-            choice = _select('Manage devices', [l for l, _h in rows])
+            choice = _select(heading, [l for l, _h in rows])
             if choice == BACK:
                 return
             rows[choice][1]()
 
-    def name_lights(self):
+    def name_lights(self, driver_id=None):
         """Walk the lights one at a time, lighting each while asking its name.
 
         Renaming through the per-device menu means going and looking at the
@@ -914,6 +1044,8 @@ class ControlPanel(object):
         wall in front of you as you type it.
         """
         devices = self.app.enabled_devices
+        if driver_id is not None:
+            devices = self._devices_for(driver_id, devices)
         if not devices:
             utils.force_notify('No lights to name. Run a device refresh.')
             return

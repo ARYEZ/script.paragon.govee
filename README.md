@@ -88,15 +88,36 @@ name you set in the Govee app is used.
 Launch the add-on for the control panel:
 
 ```
-All Lights (3)
-Living Room Strip  [LAN]
-Bedside Lamp       [LAN+CLOUD]
+Govee (34)
+Broadlink (2)
+Tuya (5)
 Scenes...
-Capture lights as a scene...
 Refresh devices
-Manage devices...
-Diagnose LAN search...
+Diagnose device search...
 Settings
+```
+
+One row per kind of device rather than one per device. With three drivers and
+forty devices a flat list ran off the screen, and a Broadlink blaster sat
+among the bulbs offering a brightness it does not have. Sorting by driver
+first means every menu below this point can offer only what that kind of
+device actually does — a plug gets Toggle/On/Off and a status read, a blaster
+opens straight into its learned codes, and only Govee rows carry a `[LAN]`
+tag, because Govee is the only driver with more than one way to reach a
+device.
+
+A driver appears once it has found something. **Diagnose device search** stays
+at the top level on purpose: the time you need it is when a driver found
+nothing and so has no menu of its own.
+
+Picking a driver gives you its own devices and nothing else:
+
+```
+Govee (34)
+  All Govee (34)
+  Back Office Left Low  [LAN]
+  ...
+  Manage Govee devices...
 ```
 
 The title bar shows the running version, which is the quickest way to confirm

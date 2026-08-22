@@ -182,6 +182,9 @@ class GoveeController(object):
 
     DRIVER_ID = 'govee'
     DRIVER_LABEL = 'Govee'
+    # Govee is the only driver that can reach a device more than one way, so
+    # it is the only one where showing which is in use tells you anything.
+    HAS_TRANSPORTS = True
 
     @staticmethod
     def capabilities(device):

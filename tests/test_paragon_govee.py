@@ -63,6 +63,23 @@ def palette_row(panel, name):
     return [e['name'] for e in panel.app.palette].index(name)
 
 
+def menu_row(open_menu, prefix):
+    """Index of a menu row by its label prefix, and the labels it sat among.
+
+    Looked up rather than hardcoded, for the same reason scene_row is: every
+    positional index into a menu has broken at least once when a row was
+    added above it.
+    """
+    xbmcgui.SELECT_QUEUE.extend([-1])
+    open_menu()
+    labels = xbmcgui.SELECT_CALLS[-1][1]
+    xbmcgui.reset()
+    matches = [i for i, label in enumerate(labels)
+               if label.startswith(prefix)]
+    assert matches, 'no row starting "%s" among %r' % (prefix, labels)
+    return matches[0], labels
+
+
 def scene_row(panel, prefix, index=None):
     """Index of a scene-editor row by its label prefix.
 
@@ -235,8 +252,17 @@ class RecordingController(object):
     def commands(device):
         return []
 
+    class _StandIn(object):
+        """What the Hub would hand back for this device's driver."""
+
+        def __init__(self, has_transports):
+            self.HAS_TRANSPORTS = has_transports
+
     def driver_for(self, device):
-        return None
+        # Answering None made every driver look alike, which cannot catch a
+        # menu tagging a plug with a transport it has no choice about.
+        return self._StandIn(
+            (getattr(device, 'driver', None) or 'govee') == 'govee')
 
     def _record(self, name, device, *args):
         if device.device_id in self.fail_on:
@@ -4451,17 +4477,41 @@ class TestControlPanel(unittest.TestCase):
         import gui
         return gui.ControlPanel(self.app)
 
+    def driver_row(self, prefix='Govee'):
+        return menu_row(self.panel().main_menu, prefix)[0]
+
+    def test_the_main_menu_lists_a_row_per_kind_of_device(self):
+        """One row per driver, not one row per device."""
+        self.app._devices = [
+            Device('AA:BB', name='Lamp', driver='govee', lan=True),
+            Device('CC:DD', name='Plug', driver='tuya', lan=True),
+            Device('EE:FF', name='Blaster', driver='broadlink', lan=True),
+        ]
+
+        _row, labels = menu_row(self.panel().main_menu, 'Govee')
+
+        self.assertEqual(labels[:3],
+                         ['Govee (1)', 'Broadlink (1)', 'Tuya (1)'])
+        self.assertNotIn('Lamp', labels)
+
+    def test_a_driver_with_nothing_found_is_not_offered(self):
+        """A dead row is worse than no row; the search lives above this."""
+        _row, labels = menu_row(self.panel().main_menu, 'Govee')
+
+        self.assertNotIn('Tuya (0)', labels)
+        self.assertIn('Diagnose device search...', labels)
+
     def test_main_menu_group_then_on(self):
-        # 0 = "All Lights", then 1 = "On" in the control menu.
-        xbmcgui.SELECT_QUEUE.extend([0, 1])
+        # Govee, then "All Govee", then "On".
+        xbmcgui.SELECT_QUEUE.extend([self.driver_row(), 0, 1])
         self.panel().run()
         self.assertEqual(self.recorder.calls, [('turn', 'AA:BB', True)])
 
     def test_main_menu_device_row_selects_that_device(self):
         self.app._devices.append(Device('CC:DD', name='Strip', lan=True,
                                         ip='10.0.0.3'))
-        # 0 = All Lights, 1 = first device, 2 = second device.
-        xbmcgui.SELECT_QUEUE.extend([2, 2])  # second device, then "Off"
+        # Govee, then 0 = All Govee, 1 = first device, 2 = second device.
+        xbmcgui.SELECT_QUEUE.extend([self.driver_row(), 2, 2])
         self.panel().run()
         self.assertEqual(self.recorder.calls, [('turn', 'CC:DD', False)])
 
@@ -4497,29 +4547,117 @@ class TestControlPanel(unittest.TestCase):
         self.panel().control_menu([self.app.devices[0]], 'Lamp')
         self.assertIn('Show status', xbmcgui.SELECT_CALLS[-1][1])
 
-    def test_main_menu_offers_capture_and_shows_the_version(self):
+    def test_a_plug_is_not_offered_brightness_or_colour(self):
+        """The point of sorting by driver: only what the device can do."""
+        plug = Device('wp9abc#1', name='Office Plug', driver='tuya', lan=True)
+        self.app._devices = [plug]
+        self.recorder.caps = ['power', 'state']
+
+        _row, labels = menu_row(
+            lambda: self.panel().control_menu([plug], 'Office Plug'), 'Toggle')
+
+        self.assertEqual(labels, ['Toggle', 'On', 'Off', 'Show status'])
+
+    def test_a_blaster_opens_its_codes_rather_than_a_light_menu(self):
+        """A blaster has no brightness to offer and no colour to apologise for."""
+        blaster = Device('EE:FF', name='Bedroom RM', driver='broadlink',
+                         lan=True)
+        self.app._devices = [blaster]
+        self.recorder.caps = ['commands']
+        self.recorder.commands = lambda device: ['TV power']
+
+        xbmcgui.SELECT_QUEUE.extend([-1])
+        self.panel().device_menu(blaster)
+
+        heading, labels = xbmcgui.SELECT_CALLS[-1]
+        self.assertIn('TV power', labels)
+        self.assertNotIn('Brightness...', labels)
+
+    def test_a_driver_of_blasters_offers_no_all_row(self):
+        """There is nothing to switch as a group, so the row is absent."""
+        self.app._devices = [
+            Device('EE:FF', name='Bedroom RM', driver='broadlink', lan=True)]
+        self.recorder.caps = ['commands']
+
+        _row, labels = menu_row(
+            lambda: self.panel().driver_menu('broadlink'), 'Bedroom RM')
+
+        # No [LAN] tag: a blaster has no other way to be reached.
+        self.assertEqual(labels[0], 'Bedroom RM')
+        self.assertTrue(labels[-1].startswith('Manage Broadlink devices'))
+
+    def test_a_bulb_keeps_every_row_it_had(self):
+        """The filtering must not quietly cost the Govee menu anything."""
+        _row, labels = menu_row(
+            lambda: self.panel().control_menu(
+                [self.app.devices[0]], 'Lamp'), 'Toggle')
+
+        self.assertEqual(labels,
+                         ['Toggle', 'On', 'Off', 'Brightness...', 'Colour...',
+                          'Colour temperature...', 'Show status',
+                          'Check status reporting...'])
+
+    def test_managing_from_a_driver_menu_shows_only_that_driver(self):
+        self.app._devices = [
+            Device('AA:BB', name='Lamp', driver='govee', lan=True),
+            Device('CC:DD', name='Plug', driver='tuya', lan=True),
+        ]
+        # A plug has no colour, so the light-by-light naming walkthrough has
+        # nothing to light up and should not be offered.
+        self.recorder.caps = ['power', 'state']
+
+        _row, labels = menu_row(
+            lambda: self.panel().manage_devices('tuya'), '[x] Plug')
+
+        self.assertEqual(len(labels), 1)
+        self.assertNotIn('Name lights one by one...', labels)
+
+    def test_managing_govee_still_offers_the_naming_walkthrough(self):
+        _row, labels = menu_row(
+            lambda: self.panel().manage_devices('govee'), 'Name lights')
+
+        self.assertEqual(labels[0], 'Name lights one by one...')
+
+    def test_a_plug_row_is_not_tagged_with_a_transport_it_cannot_choose(self):
+        plug = Device('wp9abc#1', name='Office Plug', driver='tuya', lan=True)
+        self.app._devices = [plug]
+        self.recorder.caps = ['power', 'state']
+
+        _row, labels = menu_row(
+            lambda: self.panel().driver_menu('tuya'), 'Office Plug')
+
+        self.assertIn('Office Plug', labels)
+        self.assertNotIn('Office Plug  [LAN]', labels)
+
+    def test_a_govee_row_still_says_how_it_is_reached(self):
+        """Where there is a genuine choice, the tag earns its place."""
+        self.app._devices = [Device('AA:BB', name='Lamp', driver='govee',
+                                    lan=True, cloud=True)]
+
+        _row, labels = menu_row(
+            lambda: self.panel().driver_menu('govee'), 'Lamp')
+
+        self.assertIn('Lamp  [LAN+CLOUD]', labels)
+
+    def test_main_menu_shows_the_version(self):
         xbmcgui.SELECT_QUEUE.extend([-1])
         self.panel().run()
 
-        heading, labels = xbmcgui.SELECT_CALLS[-1]
-        self.assertIn('Capture lights as a scene...', labels)
+        heading, _labels = xbmcgui.SELECT_CALLS[-1]
         self.assertIn(xbmcaddon._INFO['version'], heading)
 
-    def test_main_menu_capture_row_reaches_capture(self):
+    def test_capture_is_reachable_through_the_scenes_menu(self):
         self.recorder.get_states = lambda devices, timeout=3.0: {
             'AA:BB': {'power': 'on', 'brightness': 30, 'colorTem': 2200}}
 
-        xbmcgui.SELECT_QUEUE.extend([-1])
-        self.panel().run()
-        labels = xbmcgui.SELECT_CALLS[-1][1]
+        scenes_row = menu_row(self.panel().main_menu, 'Scenes')[0]
+        capture_row = menu_row(self.panel().scene_menu, 'Capture')[0]
 
-        xbmcgui.reset()
-        xbmcgui.SELECT_QUEUE.extend(
-            [labels.index('Capture lights as a scene...')])
-        xbmcgui.INPUT_QUEUE.append('From Main Menu')
+        xbmcgui.SELECT_QUEUE.extend([scenes_row, capture_row, -1])
+        xbmcgui.INPUT_QUEUE.append('From The Menu')
         self.panel().main_menu()
 
-        self.assertIsNotNone(self.app.scene_by_name('From Main Menu'))
+        self.assertIsNotNone(self.app.scene_by_name('From The Menu'))
 
     def test_every_device_row_targets_its_own_light(self):
         """Guards against a loop-variable closure pointing all rows at one light."""
@@ -4529,17 +4667,17 @@ class TestControlPanel(unittest.TestCase):
             Device('EE:FF', name='Three', lan=True, ip='10.0.0.3'),
         ]
 
-        xbmcgui.SELECT_QUEUE.extend([-1])
-        self.panel().main_menu()
-        labels = xbmcgui.SELECT_CALLS[-1][1]
+        driver = self.driver_row()
+        _row, labels = menu_row(
+            lambda: self.panel().driver_menu('govee'), 'All Govee')
 
         for device in self.app.devices:
             row = [i for i, label in enumerate(labels)
                    if label.startswith(device.name)][0]
             del self.recorder.calls[:]
             xbmcgui.reset()
-            # Select the device row, then "Off" inside the control menu.
-            xbmcgui.SELECT_QUEUE.extend([row, 2])
+            # Govee, the device row, then "Off" inside the control menu.
+            xbmcgui.SELECT_QUEUE.extend([driver, row, 2])
             self.panel().main_menu()
             self.assertEqual(self.recorder.calls,
                              [('turn', device.device_id, False)],

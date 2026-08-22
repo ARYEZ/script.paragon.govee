@@ -1,3 +1,21 @@
+v2.6.0
+- The main menu is now one row per kind of device -- Govee, Broadlink, Tuya --
+  rather than one row per device. With three drivers and forty devices the
+  flat list ran off the screen, and a Broadlink blaster sat among the bulbs
+  offering a brightness it does not have.
+- Every menu below the first now offers only what that kind of device can
+  actually do. A plug gets Toggle, On, Off and a status read; a blaster opens
+  straight into its learned codes instead of a light menu; colour and
+  brightness appear only where there is colour and brightness.
+- Manage devices and the name-lights-one-by-one walkthrough are scoped to the
+  driver they were opened from.
+- Only Govee rows carry a [LAN] or [LAN+CLOUD] tag. Govee is the only driver
+  that can reach a device more than one way, so tagging a Tuya plug [LAN]
+  stated the only possibility it had.
+- A driver is listed once it has found something; a dead row is worse than no
+  row. "Diagnose device search" stays on the first screen, because the time
+  it is needed is when a driver found nothing and so has no menu.
+
 v2.5.0
 - Multi-outlet plugs get an "All outlets" entry that switches the whole box,
   for a bedtime scene or a leaving-the-house button.

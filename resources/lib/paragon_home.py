@@ -369,7 +369,8 @@ class ParagonHome(object):
             self.stop_cycle()
             return False
 
-        targets = scene_lib.scene_targets(scene, self.devices)
+        targets = scene_lib.scene_targets(scene, self.devices,
+                                          self.controller)
         assignment = state.get('assignment') or {}
 
         # Lights that joined since the cycle started, or a cycle resumed from
@@ -509,7 +510,8 @@ class ParagonHome(object):
 
         assignment = None
         if scene.get('mode') == scene_lib.MODE_MIX and scene.get('colors'):
-            targets = scene_lib.scene_targets(scene, self.devices)
+            targets = scene_lib.scene_targets(scene, self.devices,
+                                               self.controller)
             assignment = scene_lib.deal_assignment(
                 len(scene['colors']), [d.device_id for d in targets])
 

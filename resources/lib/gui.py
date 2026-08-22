@@ -762,8 +762,15 @@ class ControlPanel(object):
             else:
                 appearance = 'leave alone'
             targets = scene['targets']
-            target_label = ('all lights' if not targets
-                            else '%d selected' % len(targets))
+            # Says which "all" this is. A scene with no targets applies to
+            # what it can describe, so a colour scene means the colour
+            # devices and not every plug in the house.
+            if targets:
+                target_label = '%d selected' % len(targets)
+            elif scene_lib.scene_expresses(scene):
+                target_label = 'all colour devices'
+            else:
+                target_label = 'all devices'
             cycle = int(scene.get('cycle') or 0)
             cycle_label = ('off' if not cycle
                            else 'every %s' % _duration(cycle))
@@ -921,7 +928,8 @@ class ControlPanel(object):
         cloud it is metered, and 25 lights on a one-minute cycle is 36,000
         calls a day against a limit of about 10,000.
         """
-        targets = scene_lib.scene_targets(scene, self.app.devices)
+        targets = scene_lib.scene_targets(scene, self.app.devices,
+                                          self.app.controller)
         cloud = [d for d in targets
                  if self.app.controller.pick_transport(d) == TRANSPORT_CLOUD]
         if not cloud:

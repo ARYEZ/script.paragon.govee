@@ -392,13 +392,70 @@ class TestScenes(unittest.TestCase):
         self.assertEqual({c[1] for c in controller.calls}, {'TWO'})
 
     def test_apply_scene_skips_unsupported_commands(self):
+        """A device that can express part of a scene gets that part only."""
         controller = RecordingController()
-        device = Device('AA:BB', name='Plug', lan=False, cloud=True,
-                        supports=['turn'])
+        device = Device('AA:BB', name='Warm bulb', lan=False, cloud=True,
+                        supports=['turn', 'colorTem'])
         scene = scene_lib.make_scene('Test', brightness=30,
                                      mode=scene_lib.MODE_TEMP, kelvin=3000)
+
         scene_lib.apply_scene(controller, scene, [device])
-        self.assertEqual([c[0] for c in controller.calls], ['turn'])
+
+        self.assertEqual([c[0] for c in controller.calls], ['turn', 'temp'])
+
+    def test_an_untargeted_scene_leaves_out_what_it_cannot_describe(self):
+        """The bug behind a rerack switching every plug in the house.
+
+        A scene naming no targets meant "every enabled device", which was
+        right when lights were all there was. Once plugs were listed too, a
+        colour scene switched all of them as a side effect of the power
+        setting that came with the colour.
+        """
+        controller = RecordingController()
+        bulb = Device('AA:BB', name='Lamp', driver='govee', lan=True)
+        plug = Device('8006ABCD', name='Christmas Tree', driver='kasa',
+                      lan=True)
+        controller.capabilities = lambda d: set(
+            ['power', 'state'] if d.driver == 'kasa'
+            else ['power', 'brightness', 'color', 'color_temp', 'state'])
+        scene = scene_lib.make_scene('Warshade', mode=scene_lib.MODE_COLOR,
+                                     color=[80, 0, 120])
+
+        scene_lib.apply_scene(controller, scene, [bulb, plug])
+
+        self.assertEqual(set(c[1] for c in controller.calls), set(['AA:BB']))
+
+    def test_a_scene_that_only_says_off_still_reaches_the_plugs(self):
+        """"All off" means all of it, because off is something a plug can be."""
+        controller = RecordingController()
+        bulb = Device('AA:BB', name='Lamp', driver='govee', lan=True)
+        plug = Device('8006ABCD', name='Christmas Tree', driver='kasa',
+                      lan=True)
+        controller.capabilities = lambda d: set(['power', 'state'])
+        scene = scene_lib.make_scene('All Off', power=scene_lib.POWER_OFF)
+
+        scene_lib.apply_scene(controller, scene, [bulb, plug])
+
+        self.assertEqual(set(c[1] for c in controller.calls),
+                         set(['AA:BB', '8006ABCD']))
+
+    def test_a_plug_named_in_a_scene_is_still_honoured(self):
+        """Naming targets is how a plug joins a colour scene deliberately."""
+        controller = RecordingController()
+        bulb = Device('AA:BB', name='Lamp', driver='govee', lan=True)
+        plug = Device('8006ABCD', name='Christmas Tree', driver='kasa',
+                      lan=True)
+        controller.capabilities = lambda d: set(
+            ['power', 'state'] if d.driver == 'kasa'
+            else ['power', 'brightness', 'color', 'color_temp', 'state'])
+        scene = scene_lib.make_scene('Warshade', mode=scene_lib.MODE_COLOR,
+                                     color=[80, 0, 120],
+                                     targets=['AA:BB', '8006ABCD'])
+
+        scene_lib.apply_scene(controller, scene, [bulb, plug])
+
+        self.assertEqual(set(c[1] for c in controller.calls),
+                         set(['AA:BB', '8006ABCD']))
 
     def test_apply_scene_ignores_disabled_devices(self):
         controller = RecordingController()
@@ -587,6 +644,60 @@ class TestReracks(unittest.TestCase):
 
         self.assertEqual(set(call[1] for call in self.recorder.calls),
                          set(['AA:BB']))
+
+    def test_a_scene_step_beside_a_plug_step_leaves_the_other_plugs_alone(self):
+        """The reported bug: one Kasa step, and every Kasa plug switched.
+
+        The scene was doing it. A scene naming no targets meant every enabled
+        device, so "Scene: Warshade" switched all four plugs as a side effect
+        of the power setting that came with the colour -- and the plug step
+        beside it only accounted for one of them.
+        """
+        app = self.app()
+        for suffix in ('1', '2', '3', '4'):
+            app._devices.append(
+                Device('8006ABC%s' % suffix, name='Kasa %s' % suffix,
+                       driver='kasa', lan=True))
+        by_driver = {'govee': ['power', 'brightness', 'color', 'color_temp',
+                               'state'],
+                     'tuya': ['power', 'state'],
+                     'broadlink': ['commands'],
+                     'kasa': ['power', 'state']}
+        self.recorder.capabilities = lambda d: set(by_driver[d.driver])
+        # An ordinary colour scene, saved before any plug existed and so
+        # naming no targets at all.
+        app._scenes = [scene_lib.make_scene('Warshade',
+                                            mode=scene_lib.MODE_COLOR,
+                                            color=[80, 0, 120])]
+
+        rerack = self.reracks.make_rerack('Wind Down', [
+            {'kind': 'scene', 'target': 'Warshade'},
+            {'kind': 'power', 'driver': 'kasa', 'target': '8006ABC2',
+             'action': 'on'},
+        ])
+        self.reracks.run(app, rerack)
+
+        switched = set(call[1] for call in self.recorder.calls)
+        self.assertEqual(switched, set(['AA:BB', '8006ABC2']))
+        for suffix in ('1', '3', '4'):
+            self.assertNotIn('8006ABC%s' % suffix, switched)
+
+    def test_an_all_off_scene_step_still_switches_everything(self):
+        """The other half: a scene that only says off means all of it."""
+        app = self.app()
+        app._devices.append(Device('8006ABC1', name='Kasa 1', driver='kasa',
+                                   lan=True))
+        by_driver = {'govee': ['power', 'state'], 'tuya': ['power', 'state'],
+                     'broadlink': ['commands'], 'kasa': ['power', 'state']}
+        self.recorder.capabilities = lambda d: set(by_driver[d.driver])
+        app._scenes = [scene_lib.make_scene('All Off',
+                                            power=scene_lib.POWER_OFF)]
+
+        self.reracks.run(app, self.reracks.make_rerack(
+            'Goodnight', [{'kind': 'scene', 'target': 'All Off'}]))
+
+        self.assertIn('8006ABC1',
+                      set(call[1] for call in self.recorder.calls))
 
     def test_a_failing_step_does_not_stop_the_ones_after_it(self):
         """A plug that has been unplugged is no reason to leave the room dark."""
@@ -6253,6 +6364,21 @@ class TestControlPanel(unittest.TestCase):
 
         self.assertEqual(len(self.app.reracks), 1)
         self.assertIn('already a rerack', xbmcgui.OK_DIALOGS[-1][1])
+
+    def test_the_scene_editor_says_which_all_it_means(self):
+        """"All lights" was the old wording and stopped being true."""
+        self.app._scenes = [
+            scene_lib.make_scene('Warshade', mode=scene_lib.MODE_COLOR,
+                                 color=[80, 0, 120]),
+            scene_lib.make_scene('All Off', power=scene_lib.POWER_OFF),
+        ]
+
+        colour = menu_row(lambda: self.panel().edit_scene(0), 'Lights:')[1]
+        xbmcgui.reset()
+        plain = menu_row(lambda: self.panel().edit_scene(1), 'Lights:')[1]
+
+        self.assertIn('Lights: all colour devices', colour)
+        self.assertIn('Lights: all devices', plain)
 
     def test_main_menu_shows_the_version(self):
         xbmcgui.SELECT_QUEUE.extend([-1])

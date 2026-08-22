@@ -434,6 +434,22 @@ Reracks live under **Reracks...** on the first screen, and each one is also a
 RunScript(script.paragon.govee,action=rerack,name=Wind Down)
 ```
 
+### What "all" means in a scene
+
+A scene that names no targets applies to **what it can actually describe**,
+not to every device in the house. A colour scene is a statement about things
+that have a colour, so it reaches the bulbs and leaves the plugs alone. A
+scene that only says "off" reaches everything, because off is something a plug
+can be.
+
+This matters most inside a rerack. Before it was true, a rerack whose first
+step applied a colour scene switched every plug in the house as a side effect
+of the power setting that came with the colour — and any plug step beside it
+appeared to be switching far more than it had been asked to.
+
+To put a plug in a colour scene deliberately, name it in the scene's target
+list. Named targets are honoured exactly.
+
 ### A rerack is not a scene
 
 A **scene** describes a state — how the lights should look. It can be

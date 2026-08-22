@@ -1,3 +1,18 @@
+v2.10.1
+- Fixed a rerack whose steps included a scene switching every plug in the
+  house. The scene was doing it, not the plug step beside it.
+- A scene that names no targets now applies to what it can actually describe,
+  rather than to every enabled device. Scenes predate plugs: naming no targets
+  meant "all the lights" because lights were all there was, and when plugs
+  were added to the device list "all" silently widened to include them. A
+  colour scene then switched every plug as a side effect of the power setting
+  that came with the colour.
+- A scene that only says "off" still reaches everything, because off is
+  something a plug can be. A scene that names its targets is honoured exactly,
+  which is how a plug joins a colour scene deliberately.
+- The scene editor now says which "all" it means: "all colour devices" or
+  "all devices". It said "all lights", which stopped being true.
+
 v2.10.0
 - Reracks: ten ordered steps run as one, under "Reracks..." on the first
   screen. Named after the Paragon TV preset macro system and shaped like it --

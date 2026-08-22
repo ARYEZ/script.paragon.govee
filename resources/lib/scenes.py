@@ -602,14 +602,54 @@ def describe(scene):
     return ', '.join(bits)
 
 
-def scene_targets(scene, devices):
-    """Resolve a scene's target list against the known devices."""
+def scene_expresses(scene):
+    """The capabilities a scene actually describes.
+
+    A scene that sets a colour is a statement about things that have a
+    colour. A scene that only says "off" is a statement about anything that
+    switches.
+    """
+    needed = set()
+    mode = scene.get('mode')
+    if mode in (MODE_COLOR, MODE_MIX):
+        needed.add(CAP_COLOR)
+    elif mode == MODE_TEMP:
+        needed.add(CAP_COLOR_TEMP)
+    if scene.get('brightness') is not None:
+        needed.add(CAP_BRIGHTNESS)
+    return needed
+
+
+def scene_targets(scene, devices, controller=None):
+    """Resolve a scene's target list against the known devices.
+
+    A scene with no targets of its own means "everything this scene can
+    actually say something about", not "every device in the house".
+
+    Scenes predate plugs. When a scene named no targets it meant all the
+    lights, because lights were all there was -- and then plugs arrived and
+    "all" silently widened to include them. A colour scene would switch every
+    plug in the house as a side effect of the power setting that came with
+    the colour, which is not something anyone asked it to do.
+
+    A scene that expresses nothing but power still means everything: "all
+    off" should turn off the plugs too. And a scene that names its targets is
+    honoured exactly, which is how a plug joins a colour scene deliberately.
+    """
     enabled = [d for d in devices if d.enabled]
     targets = scene.get('targets') or []
-    if not targets:
+    if targets:
+        wanted = set(targets)
+        return [d for d in enabled if d.device_id in wanted]
+
+    needed = scene_expresses(scene)
+    if not needed or controller is None:
         return enabled
-    wanted = set(targets)
-    return [d for d in enabled if d.device_id in wanted]
+
+    getter = getattr(controller, 'capabilities', None)
+    if getter is None:
+        return enabled
+    return [d for d in enabled if needed & set(getter(d) or [])]
 
 
 def apply_scene(controller, scene, devices, log_func=None,
@@ -627,7 +667,7 @@ def apply_scene(controller, scene, devices, log_func=None,
     if scene is None:
         return 0, ['That scene is not valid']
 
-    targets = scene_targets(scene, devices)
+    targets = scene_targets(scene, devices, controller)
     if not targets:
         # A scene may be nothing but commands -- switch the amp on, no lights
         # involved -- so an empty target list is only a problem when there is

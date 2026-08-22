@@ -1,3 +1,15 @@
+v2.2.1
+- New Tuya search diagnostic, under "Diagnose device search..." on the main
+  menu, which now offers one per driver since each fails its own way.
+- It reports whether each Tuya port could be opened, counts every datagram
+  that arrived including ones it could not parse, and dumps the first few as
+  raw bytes to kodi.log. Silence, a port held by another program, and traffic
+  that is not Tuya are three different problems with three different answers,
+  and a search that finds nothing cannot tell them apart.
+- When nothing is heard it lists the causes in order of likelihood: inbound
+  UDP blocked for Kodi by the firewall, the plug on a different network or
+  SSID from Kodi, the plug not on WiFi at all, or the device not being Tuya.
+
 v2.2.0
 - Finds Tuya smart plugs, as the third driver. That covers GHome, Gosund,
   Smart Life and most no-name plugs, which are all the same platform.

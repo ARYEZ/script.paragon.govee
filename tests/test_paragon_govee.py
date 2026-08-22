@@ -1680,6 +1680,78 @@ class TestTuyaDiscovery(unittest.TestCase):
                          'alt')
 
 
+class TestTuyaDiagnostics(unittest.TestCase):
+    """Silence has several causes and they need different answers."""
+
+    def setUp(self):
+        clean_profile()
+        xbmcaddon.reset()
+        xbmcgui.reset()
+        for name in ('addon_utils', 'diagnostics', 'tuya_lan'):
+            if name in sys.modules:
+                del sys.modules[name]
+
+    def tearDown(self):
+        clean_profile()
+
+    @staticmethod
+    def report(**overrides):
+        base = {'ports': {6666: 'listening', 6667: 'listening'},
+                'raw': [], 'devices': [], 'listened': 8.0,
+                'other_traffic': 0}
+        base.update(overrides)
+        return base
+
+    def test_devices_heard_are_listed_with_their_protocol(self):
+        import diagnostics
+
+        text = diagnostics.tuya_summary(self.report(devices=[
+            {'device_id': 'wp9abc', 'ip': '10.0.0.55', 'version': '3.3'}]))
+        self.assertIn('wp9abc', text)
+        self.assertIn('10.0.0.55', text)
+        self.assertIn('3.3', text)
+
+    def test_both_ports_blocked_blames_another_program(self):
+        import diagnostics
+
+        text = diagnostics.tuya_summary(self.report(
+            ports={6666: 'could not bind: in use',
+                   6667: 'could not bind: in use'}))
+        self.assertIn('holding them', text)
+
+    def test_silence_lists_the_causes_in_order(self):
+        import diagnostics
+
+        text = diagnostics.tuya_summary(self.report())
+        self.assertIn('firewall', text)
+        self.assertIn('different network', text)
+        self.assertIn('GHome app', text)
+
+    def test_traffic_that_is_not_tuya_is_its_own_verdict(self):
+        import diagnostics
+
+        text = diagnostics.tuya_summary(self.report(other_traffic=4))
+        self.assertIn('none was a Tuya', text)
+
+    def test_the_log_carries_raw_bytes_for_anything_unrecognised(self):
+        import diagnostics
+
+        lines = '\n'.join(diagnostics.tuya_lines(self.report(
+            other_traffic=1,
+            raw=[{'port': 6667, 'from': '10.0.0.55', 'bytes': 40,
+                  'hex': 'deadbeef', 'parsed': False}])))
+        self.assertIn('deadbeef', lines)
+        self.assertIn('10.0.0.55', lines)
+        self.assertIn('UDP 6666', lines)
+
+    def test_a_probe_with_no_devices_still_reports_its_ports(self):
+        import tuya_lan
+
+        report = tuya_lan.probe(timeout=1.0)
+        self.assertEqual(sorted(report['ports'].keys()), [6666, 6667])
+        self.assertEqual(report['devices'], [])
+
+
 class TestTuyaDriver(unittest.TestCase):
     """A plug is discoverable long before it is controllable."""
 

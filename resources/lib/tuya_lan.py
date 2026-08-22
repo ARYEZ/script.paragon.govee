@@ -261,3 +261,83 @@ class Session(object):
 
         parsed = _json_loads(plain)
         return parsed if isinstance(parsed, dict) else {}
+
+
+def probe(timeout=8.0, log_func=None):
+    """Diagnostic listen. Returns a report; never raises.
+
+    discover() reports what it found, which is no help when the answer is
+    nothing. This records whether each port could be opened, every datagram
+    that arrived including ones that made no sense, and what was parsed out of
+    them -- enough to tell a blocked port apart from a busy one, from a
+    network that never carried the broadcast, from a device speaking something
+    other than Tuya.
+    """
+    log = log_func or (lambda message: None)
+    report = {
+        'ports': {},
+        'raw': [],
+        'devices': [],
+        'listened': timeout,
+        'other_traffic': 0,
+    }
+
+    sockets = []
+    for port in (DISCOVERY_PORT_CLEAR, DISCOVERY_PORT_CRYPTO):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            reuse_port = getattr(socket, 'SO_REUSEPORT', None)
+            if reuse_port is not None:
+                try:
+                    sock.setsockopt(socket.SOL_SOCKET, reuse_port, 1)
+                except socket.error:
+                    pass
+            sock.bind(('', port))
+            sock.setblocking(False)
+            sockets.append((port, sock))
+            report['ports'][port] = 'listening'
+        except socket.error as exc:
+            sock.close()
+            report['ports'][port] = 'could not bind: %s' % exc
+
+    if not sockets:
+        return report
+
+    seen = {}
+    deadline = time.time() + max(1.0, float(timeout))
+    try:
+        while time.time() < deadline:
+            for port, sock in sockets:
+                try:
+                    data, sender = sock.recvfrom(2048)
+                except socket.error:
+                    continue
+
+                device = parse_broadcast(data)
+                if device and device.get('device_id'):
+                    device.setdefault('ip', sender[0])
+                    if not device['ip']:
+                        device['ip'] = sender[0]
+                    seen[device['device_id']] = device
+                else:
+                    report['other_traffic'] += 1
+
+                if len(report['raw']) < 6:
+                    body = bytearray(data)[:64]
+                    report['raw'].append({
+                        'port': port,
+                        'from': sender[0],
+                        'bytes': len(data),
+                        'hex': ''.join('%02x' % b for b in body),
+                        'parsed': bool(device),
+                    })
+            time.sleep(0.05)
+    finally:
+        for _port, sock in sockets:
+            sock.close()
+
+    report['devices'] = list(seen.values())
+    log('Tuya probe: %d device(s), %d unrecognised datagram(s)'
+        % (len(report['devices']), report['other_traffic']))
+    return report

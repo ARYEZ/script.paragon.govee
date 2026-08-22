@@ -168,7 +168,7 @@ class ControlPanel(object):
             ('Capture lights as a scene...', self.capture_scene),
             ('Refresh devices', self.refresh_devices),
             ('Manage devices...', self.manage_devices),
-            ('Diagnose LAN search...', self.diagnose),
+            ('Diagnose device search...', self.diagnose_menu),
             ('Settings', utils.open_settings),
         ])
 
@@ -183,6 +183,32 @@ class ControlPanel(object):
         name = self.app.stop_cycle()
         if name:
             utils.notify('Stopped cycling %s' % name)
+
+    def diagnose_menu(self):
+        """Which search to look into. Each driver fails its own way."""
+        rows = [('Govee lights', self.diagnose),
+                ('Tuya plugs', self.diagnose_tuya)]
+        choice = _select('Diagnose device search',
+                         [label for label, _handler in rows])
+        if choice == BACK:
+            return
+        rows[choice][1]()
+
+    def diagnose_tuya(self):
+        """Listen for Tuya announcements and explain what was heard."""
+        import diagnostics
+
+        progress = xbmcgui.DialogProgressBG()
+        progress.create('Paragon Home', 'Listening for Tuya devices...')
+        try:
+            text, _report = diagnostics.run_tuya(self.app)
+        except Exception as exc:
+            utils.log('Tuya diagnostics failed: %s' % exc)
+            progress.close()
+            _dialog().ok('Paragon Home', 'Diagnostics failed:\n\n%s' % exc)
+            return
+        progress.close()
+        _dialog().ok('Paragon Home - Tuya search', text)
 
     def diagnose(self):
         """Probe the LAN and explain the result on screen and in the log."""

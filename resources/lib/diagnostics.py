@@ -284,3 +284,82 @@ def verify_summary(report):
 
     return ('Could not drive %s at all:\n\n%s'
             % (name, report.get('error') or 'unknown error'))
+
+
+# ---------------------------------------------------------------------------
+# Tuya search
+# ---------------------------------------------------------------------------
+
+def tuya_lines(report):
+    """Full detail for the Kodi log."""
+    lines = ['--- Paragon Home Tuya diagnostics ---']
+    lines.append('Listened for %.0f seconds' % report.get('listened', 0))
+    for port in sorted(report.get('ports', {})):
+        lines.append('UDP %d: %s' % (port, report['ports'][port]))
+
+    lines.append('Datagrams that were not Tuya: %d'
+                 % report.get('other_traffic', 0))
+    for entry in report.get('raw', []):
+        lines.append('  port %s from %s, %d bytes, parsed=%s'
+                     % (entry['port'], entry['from'], entry['bytes'],
+                        entry['parsed']))
+        lines.append('    %s' % entry['hex'])
+
+    devices = report.get('devices') or []
+    lines.append('Tuya devices heard: %d' % len(devices))
+    for device in devices:
+        lines.append('  %s  ip=%s  version=%s  product=%s'
+                     % (device.get('device_id'), device.get('ip'),
+                        device.get('version'), device.get('product_key')))
+    lines.append('--- end Tuya diagnostics ---')
+    return lines
+
+
+def tuya_summary(report):
+    """Short, actionable text for the on-screen dialog."""
+    ports = report.get('ports', {})
+    blocked = [port for port, state in ports.items()
+               if state != 'listening']
+    devices = report.get('devices') or []
+
+    if devices:
+        rows = ['%s  %s  (protocol %s)' % (d.get('device_id'), d.get('ip'),
+                                           d.get('version'))
+                for d in devices[:6]]
+        return ('Heard %d Tuya device(s):\n\n%s\n\nRun "Refresh devices" '
+                'to add them.' % (len(devices), '\n'.join(rows)))
+
+    if blocked and len(blocked) == len(ports):
+        detail = '; '.join('%s: %s' % (p, ports[p]) for p in blocked)
+        return ('Could not listen on either Tuya port.\n\n%s\n\nAnother '
+                'Tuya program on this machine is probably holding them.'
+                % detail)
+
+    if report.get('other_traffic'):
+        return ('Heard %d broadcast(s) on the Tuya ports, but none was a Tuya '
+                'announcement.\n\nSomething else on the network is using '
+                'those ports. The raw bytes are in the Kodi log.'
+                % report['other_traffic'])
+
+    return ('Nothing was heard on UDP 6666 or 6667 in %.0f seconds.\n\n'
+            'Tuya devices announce themselves every few seconds, so silence '
+            'means the announcements are not reaching Kodi:\n\n'
+            '1. Inbound UDP is blocked for Kodi by the firewall. This is the '
+            'most common cause on Windows.\n'
+            '2. The plug is on a different network from Kodi -- a 2.4GHz '
+            'guest SSID or a separate VLAN. Broadcasts do not cross subnets.\n'
+            '3. The plug is not on WiFi at all. Check it responds in the '
+            'GHome app first.\n'
+            '4. It is not a Tuya device. If the GHome app also works as '
+            '"Smart Life" or "Tuya Smart" for this plug, it is Tuya.'
+            % report.get('listened', 0))
+
+
+def run_tuya(app, timeout=8.0):
+    """Probe for Tuya devices, log the detail, return (summary, report)."""
+    import tuya_lan
+
+    report = tuya_lan.probe(timeout=timeout, log_func=utils.debug)
+    for line in tuya_lines(report):
+        utils.log(line)
+    return tuya_summary(report), report

@@ -439,6 +439,26 @@ same hardware and would no longer switch anything.
 
 A single-outlet plug stays one device rather than being called "Outlet 1".
 
+### The whole plug at once
+
+Alongside the outlets there is an **All outlets** entry that switches the
+whole box — the one to put on a bedtime scene or a leaving-the-house button.
+
+There is no master relay to switch: nothing in a Tuya socket's instruction set
+turns the box off as a unit, and the phone app's "all off" is simply every
+outlet set in one command. This does the same. Because it is one command, the
+outlets go together rather than in sequence, and it is a single round trip
+instead of one per outlet.
+
+It reads as **on when anything is drawing power**, not only when everything is
+— otherwise a strip with one outlet live would report itself off, and the
+button that follows would turn it further on.
+
+A bulk action like "everything off" uses the whole-plug entry and skips its
+outlets, since they would be the same instruction sent three more times. A
+*scene* is left alone: a scene can tell outlets different things, so folding
+them together there would silently drop one.
+
 ### Plugs in scenes
 
 A plug has power and nothing else, so a scene that sets brightness and colour

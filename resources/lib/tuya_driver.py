@@ -36,10 +36,20 @@ OUTLET_DPS = ('1', '2', '3', '4', '5', '6')
 USB_DPS = ('7', '8')
 SWITCH_DPS = OUTLET_DPS + USB_DPS
 
+# Our own marker for the whole-plug entry, not a datapoint. A multi-outlet
+# plug has no master relay -- there is nothing in its instruction set that
+# switches the box as a unit, and the phone app's "all off" is simply every
+# outlet set in one command. This does the same, in one packet, which is both
+# faster than four commands and simultaneous rather than staggered.
+MASTER_DP = 'all'
+MASTER_LABEL = 'All outlets'
+
 
 def outlet_label(dp):
     """A human name for one switchable datapoint."""
     dp = str(dp)
+    if dp == MASTER_DP:
+        return MASTER_LABEL
     if dp in USB_DPS:
         position = USB_DPS.index(dp)
         return 'USB' if position == 0 else 'USB %d' % (position + 1)
@@ -103,14 +113,21 @@ class TuyaDriver(object):
                 % (len(unsupported), ', '.join(sorted(unsupported))))
         return devices, warnings
 
-    def _build_device(self, entry, dp=None):
-        """One listed device, for the whole plug or for one of its outlets."""
+    def _build_device(self, entry, dp=None, members=None):
+        """One listed device: the whole plug, one outlet, or all of them."""
         device_id = entry['device_id']
         version = str(entry.get('version') or '3.3')
+        data = {'version': version}
         name = ''
         if dp:
+            data['dp'] = dp
             name = 'Tuya %s %s' % (device_id[-4:].upper(), outlet_label(dp))
-        device = Device(
+        if members:
+            # Recorded rather than re-derived: which outlets a plug has is
+            # only knowable by asking it, and the master has to keep working
+            # after a restart without another round trip.
+            data['members'] = list(members)
+        return Device(
             driver=self.DRIVER_ID,
             device_id='%s#%s' % (device_id, dp) if dp else device_id,
             native_id=device_id,
@@ -118,10 +135,8 @@ class TuyaDriver(object):
             model='Tuya %s' % version,
             ip=entry.get('ip', ''),
             lan=True,
-            driver_data={'version': version, 'dp': dp} if dp
-            else {'version': version},
+            driver_data=data,
         )
-        return device
 
     def _devices_for(self, entry):
         """List one entry per outlet, or one for the plug as a whole.
@@ -150,7 +165,9 @@ class TuyaDriver(object):
         if len(switches) < 2:
             return [base]
         self._log('%s has %d switchable outlets' % (base.name, len(switches)))
-        return [self._build_device(entry, dp) for dp in switches]
+        found = [self._build_device(entry, MASTER_DP, members=switches)]
+        found.extend(self._build_device(entry, dp) for dp in switches)
+        return found
 
     # -- capabilities ------------------------------------------------------
 
@@ -243,9 +260,30 @@ class TuyaDriver(object):
 
     # -- state verbs -------------------------------------------------------
 
+    @classmethod
+    def is_master(cls, device):
+        return cls.switch_dp(device) == MASTER_DP
+
+    @classmethod
+    def member_dps(cls, device):
+        """The datapoints a whole-plug entry covers.
+
+        Falls back to every switch datapoint Tuya defines for a socket. An
+        entry saved before members were recorded would otherwise switch
+        nothing at all, and setting a datapoint a plug does not have is
+        ignored by it rather than being an error.
+        """
+        data = getattr(device, 'driver_data', None) or {}
+        members = [str(dp) for dp in (data.get('members') or [])]
+        return members or list(SWITCH_DPS)
+
     def turn(self, device, on):
+        if self.is_master(device):
+            wanted = dict((dp, bool(on)) for dp in self.member_dps(device))
+        else:
+            wanted = {self.switch_dp(device): bool(on)}
         try:
-            self._session(device).set_dps({self.switch_dp(device): bool(on)})
+            self._session(device).set_dps(wanted)
         except tuya_lan.TuyaError as exc:
             raise ControlError('%s: %s' % (device.name, exc))
         return True
@@ -261,7 +299,17 @@ class TuyaDriver(object):
 
     def _state_from_dps(self, device, dps):
         """This entry's switch, as the state dict the rest of the add-on uses."""
-        value = (dps or {}).get(self.switch_dp(device))
+        if self.is_master(device):
+            readings = [(dps or {}).get(dp) for dp in self.member_dps(device)]
+            readings = [r for r in readings if isinstance(r, bool)]
+            if not readings:
+                return None
+            # On if anything is drawing power. Requiring all of them would
+            # report a plug with two of three outlets live as off, and the
+            # button that follows would then turn it further on.
+            value = any(readings)
+        else:
+            value = (dps or {}).get(self.switch_dp(device))
         if not isinstance(value, bool):
             return None
         # 'on'/'off' rather than a bool: that is the vocabulary the scene
@@ -275,6 +323,26 @@ class TuyaDriver(object):
             self._log('Could not read %s: %s' % (device.name, exc))
             return None
         return self._state_from_dps(device, dps)
+
+    @classmethod
+    def collapse(cls, devices):
+        """Drop outlets whose whole-plug entry is in the same list.
+
+        Only ever used where every target gets the identical instruction --
+        "everything off" and the like. There the master covers its outlets in
+        one packet, so sending one command per outlet as well is slower and
+        no more correct. A scene, where outlets can be told different things,
+        does not come through here.
+        """
+        masters = set(cls.native_id(d) for d in devices
+                      if getattr(d, 'driver', None) == cls.DRIVER_ID
+                      and cls.is_master(d))
+        if not masters:
+            return list(devices)
+        return [d for d in devices
+                if getattr(d, 'driver', None) != cls.DRIVER_ID
+                or cls.is_master(d)
+                or cls.native_id(d) not in masters]
 
     def get_states(self, devices, timeout=3.0):
         """Read every listed device, one round trip per physical plug.

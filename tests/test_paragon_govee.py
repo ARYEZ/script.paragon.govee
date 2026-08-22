@@ -2477,7 +2477,7 @@ class TestTuyaControl(unittest.TestCase):
             {'device_id': 'wp9abc', 'ip': '127.0.0.1', 'version': '3.4'})
 
         self.assertEqual([d.driver_data['dp'] for d in found],
-                         ['1', '2', '3', '7'])
+                         ['all', '1', '2', '3', '7'])
         self.assertEqual(found[0].model, 'Tuya 3.4')
 
     def test_a_34_reply_without_a_return_code_is_read_correctly(self):
@@ -2506,10 +2506,11 @@ class TestTuyaControl(unittest.TestCase):
             {'device_id': 'wp9abc', 'ip': '127.0.0.1', 'version': '3.3'})
 
         self.assertEqual([d.driver_data['dp'] for d in found],
-                         ['1', '2', '3', '7'])
+                         ['all', '1', '2', '3', '7'])
         self.assertEqual([d.name for d in found],
-                         ['Tuya 9ABC Outlet 1', 'Tuya 9ABC Outlet 2',
-                          'Tuya 9ABC Outlet 3', 'Tuya 9ABC USB'])
+                         ['Tuya 9ABC All outlets', 'Tuya 9ABC Outlet 1',
+                          'Tuya 9ABC Outlet 2', 'Tuya 9ABC Outlet 3',
+                          'Tuya 9ABC USB'])
         # Countdowns, relay memory and the child lock are not outlets.
         for device in found:
             self.assertNotIn(device.driver_data['dp'],
@@ -2523,7 +2524,7 @@ class TestTuyaControl(unittest.TestCase):
             {'device_id': 'wp9abc', 'ip': '127.0.0.1', 'version': '3.3'})
 
         self.assertEqual(set(d.native_id for d in found), set(['wp9abc']))
-        self.assertEqual(len(set(d.device_id for d in found)), 4)
+        self.assertEqual(len(set(d.device_id for d in found)), 5)
 
     def test_each_outlet_switches_only_itself(self):
         plug = self.start(dps=self.WP9_DPS)
@@ -2534,6 +2535,101 @@ class TestTuyaControl(unittest.TestCase):
         self.assertFalse(plug.dps['2'])
         self.assertFalse(plug.dps['1'])
         self.assertTrue(plug.dps['7'])
+
+    # -- the whole plug ----------------------------------------------------
+
+    def master(self, members=('1', '2', '3', '7'), version='3.4'):
+        return Device('wp9abc#all', name='Office Plug', driver='tuya',
+                      ip='127.0.0.1', lan=True, native_id='wp9abc',
+                      driver_data={'version': version, 'dp': 'all',
+                                   'members': list(members)})
+
+    def test_the_whole_plug_switches_off_in_one_command(self):
+        """A WP9 has no master relay; the app's "all off" is every outlet at
+        once. One packet also means the outlets go together, not in sequence."""
+        plug = self.start(version='3.4', dps=self.WP9_DPS)
+
+        self.driver().turn(self.master(), False)
+
+        self.assertEqual([plug.dps[dp] for dp in ('1', '2', '3', '7')],
+                         [False, False, False, False])
+        controls = [c for c, _p in plug.requests
+                    if c == self.tuya_lan.CMD_CONTROL_NEW]
+        self.assertEqual(len(controls), 1)
+
+    def test_the_whole_plug_switches_on_too(self):
+        plug = self.start(version='3.4', dps=self.WP9_DPS)
+
+        self.driver().turn(self.master(), True)
+
+        self.assertEqual([plug.dps[dp] for dp in ('1', '2', '3', '7')],
+                         [True, True, True, True])
+
+    def test_the_whole_plug_reads_as_on_when_anything_is_drawing_power(self):
+        """Requiring all of them would call a plug with one outlet live off."""
+        self.start(version='3.4',
+                   dps={'1': False, '2': True, '3': False, '7': False})
+
+        state = self.driver().get_state(self.master())
+
+        self.assertEqual(state['power'], 'on')
+
+    def test_the_whole_plug_reads_as_off_only_when_everything_is(self):
+        self.start(version='3.4',
+                   dps={'1': False, '2': False, '3': False, '7': False})
+
+        self.assertEqual(self.driver().get_state(self.master())['power'],
+                         'off')
+
+    def test_a_master_saved_before_members_were_recorded_still_works(self):
+        """It falls back to every socket datapoint Tuya defines.
+
+        A plug ignores a datapoint it does not have, so the fallback is
+        harmless where switching nothing at all would not be.
+        """
+        plug = self.start(version='3.4', dps=self.WP9_DPS)
+        old = Device('wp9abc#all', name='Office Plug', driver='tuya',
+                     ip='127.0.0.1', lan=True, native_id='wp9abc',
+                     driver_data={'version': '3.4', 'dp': 'all'})
+
+        self.driver().turn(old, False)
+
+        self.assertEqual([plug.dps[dp] for dp in ('1', '2', '3', '7')],
+                         [False, False, False, False])
+
+    def test_a_group_command_uses_the_master_instead_of_every_outlet(self):
+        """Same instruction to all of them, so one packet beats four."""
+        from tuya_driver import TuyaDriver
+
+        outlets = [self.device(dp=dp) for dp in ('1', '2', '3', '7')]
+        collapsed = TuyaDriver.collapse([self.master()] + outlets)
+
+        self.assertEqual([d.device_id for d in collapsed], ['WP9ABC#ALL'])
+
+    def test_collapsing_leaves_outlets_of_a_plug_with_no_master_alone(self):
+        from tuya_driver import TuyaDriver
+
+        outlets = [self.device(dp=dp) for dp in ('1', '2')]
+        self.assertEqual(TuyaDriver.collapse(outlets), outlets)
+
+    def test_collapsing_never_touches_another_driver(self):
+        from tuya_driver import TuyaDriver
+
+        bulb = Device('AA:BB', name='Lamp', driver='govee')
+        collapsed = TuyaDriver.collapse([self.master(), bulb])
+
+        self.assertIn(bulb, collapsed)
+
+    def test_collapsing_only_folds_the_plug_that_has_the_master(self):
+        from tuya_driver import TuyaDriver
+
+        other = Device('otherplug#1', name='Hall', driver='tuya',
+                       native_id='otherplug', driver_data={'dp': '1'})
+        collapsed = TuyaDriver.collapse(
+            [self.master(), self.device(dp='2'), other])
+
+        self.assertEqual([d.device_id for d in collapsed],
+                         ['WP9ABC#ALL', 'OTHERPLUG#1'])
 
     def test_one_key_covers_every_outlet(self):
         """The key belongs to the plug, so it is not typed in four times."""
@@ -3588,6 +3684,76 @@ class TestSession(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # RunScript argument handling
 # ---------------------------------------------------------------------------
+
+class TestCollapsingTargets(unittest.TestCase):
+    """Folding several targets into one command, where that is safe."""
+
+    def setUp(self):
+        clean_profile()
+        xbmcaddon.reset()
+        for name in ('addon_utils', 'paragon_govee', 'tuya_driver',
+                     'tuya_lan', 'hub'):
+            if name in sys.modules:
+                del sys.modules[name]
+
+    def tearDown(self):
+        clean_profile()
+
+    def plug(self):
+        master = Device('wp9abc#all', name='Office Plug', driver='tuya',
+                        native_id='wp9abc',
+                        driver_data={'dp': 'all', 'members': ['1', '2']})
+        outlets = [Device('wp9abc#%s' % dp, name='Outlet %s' % dp,
+                          driver='tuya', native_id='wp9abc',
+                          driver_data={'dp': dp}) for dp in ('1', '2')]
+        return master, outlets
+
+    def app(self, devices):
+        from paragon_govee import ParagonGovee
+
+        app = ParagonGovee()
+        app._devices = devices
+        return app
+
+    def test_a_bulk_switch_sends_one_command_per_plug(self):
+        master, outlets = self.plug()
+        app = self.app([master] + outlets)
+        switched = []
+        app.controller.turn = lambda device, on: switched.append(device.name)
+
+        done, errors = app.power_all(False)
+
+        self.assertEqual(switched, ['Office Plug'])
+        self.assertEqual((done, errors), (1, []))
+
+    def test_a_hub_with_no_collapsing_driver_passes_the_list_through(self):
+        from hub import Hub
+
+        class Plain(object):
+            DRIVER_ID = 'plain'
+            DRIVER_LABEL = 'Plain'
+
+        devices = [Device('AA:BB'), Device('CC:DD')]
+        self.assertEqual(Hub([Plain()]).collapse(devices), devices)
+
+    def test_a_scene_is_not_collapsed(self):
+        """A scene can tell outlets different things, so folding them would
+        silently drop one. Only same-instruction-to-all comes through the
+        collapsing path."""
+        import scenes as scenes_mod
+
+        master, outlets = self.plug()
+        app = self.app([master] + outlets)
+        switched = []
+        app.controller.turn = lambda device, on: switched.append(device.name)
+        app.controller.capabilities = lambda device: set(['power', 'state'])
+
+        scene = scenes_mod.make_scene('Bedtime', power=scenes_mod.POWER_OFF)
+        app.apply_scene(scene, announce=False)
+
+        self.assertEqual(sorted(switched),
+                         ['Office Plug', 'Outlet 1', 'Outlet 2'])
+
 
 class TestScriptArguments(unittest.TestCase):
 

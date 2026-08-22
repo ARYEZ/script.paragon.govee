@@ -111,6 +111,20 @@ class Hub(object):
             raise ControlError('%s does not send commands' % device.name)
         return driver.send_command(device, name)
 
+    def collapse(self, devices):
+        """Drop targets a driver can cover with one command.
+
+        Only for operations where every target gets the identical instruction.
+        A driver with nothing to collapse -- which is most of them -- has no
+        hook and the list passes through untouched.
+        """
+        result = list(devices)
+        for driver_id in sorted(self.drivers):
+            hook = getattr(self.drivers[driver_id], 'collapse', None)
+            if hook is not None:
+                result = hook(result)
+        return result
+
     # -- state verbs -------------------------------------------------------
 
     def turn(self, device, on):

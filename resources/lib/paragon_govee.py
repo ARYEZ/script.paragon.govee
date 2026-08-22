@@ -527,12 +527,18 @@ class ParagonGovee(object):
     # -- bulk actions ------------------------------------------------------
 
     def _each(self, action, targets=None):
-        """Run `action(device)` over the targets, collecting failures."""
+        """Run `action(device)` over the targets, collecting failures.
+
+        Every target here gets the same instruction, so a driver is allowed to
+        fold several of them into one command -- a multi-outlet plug switches
+        the whole box in a single packet rather than once per outlet.
+        """
         from devices import ControlError
 
         done = 0
         errors = []
-        for device in (targets if targets is not None else self.enabled_devices):
+        chosen = targets if targets is not None else self.enabled_devices
+        for device in self._collapse(chosen):
             try:
                 action(device)
                 done += 1
@@ -540,6 +546,12 @@ class ParagonGovee(object):
                 utils.log('Command failed on %s: %s' % (device.name, exc))
                 errors.append(str(exc))
         return done, errors
+
+    def _collapse(self, devices):
+        collapse = getattr(self.controller, 'collapse', None)
+        if collapse is None:
+            return list(devices)
+        return collapse(devices)
 
     def power_all(self, on, targets=None):
         return self._each(lambda d: self.controller.turn(d, on), targets)
@@ -565,7 +577,8 @@ class ParagonGovee(object):
         UDP 4002, which may be busy -- it falls back to turning on, because a
         toggle that does nothing visible reads as a broken button.
         """
-        devices = targets if targets is not None else self.enabled_devices
+        devices = self._collapse(
+            targets if targets is not None else self.enabled_devices)
         any_on = None
         for device in devices:
             state = self.controller.get_state(device)

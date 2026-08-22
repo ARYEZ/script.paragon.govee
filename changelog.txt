@@ -1,3 +1,23 @@
+v2.5.0
+- Multi-outlet plugs get an "All outlets" entry that switches the whole box,
+  for a bedtime scene or a leaving-the-house button.
+- There is no master relay to switch: nothing in a Tuya socket's instruction
+  set turns the box off as a unit, and the phone app's "all off" is every
+  outlet set in one command. This does the same, so the outlets go together
+  rather than in sequence and it costs one round trip instead of one per
+  outlet.
+- The whole-plug entry reads as on when anything is drawing power, not only
+  when everything is. Requiring all of them would report a strip with one
+  outlet live as off, and the button that followed would turn it further on.
+- A bulk action such as "everything off" now uses the whole-plug entry and
+  skips its outlets, which is the same result in a quarter of the packets. A
+  scene is deliberately left alone, since a scene can tell outlets different
+  things and folding them would silently drop one.
+- Which outlets the entry covers is recorded when the plug is found, so it
+  keeps working after a restart without another round trip. One saved before
+  this release falls back to every socket datapoint Tuya defines, which a
+  plug ignores where it has none.
+
 v2.4.0
 - Tuya protocol 3.4 is now driven, which is what the GHome WP9 speaks. 3.4 is
   a different protocol wearing the same version number: it negotiates a

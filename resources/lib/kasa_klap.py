@@ -39,7 +39,8 @@ import os
 import struct
 
 from aes import AES
-from compat import HTTPError, Request, URLError, urlopen
+from compat import (HTTPError, Request, URLError, to_bytes,
+                    to_native, urlopen)
 
 HTTP_PORT = 80
 BLOCK = 16
@@ -78,10 +79,8 @@ def _sha256(data):
 
 def auth_hash(username, password, scheme=SCHEME_V1):
     """The credential digest both ends derive their keys from."""
-    username = username.encode('utf-8') if not isinstance(username, bytes) \
-        else username
-    password = password.encode('utf-8') if not isinstance(password, bytes) \
-        else password
+    username = to_bytes(username or '')
+    password = to_bytes(password or '')
     if scheme == SCHEME_V2:
         return _sha256(_sha1(username) + _sha1(password))
     return _md5(_md5(username) + _md5(password))
@@ -104,7 +103,10 @@ def handshake2_hash(local_seed, remote_seed, digest, scheme=SCHEME_V1):
 def _pad(data):
     """PKCS#7. The AES here does not pad, deliberately -- Broadlink must not."""
     padding = BLOCK - (len(data) % BLOCK)
-    return data + (chr(padding) * padding).encode('latin-1')
+    # Built through bytearray rather than chr().encode(): on Python 2 that
+    # encode is an implicit ascii decode first, which is the same trap that
+    # made a binary body fail inside an HTTP request.
+    return data + bytes(bytearray([padding] * padding))
 
 
 def _unpad(data):
@@ -155,10 +157,10 @@ class Session(object):
 
     def __init__(self, ip, username, password, port=HTTP_PORT, timeout=5.0,
                  log_func=None):
-        self.ip = ip
+        self.ip = to_native(ip or '')
         self.username = username or ''
         self.password = password or ''
-        self.port = port or HTTP_PORT
+        self.port = int(port or HTTP_PORT)
         self.timeout = timeout
         self._log = log_func or (lambda message: None)
         self.cookie = ''
@@ -169,11 +171,17 @@ class Session(object):
     # -- HTTP --------------------------------------------------------------
 
     def _post(self, path, body, query=''):
-        url = 'http://%s:%d%s%s' % (self.ip, self.port, path, query)
+        # Native str throughout, never unicode: the body is binary, and on
+        # Python 2 one unicode header drags the whole request into unicode
+        # and then fails trying to decode that body as ascii. A device
+        # address read back from devices.json is unicode, so this is the
+        # normal case rather than an edge one.
+        url = to_native('http://%s:%d%s%s'
+                        % (self.ip, self.port, path, query))
         request = Request(url, data=body)
         request.add_header('Content-Type', 'application/octet-stream')
         if self.cookie:
-            request.add_header('Cookie', self.cookie)
+            request.add_header('Cookie', to_native(self.cookie))
         try:
             response = urlopen(request, timeout=self.timeout)
         except HTTPError as exc:
@@ -200,7 +208,7 @@ class Session(object):
         info = response.info()
         getter = getattr(info, 'get', None) or getattr(info, 'getheader')
         raw = getter('Set-Cookie') or ''
-        for part in raw.split(';'):
+        for part in to_native(raw).split(';'):
             part = part.strip()
             if part.startswith(SESSION_COOKIE + '='):
                 self.cookie = part

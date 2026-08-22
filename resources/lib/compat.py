@@ -38,7 +38,7 @@ urlopen = _urllib_request.urlopen
 
 __all__ = [
     'PY2', 'HTTPError', 'URLError', 'urlencode', 'Request', 'urlopen',
-    'string_types', 'text_type', 'to_text', 'to_bytes',
+    'string_types', 'text_type', 'to_text', 'to_bytes', 'to_native',
 ]
 
 
@@ -58,3 +58,19 @@ def to_bytes(value, encoding='utf-8'):
     if not isinstance(value, string_types):
         value = text_type(value)
     return value.encode(encoding, 'replace')
+
+
+def to_native(value):
+    """Return `value` as the native `str`: bytes on Python 2, text on 3.
+
+    Needed wherever text meets binary in the same operation. Python 2's
+    httplib joins the request headers into one string and then appends the
+    body to it -- so a single unicode header, which a URL built from a
+    unicode address produces, makes the whole thing unicode and forces an
+    implicit ascii decode of a binary body. The failure surfaces as an
+    ascii codec error pointing at byte 0 of the payload, which says nothing
+    about the actual cause.
+    """
+    if PY2:
+        return to_bytes(value)
+    return to_text(value)

@@ -1,3 +1,16 @@
+v2.8.2
+- Fixed "'ascii' codec can't decode byte 0xcc in position 0" when switching a
+  later Kasa plug. A Python 2 trap, and the ordinary case rather than an edge
+  one: a device address read back from devices.json is unicode, because that
+  is what json.load produces on Python 2. That made the request URL unicode,
+  which made the Host header unicode, and Python 2's httplib joins the headers
+  into one string before appending the body -- so the binary handshake payload
+  was implicitly decoded as ascii and failed on its first random byte.
+- Every URL and header value in an HTTP request is now the interpreter's own
+  str type. The same latent fault was in the Govee cloud client and is fixed
+  there too, before it had a chance to surface.
+- Two more implicit decodes removed from the KLAP path, both the same shape.
+
 v2.8.1
 - A device whose state could not be read was always blamed on Govee. The
   dialog named UDP port 4002 -- the port Govee's status reply uses and which a

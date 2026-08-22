@@ -20,7 +20,8 @@ import json
 import ssl
 import time
 
-from compat import HTTPError, Request, URLError, urlencode, urlopen, to_text
+from compat import (HTTPError, Request, URLError, to_native, to_text,
+                    urlencode, urlopen)
 
 BASE_URL = 'https://developer-api.govee.com'
 DEVICES_ENDPOINT = BASE_URL + '/v1/devices'
@@ -89,7 +90,13 @@ class CloudTransport(object):
             body = json.dumps(payload).encode('utf-8')
             headers['Content-Type'] = 'application/json'
 
-        request = Request(url, data=body, headers=headers)
+        # Native str for the URL and every header value. On Python 2 a
+        # single unicode header makes the whole request unicode, and appending
+        # a binary body to it then fails as an ascii decode error that points
+        # at the body rather than at the header that caused it.
+        request = Request(to_native(url), data=body,
+                          headers=dict((key, to_native(value))
+                                       for key, value in headers.items()))
         # Python 2's urllib2 infers the verb from whether data is present, so
         # PUT has to be forced. Overriding get_method works on both 2 and 3.
         request.get_method = lambda: method

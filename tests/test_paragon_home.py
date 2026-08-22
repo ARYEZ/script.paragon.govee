@@ -2859,6 +2859,96 @@ class FakeKasaPlug(object):
         return struct.pack('>I', len(payload)) + payload
 
 
+class TestNativeStrings(unittest.TestCase):
+    """Text meeting binary in one HTTP request, which Python 2 will not do.
+
+    Python 2's httplib joins the request headers into one string and then
+    appends the body. One unicode header there makes the join unicode, and
+    appending a binary body forces an implicit ascii decode of it -- which
+    fails as "'ascii' codec can't decode byte 0xcc in position 0", pointing
+    at the payload rather than at the header that caused it.
+
+    A device address read back from devices.json is unicode on Python 2,
+    because that is what json.load produces, so this is the ordinary case.
+    """
+
+    def setUp(self):
+        clean_profile()
+        xbmcaddon.reset()
+        for name in ('addon_utils', 'compat', 'kasa_klap', 'govee_cloud'):
+            if name in sys.modules:
+                del sys.modules[name]
+
+    def tearDown(self):
+        clean_profile()
+
+    def test_to_native_returns_the_interpreters_own_str(self):
+        import compat
+
+        self.assertIsInstance(compat.to_native(u'10.0.0.31'), str)
+        self.assertIsInstance(compat.to_native(b'10.0.0.31'), str)
+
+    def test_a_klap_request_url_is_never_text_beside_a_binary_body(self):
+        import kasa_klap
+
+        captured = {}
+
+        class _Recorder(object):
+            def __init__(self, url, data=None, headers=None):
+                captured['url'] = url
+                captured['data'] = data
+                captured['headers'] = dict(headers or {})
+
+            def add_header(self, key, value):
+                captured['headers'][key] = value
+
+        def refuse(request, timeout=None):
+            raise kasa_klap.URLError('stop here')
+
+        kasa_klap.Request = _Recorder
+        kasa_klap.urlopen = refuse
+        session = kasa_klap.Session(u'10.0.0.31', u'me@example.com',
+                                    u'pw', port=80)
+
+        self.assertRaises(kasa_klap.KlapError,
+                          session._post, '/app/handshake1', b'\xcc' * 16)
+        self.assertIsInstance(captured['url'], str)
+        self.assertEqual(captured['data'], b'\xcc' * 16)
+        for value in captured['headers'].values():
+            self.assertIsInstance(value, str)
+
+    def test_an_address_from_the_device_cache_is_made_native_at_the_door(self):
+        import kasa_klap
+
+        session = kasa_klap.Session(u'10.0.0.31', 'user', 'pw')
+
+        self.assertIsInstance(session.ip, str)
+        self.assertIsInstance(session.port, int)
+
+    def test_a_govee_cloud_request_is_native_too(self):
+        import govee_cloud
+
+        captured = {}
+
+        class _Recorder(object):
+            def __init__(self, url, data=None, headers=None):
+                captured['url'] = url
+                captured['headers'] = dict(headers or {})
+
+        def refuse(request, timeout=None, context=None):
+            raise govee_cloud.URLError('stop here')
+
+        govee_cloud.Request = _Recorder
+        govee_cloud.urlopen = refuse
+        client = govee_cloud.CloudTransport(api_key=u'a-key')
+
+        self.assertRaises(govee_cloud.CloudError,
+                          client._request, 'GET', u'https://example.test/x')
+        self.assertIsInstance(captured['url'], str)
+        for value in captured['headers'].values():
+            self.assertIsInstance(value, str)
+
+
 class TestKasaProtocol(unittest.TestCase):
     """The cipher and the two framings, which is most of this protocol."""
 

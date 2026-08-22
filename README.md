@@ -670,6 +670,12 @@ re-naming thirty-four bulbs over.
 Inside the code, `govee_lan.py`, `govee_cloud.py` and `GoveeController` keep
 their names on purpose too: those really are the Govee driver, not the add-on.
 
+Note what the suite cannot cover: it runs on Python 3, so a Python 2-only
+fault — an implicit ascii decode where text meets binary — passes here and
+fails on the device. Those are guarded by invariants that *are* checkable on
+both, such as every URL and header in an HTTP request being the interpreter's
+own `str` type, rather than by reproducing the failure.
+
 `check_py2.py` exists because Krypton runs Python 2.7 and a 2.7 interpreter is
 no longer easy to come by — it walks the AST of every shipped file and fails on
 anything 2.7 cannot parse (f-strings, annotations, `yield from`, Python-3-only

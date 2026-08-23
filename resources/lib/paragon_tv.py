@@ -108,6 +108,11 @@ def todays_preset(now):
     return preset_for_day(now.weekday())
 
 
+def week():
+    """Paragon TV's whole weekly table, as seven names or blanks."""
+    return [preset_for_day(day) for day in range(7)]
+
+
 def phase_time(preset, phase):
     """When a phase of a preset runs, as 'HH:MM', or '' if it does not.
 

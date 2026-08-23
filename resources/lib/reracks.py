@@ -151,6 +151,12 @@ def todays_rerack(week, reracks, now):
     return find(reracks, week[now.weekday()])
 
 
+def matching_week(tv_week):
+    """Paragon TV's weekly table, as ours. The preset names are the same nine,
+    so a day set to Gamma there is a day set to Gamma here."""
+    return clean_week(tv_week)
+
+
 def filled_phases(rerack):
     """(number, phase) for the phases that hold a sequence."""
     return [(index + 1, phase)

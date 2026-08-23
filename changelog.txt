@@ -1,3 +1,16 @@
+v2.17.0
+- The weekly table can be matched to Paragon TV's and kept matched. It is read
+  from Paragon TV every time rather than copied once, so changing a day there
+  changes it here with nothing to press and no way for the two to drift.
+- While matched the days are not editable here, because they are not ours.
+  Your own days are kept and come back when you switch it off.
+- "Copy Paragon TV's days once" is the other half: a snapshot you can then
+  edit, for starting from the television's week and diverging.
+- Fixed the three rerack settings -- the presets, the week, and whether the
+  week is matched -- discarding one another. They share a file and any of them
+  can be the first to be read, and reading one was refilling the others from
+  disk over whatever was already in hand.
+
 v2.16.0
 - Whether a phase takes its time from Paragon TV is now decided per phase, not
   per rerack. One rerack can hold the lights back five minutes past the

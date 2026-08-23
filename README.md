@@ -562,6 +562,30 @@ changing it is never a surprise somewhere else.
 
 A **weekly table** says which rerack a day gets, exactly as Paragon TV's does.
 
+### Matching the week to Paragon TV
+
+**Days: matched to Paragon TV** takes the whole weekly table from the
+television and keeps taking it:
+
+```
+Which rerack runs on which day
+   Days: matched to Paragon TV
+   Monday     Alpha
+   Tuesday    Alpha
+   Wednesday  Alpha
+   Thursday   Omega
+   ...
+```
+
+It is read every time rather than copied once, so changing a day in Paragon TV
+changes it here with nothing to press and no way for the two to drift apart.
+While matched, the days are not yours to edit — they are not yours.
+
+Your own days are kept and come back the moment you switch it off.
+
+**Copy Paragon TV's days once** is the other half: a one-off snapshot you can
+then edit, for when you want to start from the television's week and diverge.
+
 ### Where the phase times come from
 
 **Per phase**, not per rerack. Each phase is either:

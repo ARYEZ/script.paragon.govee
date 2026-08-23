@@ -1281,6 +1281,100 @@ class TestReracks(unittest.TestCase):
         self.assertEqual([call[:2] for call in self.recorder.calls],
                          [('turn', 'AA:BB')])
 
+    # -- matching the week to Paragon TV ------------------------------------
+
+    def test_matching_the_week_reads_paragon_tv_every_time(self):
+        """A copy would drift; this cannot, because it is never ours."""
+        self.install_tv(SaturdayPreset='1', MondayPreset='0')
+        app = self.with_alpha(days=('', '', '', '', '', '', ''))
+        app.set_week_follows_tv(True)
+
+        self.assertEqual(app.effective_week()[5], 'Alpha')
+        self.assertEqual(app.run_due_phases(now=self.SATURDAY),
+                         ['Alpha phase 2'])
+
+    def test_a_day_changed_in_paragon_tv_changes_here_with_nothing_pressed(self):
+        self.install_tv(SaturdayPreset='0')
+        app = self.with_alpha(days=('', '', '', '', '', '', ''))
+        app.set_week_follows_tv(True)
+        self.assertEqual(app.run_due_phases(now=self.SATURDAY), [])
+
+        xbmcaddon.FOREIGN['script.paragontv']['SaturdayPreset'] = '1'
+
+        self.assertEqual(app.run_due_phases(now=self.SATURDAY),
+                         ['Alpha phase 2'])
+
+    def test_our_own_days_are_kept_and_come_back(self):
+        """Matching is a mode, not a one-way change to the table."""
+        self.install_tv(SaturdayPreset='0')
+        app = self.with_alpha(days=('', '', '', '', '', 'Alpha', ''))
+        app.set_week_follows_tv(True)
+
+        self.assertEqual(app.effective_week()[5], '')
+
+        app.set_week_follows_tv(False)
+        self.assertEqual(app.effective_week()[5], 'Alpha')
+
+    def test_a_day_cannot_be_changed_while_the_week_is_matched(self):
+        """It is not ours to change; changing it would silently do nothing."""
+        self.install_tv()
+        app = self.with_alpha(days=('', '', '', '', '', '', ''))
+        app.set_week_follows_tv(True)
+
+        app.set_day(5, 'Omega')
+
+        self.assertEqual(app.week[5], '')
+
+    def test_copying_the_week_takes_it_once_and_leaves_it_editable(self):
+        """The other half: a starting point rather than a permanent link."""
+        self.install_tv(SaturdayPreset='2', MondayPreset='1')
+        app = self.with_alpha(days=('', '', '', '', '', '', ''))
+
+        taken = app.copy_week_from_tv()
+
+        self.assertEqual(taken, 2)
+        self.assertEqual(app.week[0], 'Alpha')
+        self.assertEqual(app.week[5], 'Omega')
+
+        # And it stays put when Paragon TV moves on.
+        xbmcaddon.FOREIGN['script.paragontv']['SaturdayPreset'] = '0'
+        self.assertEqual(app.week[5], 'Omega')
+
+    def test_matching_with_paragon_tv_switched_off_gives_a_blank_week(self):
+        self.install_tv(EnablePresetSystem='false')
+        app = self.with_alpha()
+        app.set_week_follows_tv(True)
+
+        self.assertEqual(app.effective_week(), ['' for _ in range(7)])
+        self.assertEqual(app.run_due_phases(now=self.SATURDAY), [])
+
+    def test_matching_without_paragon_tv_gives_a_blank_week(self):
+        app = self.with_alpha()
+        app.set_week_follows_tv(True)
+
+        self.assertEqual(app.effective_week(), ['' for _ in range(7)])
+
+    def test_whether_the_week_is_matched_survives_a_restart(self):
+        self.install_tv()
+        app = self.with_alpha()
+        app.set_week_follows_tv(True)
+
+        from paragon_home import ParagonHome
+
+        self.assertTrue(ParagonHome().week_follows_tv)
+
+    def test_reading_one_of_the_three_does_not_discard_another(self):
+        """They share a file, and any of them can be asked for first."""
+        from paragon_home import ParagonHome
+
+        app = ParagonHome()
+        app._week = ['Alpha'] * 7
+
+        following = app.week_follows_tv      # was clobbering the week
+
+        self.assertFalse(following)
+        self.assertEqual(app.week, ['Alpha'] * 7)
+
     # -- where the times come from -----------------------------------------
 
     def install_tv(self, **settings):

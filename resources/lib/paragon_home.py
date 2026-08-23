@@ -54,6 +54,7 @@ class ParagonHome(object):
         self._sequence_state = None
         self._reracks = None
         self._week = None
+        self._week_follows_tv = None
         self._phase_state = None
         self._palette = None
         # How many known lights failed to answer the last refresh, so the
@@ -715,11 +716,21 @@ class ParagonHome(object):
     # -- reracks: a day in nine phases --------------------------------------
 
     def _load_reracks(self):
+        """Fill in whichever of the three is still unread.
+
+        Only the unread ones. They share a file and any of them can be the
+        first to be asked for, so a plain assignment here let reading one
+        discard another that had already been set.
+        """
         raw = utils.read_json(rerack_lib.RERACK_FILE, default={}) or {}
         if not isinstance(raw, dict):
             raw = {}
-        self._reracks = rerack_lib.normalise_all(raw.get('presets'))
-        self._week = rerack_lib.clean_week(raw.get('week'))
+        if self._reracks is None:
+            self._reracks = rerack_lib.normalise_all(raw.get('presets'))
+        if self._week is None:
+            self._week = rerack_lib.clean_week(raw.get('week'))
+        if self._week_follows_tv is None:
+            self._week_follows_tv = bool(raw.get('week_follows_tv'))
 
     @property
     def reracks(self):
@@ -735,11 +746,50 @@ class ParagonHome(object):
             self._load_reracks()
         return self._week
 
+    @property
+    def week_follows_tv(self):
+        """Whether the weekly table is Paragon TV's rather than our own."""
+        if self._week_follows_tv is None:
+            self._load_reracks()
+        return self._week_follows_tv
+
+    def set_week_follows_tv(self, following):
+        self._week_follows_tv = bool(following)
+        self.save_reracks()
+
+    def tv_week(self):
+        """Paragon TV's weekly table, or seven blanks if it has nothing to say."""
+        import paragon_tv
+
+        if not paragon_tv.enabled():
+            return ['' for _ in range(7)]
+        return rerack_lib.matching_week(paragon_tv.week())
+
+    def effective_week(self):
+        """The table actually in force, whichever it is."""
+        if self.week_follows_tv:
+            return self.tv_week()
+        return self.week
+
+    def copy_week_from_tv(self):
+        """Take Paragon TV's days once, as a starting point to edit.
+
+        Kept separate from following it: one is a copy that can then be
+        changed, the other is a table that is never ours to change.
+        """
+        taken = self.tv_week()
+        self._week = list(taken)
+        self.save_reracks()
+        return len([name for name in taken if name])
+
     def save_reracks(self):
         utils.write_json(rerack_lib.RERACK_FILE,
-                         {'presets': self.reracks, 'week': self.week})
+                         {'presets': self.reracks, 'week': self.week,
+                          'week_follows_tv': bool(self._week_follows_tv)})
 
     def set_day(self, weekday, name):
+        if self.week_follows_tv:
+            return
         if 0 <= weekday <= 6:
             self.week[weekday] = name or ''
             self.save_reracks()
@@ -748,7 +798,7 @@ class ParagonHome(object):
         return rerack_lib.find(self.reracks, name)
 
     def todays_rerack(self, now=None):
-        return rerack_lib.todays_rerack(self.week, self.reracks,
+        return rerack_lib.todays_rerack(self.effective_week(), self.reracks,
                                         now or sequence_lib.now())
 
     def sequence_used_by(self, name):

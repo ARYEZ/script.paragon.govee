@@ -1595,17 +1595,32 @@ class ControlPanel(object):
 
     def _days_using(self, name):
         return ', '.join(rerack_lib.DAYS[day][:3]
-                         for day, assigned in enumerate(self.app.week)
+                         for day, assigned
+                         in enumerate(self.app.effective_week())
                          if assigned == name)
 
     def week_menu(self):
         """Which rerack each day gets, laid out as a week."""
+        import paragon_tv
+
         while True:
+            following = self.app.week_follows_tv
+            week = self.app.effective_week()
             rows = []
-            for day, name in enumerate(self.app.week):
-                rows.append(('%-10s %s' % (rerack_lib.DAYS[day],
-                                           name or 'nothing'),
-                             lambda d=day: self._pick_day_rerack(d)))
+
+            if paragon_tv.installed():
+                rows.append(('Days: %s'
+                             % ('matched to Paragon TV' if following
+                                else 'my own'),
+                             self._toggle_week_follows_tv))
+
+            for day, name in enumerate(week):
+                label = '%-10s %s' % (rerack_lib.DAYS[day], name or 'nothing')
+                rows.append((label, lambda d=day: self._pick_day_rerack(d)))
+
+            if paragon_tv.installed() and not following:
+                rows.append(('Copy Paragon TV\'s days once',
+                             self._copy_week_from_tv))
 
             choice = _select('Which rerack runs on which day',
                              [label for label, _h in rows])
@@ -1613,7 +1628,56 @@ class ControlPanel(object):
                 return
             rows[choice][1]()
 
+    def _toggle_week_follows_tv(self):
+        """Match the week to Paragon TV's, and keep matching it.
+
+        Not a copy: the table is read from Paragon TV every time it is
+        needed, so changing a day there changes it here with nothing to
+        press. Our own table is kept and comes back if this is switched off.
+        """
+        import paragon_tv
+
+        if not self.app.week_follows_tv:
+            if not paragon_tv.enabled():
+                _dialog().ok(utils.ADDON_NAME,
+                             'Paragon TV is installed but its Rerack system '
+                             'is switched off, so it has no days to match.')
+                return
+            self.app.set_week_follows_tv(True)
+            _dialog().ok(
+                utils.ADDON_NAME,
+                'The week now matches Paragon TV, and keeps matching it.\n\n'
+                'Change a day there and it changes here too. Your own days '
+                'are kept and come back if you switch this off.')
+            return
+
+        self.app.set_week_follows_tv(False)
+        utils.notify('The week is your own again')
+
+    def _copy_week_from_tv(self):
+        """Take Paragon TV's days once, as a starting point to edit."""
+        import paragon_tv
+
+        if not paragon_tv.enabled():
+            _dialog().ok(utils.ADDON_NAME,
+                         'Paragon TV is installed but its Rerack system is '
+                         'switched off, so it has no days to copy.')
+            return
+        if not _dialog().yesno(
+                utils.ADDON_NAME,
+                'Replace the days here with Paragon TV\'s?\n\nThis is a '
+                'copy you can then change. To keep them matched instead, use '
+                '"Days: my own" above.'):
+            return
+        taken = self.app.copy_week_from_tv()
+        utils.notify('Copied %d day(s) from Paragon TV' % taken)
+
     def _pick_day_rerack(self, weekday):
+        if self.app.week_follows_tv:
+            _dialog().ok(utils.ADDON_NAME,
+                         'These days come from Paragon TV.\n\nChange them '
+                         'there, or switch "Days" above back to your own.')
+            return
         options = ['Nothing'] + [r['name'] for r in self.app.reracks]
         choice = _select(rerack_lib.DAYS[weekday], options)
         if choice == BACK:

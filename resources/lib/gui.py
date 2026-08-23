@@ -1631,10 +1631,6 @@ class ControlPanel(object):
                     rerack, number, phase, tv_times.get(number)),
                     lambda n=number: self.edit_phase(rerack, n)))
 
-            rows.append(('Times: %s' % ('from Paragon TV'
-                                        if rerack['follow_tv']
-                                        else 'its own'),
-                         lambda: self._toggle_follow_tv(rerack)))
             rows.append(('Run this rerack now',
                          lambda: self._run_rerack_now(rerack)))
 
@@ -1646,32 +1642,13 @@ class ControlPanel(object):
                 return
             rows[choice][1]()
 
-    def _toggle_follow_tv(self, rerack):
-        """Its own times, or Paragon TV's for the preset of the same name."""
-        import paragon_tv
-
-        if not rerack['follow_tv'] and not paragon_tv.installed():
-            _dialog().ok(utils.ADDON_NAME,
-                         'Paragon TV is not installed, so there are no times '
-                         'to take from it.')
-            return
-        rerack['follow_tv'] = not rerack['follow_tv']
-        self.app.save_reracks()
-        if rerack['follow_tv']:
-            _dialog().ok(
-                utils.ADDON_NAME,
-                '%s now runs at Paragon TV\'s times for its own %s preset.'
-                '\n\nThe times set here are kept, and come back if you '
-                'switch this off.' % (rerack['name'], rerack['name']))
-
     def edit_phase(self, rerack, number):
         """What a phase does, and when -- unless Paragon TV says when."""
         phase = rerack['phases'][number - 1]
         rows = [('Sequence: %s' % (phase['sequence'] or 'none'),
                  lambda: self._pick_phase_sequence(rerack, number))]
-        if not rerack['follow_tv']:
-            rows.append(('Time: %s' % (phase['time'] or 'not set'),
-                         lambda: self._pick_phase_time(rerack, number)))
+        rows.append(('Time: %s' % (phase['time'] or 'with Paragon TV'),
+                     lambda: self._pick_phase_time(rerack, number)))
         if phase['sequence']:
             rows.append(('Clear this phase',
                          lambda: self._clear_phase(rerack, number)))
@@ -1695,13 +1672,32 @@ class ControlPanel(object):
         self.app.save_reracks()
 
     def _pick_phase_time(self, rerack, number):
+        """Its own time, or Paragon TV's for the same phase.
+
+        Two rows rather than a blank meaning something: "leave it empty and it
+        follows the television" is true but not the sort of thing a menu
+        should expect anyone to work out.
+        """
         phase = rerack['phases'][number - 1]
+        choice = _select(sequence_lib.describe_phase(number).capitalize(),
+                         ['Run with Paragon TV%s'
+                          % ('  (now)' if not phase['time'] else ''),
+                          'Set a time of my own%s'
+                          % ('  (now %s)' % phase['time'] if phase['time']
+                             else '')])
+        if choice == BACK:
+            return
+        if choice == 0:
+            phase['time'] = ''
+            self.app.save_reracks()
+            return
+
         value = _dialog().input('Time of day (18:00, or 6pm)',
                                 phase['time'] or '')
         if value is None:
             return
         parsed = sequence_lib.parse_time(value)
-        if value.strip() and not parsed:
+        if not parsed:
             _dialog().ok(utils.ADDON_NAME,
                          'Could not read "%s" as a time.\n\n'
                          'Try 18:00, 6pm or 1800.' % value.strip())

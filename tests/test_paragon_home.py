@@ -1318,14 +1318,56 @@ class TestReracks(unittest.TestCase):
             app.run_due_phases(now=self.SATURDAY.replace(hour=23, minute=30)),
             [])
 
-    def test_switching_back_brings_the_local_times_with_it(self):
-        """They are kept rather than cleared, so the switch is reversible."""
-        self.install_tv()
-        app = self.with_alpha(follow_tv=True)
-        app.reracks[0]['follow_tv'] = False
+    def test_a_phase_can_hold_the_lights_back_past_the_television(self):
+        """The case the per-phase switch exists for.
+
+        Phase 5 runs the lights at 07:00 of its own accord while phases 6
+        onward take the television's word -- one rerack doing both, which is
+        the ordinary arrangement rather than an exotic one.
+        """
+        xbmcaddon.install('script.paragontv', {
+            'EnablePresetSystem': 'true', 'SaturdayPreset': '1',
+            'AlphaPhase5Time': '06:55', 'AlphaPhase6Time': '23:30'})
+        app = self.app()
+        app._reracks = self.reracks.normalise_all([
+            self.reracks.make_rerack('Alpha', [
+                {}, {}, {}, {},
+                {'sequence': 'Curtain Up', 'time': '07:00'},
+                {'sequence': 'Wind Down'},
+            ])])
+        app._week = ['Alpha'] * 7
+        app._phase_state = set()
+
+        # The television's own 06:55 is not ours.
+        self.assertEqual(
+            app.run_due_phases(now=self.SATURDAY.replace(hour=6, minute=55)),
+            [])
+        self.assertEqual(
+            app.run_due_phases(now=self.SATURDAY.replace(hour=7, minute=0)),
+            ['Alpha phase 5'])
+        # And phase 6 goes when the television goes.
+        self.assertEqual(
+            app.run_due_phases(now=self.SATURDAY.replace(hour=23, minute=30)),
+            ['Alpha phase 6'])
+
+    def test_a_phase_with_its_own_time_ignores_paragon_tv_entirely(self):
+        self.install_tv()          # Alpha phase 2 is 09:00 there
+        app = self.with_alpha(follow_tv=False)   # and 07:00 here
 
         self.assertEqual(app.run_due_phases(now=self.SATURDAY),
                          ['Alpha phase 2'])
+        self.assertEqual(
+            app.run_due_phases(now=self.SATURDAY.replace(hour=9)), [])
+
+    def test_a_rerack_that_used_to_follow_tv_now_has_blank_phase_times(self):
+        """The switch moved to the phase, so following became "no time"."""
+        carried = self.reracks.normalise(
+            {'name': 'Alpha', 'follow_tv': True,
+             'phases': [{'sequence': 'Curtain Up', 'time': '07:00'}]})
+
+        self.assertEqual(carried['phases'][0]['time'], '')
+        self.assertTrue(self.reracks.follows_tv(carried['phases'][0]))
+        self.assertNotIn('follow_tv', carried)
 
     def test_following_paragon_tv_with_it_switched_off_runs_nothing(self):
         self.install_tv(EnablePresetSystem='false')

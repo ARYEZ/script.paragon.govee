@@ -770,8 +770,9 @@ class ParagonHome(object):
         utils.write_json(rerack_lib.RERACK_STATE_FILE, keys)
 
     def tv_phase_times(self, rerack, now):
-        """Paragon TV's times for the preset of the same name, if wanted."""
-        if not rerack.get('follow_tv'):
+        """Paragon TV's times for the preset of the same name, if any phase
+        is waiting on them. Most reracks are not, most of the time."""
+        if not rerack_lib.needs_tv(rerack):
             return {}
 
         import paragon_tv

@@ -1,3 +1,15 @@
+v2.16.0
+- Whether a phase takes its time from Paragon TV is now decided per phase, not
+  per rerack. One rerack can hold the lights back five minutes past the
+  television's wake and take its word for everything else, which turns out to
+  be the ordinary arrangement rather than an exotic one.
+- Each phase is either "Run with Paragon TV" or a time of its own. A phase
+  following the television shows the time it resolves to today, so "waiting"
+  and "waiting for nothing" are told apart at a glance.
+- A rerack that was set to follow Paragon TV keeps doing exactly that: the old
+  whole-rerack switch meant every phase followed the television, which is now
+  said by those phases having no time of their own.
+
 v2.15.0
 - Reracks are back, as the layer above sequences: a day laid out in nine
   phases, each holding a sequence or left empty. Shaped after the Paragon TV

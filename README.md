@@ -564,18 +564,30 @@ A **weekly table** says which rerack a day gets, exactly as Paragon TV's does.
 
 ### Where the phase times come from
 
-Per rerack, one switch:
+**Per phase**, not per rerack. Each phase is either:
 
-* **Its own** — a time you set on each phase. Works with no Paragon TV at all.
-* **From Paragon TV** — the times of the television's preset *of the same
-  name*. Alpha here runs at Alpha's times there, which is why the names match
-  and why nothing has to be said twice.
+* **Run with Paragon TV** — it goes when the television runs the same phase of
+  the preset *of the same name*. Alpha here follows Alpha there, which is why
+  the names match and why nothing has to be said twice.
+* **Set a time of my own** — it goes at that time, and the television is
+  ignored for that phase.
 
-Switching to Paragon TV keeps the local times rather than clearing them, so
-switching back brings them with it.
+So one rerack does both at once, which is the ordinary arrangement rather than
+an exotic one:
 
-A phase Paragon TV has no time for does not run. Falling back to a local time
-would fire it at an hour nobody set.
+```
+Phase 5 (wake and tune)  -  Ignition  (07:00)
+Phase 6 (shut down)      -  Shutdown  (with Paragon TV, 23:30)
+Phase 7 (wake and tune)  -  Ignition  (with Paragon TV, 17:00)
+```
+
+Phase 5 holds the lights back to 07:00 even though the television wakes at
+06:55; phases 6 and 7 go when it goes.
+
+A phase set to follow Paragon TV shows the time it resolves to **today**, so
+"waiting" and "waiting for nothing" are told apart without going to look. A
+phase the television has no time for does not run — there is nothing to fall
+back to, and an invented hour is worse than not firing.
 
 ### Rerack, sequence, scene
 

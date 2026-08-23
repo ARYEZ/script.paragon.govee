@@ -1563,14 +1563,27 @@ class ControlPanel(object):
     # -- when it runs ------------------------------------------------------
 
     def schedule_rerack(self, rerack):
-        """A time and the days it applies to. Both are needed, or neither."""
+        """Its own clock, or one of Paragon TV's phases. Not both."""
+        import paragon_tv
+
         while True:
-            rows = [
-                ('Time: %s' % (rerack['time'] or 'not set'),
-                 lambda: self._edit_rerack_time(rerack)),
-                ('Days: %s' % (self._days_label(rerack) or 'none'),
-                 lambda: self._edit_rerack_days(rerack)),
-            ]
+            following = rerack_lib.follows_tv(rerack)
+            rows = []
+            if not following:
+                rows.append(('Time: %s' % (rerack['time'] or 'not set'),
+                             lambda: self._edit_rerack_time(rerack)))
+                rows.append(('Days: %s' % (self._days_label(rerack) or 'none'),
+                             lambda: self._edit_rerack_days(rerack)))
+
+            if paragon_tv.installed():
+                rows.append(('Follow Paragon TV: %s'
+                             % (rerack_lib.describe_phase(rerack['phase'])
+                                if following else 'no'),
+                             lambda: self._edit_rerack_phase(rerack)))
+                if following:
+                    rows.append(("What Paragon TV says about today",
+                                 lambda: self._show_tv_status()))
+
             if rerack_lib.scheduled(rerack):
                 rows.append(('Stop running it on a schedule',
                              lambda: self._clear_schedule(rerack)))
@@ -1630,9 +1643,41 @@ class ControlPanel(object):
                 day = choice - 3
                 chosen.symmetric_difference_update([day])
 
+    def _edit_rerack_phase(self, rerack):
+        """Hang this rerack off one of Paragon TV's nine phases.
+
+        Following Paragon TV replaces its own time and days rather than
+        adding to them: two schedules on one rerack would be two answers to
+        one question.
+        """
+        import paragon_tv
+
+        options = ['Keep its own time instead']
+        for phase in range(1, paragon_tv.PHASE_COUNT + 1):
+            options.append(paragon_tv.describe_phase(phase).capitalize())
+
+        choice = _select('Follow which Paragon TV phase', options)
+        if choice == BACK:
+            return
+        if choice == 0:
+            rerack['phase'] = 0
+            return
+
+        rerack['phase'] = choice
+        rerack['time'] = ''
+        rerack['days'] = []
+
+    def _show_tv_status(self):
+        """What Paragon TV's own schedule says, so a phase can be checked."""
+        import paragon_tv
+
+        _dialog().ok('%s - Paragon TV' % utils.ADDON_NAME,
+                     paragon_tv.status(rerack_lib.now()))
+
     def _clear_schedule(self, rerack):
         rerack['time'] = ''
         rerack['days'] = []
+        rerack['phase'] = 0
         utils.notify('%s runs only when you run it' % rerack['name'])
         return False
 

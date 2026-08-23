@@ -71,6 +71,9 @@ WEEKEND = (5, 6)
 # lifts the lights at six should not do it at seven because the box was off.
 CATCH_UP_SECONDS = 300
 
+# Paragon TV's Rerack has nine phases.
+TV_PHASE_COUNT = 9
+
 _TIME_PATTERNS = (
     re.compile(r'^(\d{1,2}):(\d{2})\s*([ap]m?)?$', re.I),
     re.compile(r'^(\d{1,2})\s*([ap]m?)$', re.I),
@@ -126,13 +129,47 @@ def clean_days(raw):
     return sorted(days)
 
 
+def follows_tv(rerack):
+    """Whether this rerack hangs off a Paragon TV phase instead of a clock."""
+    return bool(rerack.get('phase'))
+
+
+def clean_phase(raw):
+    """A Paragon TV phase number, or 0 for not following one."""
+    try:
+        phase = int(raw or 0)
+    except (TypeError, ValueError):
+        return 0
+    return phase if 1 <= phase <= TV_PHASE_COUNT else 0
+
+
+def describe_phase(phase):
+    """Named here rather than imported, so this module stays importable
+    without Kodi -- the label list is small and does not change."""
+    labels = ('maintenance', 'wake and tune', 'shut down',
+              'push to satellites', 'wake and tune', 'shut down',
+              'wake and tune', 'shut down', 'wake and tune')
+    if not 1 <= phase <= TV_PHASE_COUNT:
+        return 'phase %s' % phase
+    return 'phase %d (%s)' % (phase, labels[phase - 1])
+
+
 def scheduled(rerack):
-    """Whether this rerack runs itself. Both halves are needed, not either."""
+    """Whether this rerack runs itself, by either route.
+
+    Its own time needs both halves -- a time with no days, or days with no
+    time, is a schedule that can never come round. Following Paragon TV needs
+    neither, because Paragon TV supplies both.
+    """
+    if follows_tv(rerack):
+        return True
     return bool(rerack.get('time') and rerack.get('days'))
 
 
 def describe_schedule(rerack):
     """The schedule in words, the way it would be said."""
+    if follows_tv(rerack):
+        return 'Paragon TV %s' % describe_phase(rerack['phase'])
     if not scheduled(rerack):
         return 'only when you run it'
 
@@ -148,33 +185,46 @@ def describe_schedule(rerack):
     return '%s at %s' % (when, rerack['time'])
 
 
-def stamp(rerack, now):
+def stamp(rerack, now, at_time=None):
     """The key that says this rerack has run today.
 
     Includes the time as well as the date, so moving a schedule later in the
-    same day lets it run again rather than being counted as already done.
+    same day lets it run again rather than being counted as already done. The
+    time is passed in when it came from somewhere else -- a Paragon TV phase
+    that moved should re-arm for the same reason.
     """
-    return '%04d-%02d-%02d %s' % (now.year, now.month, now.day,
-                                  rerack.get('time') or '')
+    if at_time is None:
+        at_time = rerack.get('time') or ''
+    return '%04d-%02d-%02d %s' % (now.year, now.month, now.day, at_time)
 
 
-def due(rerack, now, last=''):
+def own_schedule(rerack):
+    """The (time, days) a rerack keeps for itself."""
+    return rerack.get('time') or '', list(rerack.get('days') or [])
+
+
+def due(rerack, now, last='', schedule=None):
     """Whether this rerack should run right now.
 
     Three separate questions, and all of them have to be yes: is today one of
     its days, is the time here or just past, and has it not already run.
+
+    `schedule` is a resolved (time, days) pair for a rerack whose schedule
+    comes from elsewhere. Resolving it outside keeps this function free of
+    any knowledge of where a time came from.
     """
-    if not scheduled(rerack):
+    at_time, days = own_schedule(rerack) if schedule is None else schedule
+    if not at_time or not days:
         return False
-    if now.weekday() not in rerack['days']:
+    if now.weekday() not in days:
         return False
 
-    hour, minute = [int(part) for part in rerack['time'].split(':')]
+    hour, minute = [int(part) for part in at_time.split(':')]
     at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     late = (now - at).total_seconds()
     if late < 0 or late > CATCH_UP_SECONDS:
         return False
-    return last != stamp(rerack, now)
+    return last != stamp(rerack, now, at_time)
 
 
 def now():
@@ -187,10 +237,10 @@ def empty_step():
             'pause': 0}
 
 
-def make_rerack(name, steps=None, time=None, days=None):
+def make_rerack(name, steps=None, time=None, days=None, phase=None):
     """A rerack with its full complement of slots, however few are filled."""
     return normalise({'name': name, 'steps': list(steps or []),
-                      'time': time, 'days': days})
+                      'time': time, 'days': days, 'phase': phase})
 
 
 def _clean_int(value, low, high, default=0):
@@ -269,6 +319,7 @@ def normalise(raw):
             'description': (raw.get('description') or '').strip(),
             'time': parse_time(raw.get('time')),
             'days': clean_days(raw.get('days')),
+            'phase': clean_phase(raw.get('phase')),
             'steps': steps}
 
 

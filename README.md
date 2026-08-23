@@ -492,6 +492,36 @@ rules govern when:
 Moving a schedule later in the same day lets it run again — the record holds
 the time as well as the date.
 
+### Following Paragon TV
+
+Paragon TV has a Rerack of its own — a nine-phase preset macro system, one
+preset per day, each phase pinned to a time. A rerack here can hang off one of
+those phases instead of keeping its own clock:
+
+```
+Curtain Up - when it runs
+   Follow Paragon TV: phase 2 (wake and tune)
+   What Paragon TV says about today
+   Stop running it on a schedule
+```
+
+It then runs whenever that phase falls **for whichever preset today is**. The
+same rerack runs at 07:00 on an Alpha day and 08:00 on a Sigma day, because
+Paragon TV's own weekly table decides. So the lights can come up when the
+channel does, and the room can go dark when the box shuts down.
+
+Following a phase replaces the rerack's own time and days rather than adding
+to them — two schedules on one rerack would be two answers to one question.
+
+Nothing runs on a day Paragon TV has no preset for, on a phase a preset does
+not carry (the satellite presets have no maintenance phase at all), or while
+Paragon TV's own preset system is switched off. **What Paragon TV says about
+today** shows the whole of today's schedule so a phase can be checked before
+it is relied on.
+
+**Paragon TV's settings are only ever read, never written.** It does not need
+to know this exists, and works unchanged whether or not it does.
+
 ### A rerack is not a scene
 
 A **scene** describes a state — how the lights should look. It can be

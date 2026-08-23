@@ -1061,6 +1061,234 @@ class TestReracks(unittest.TestCase):
                          'all tuya devices: Off')
 
 
+class TestParagonTV(unittest.TestCase):
+    """Reading Paragon TV's own Rerack schedule, exactly as it reads it."""
+
+    SATURDAY = datetime.datetime(2026, 8, 22, 18, 0)
+    THURSDAY = datetime.datetime(2026, 8, 20, 18, 0)
+
+    def setUp(self):
+        clean_profile()
+        xbmcaddon.reset()
+        for name in ('addon_utils', 'paragon_home', 'paragon_tv', 'reracks'):
+            if name in sys.modules:
+                del sys.modules[name]
+
+    def tearDown(self):
+        clean_profile()
+
+    def install_tv(self, **settings):
+        """Paragon TV as Kodi would present it, with its own settings."""
+        base = {'EnablePresetSystem': 'true',
+                # The index of the preset, which is what the setting holds.
+                'SaturdayPreset': '1',        # Alpha
+                'ThursdayPreset': '6',        # Sigma, a satellite preset
+                'AlphaPhase1Time': '04:00',
+                'AlphaPhase2Time': '07:00',
+                'AlphaPhase3Time': '23:30',
+                'SigmaPhase2Time': '08:00'}
+        base.update(settings)
+        xbmcaddon.install('script.paragontv', base)
+        import paragon_tv
+        return paragon_tv
+
+    def test_it_notices_when_paragon_tv_is_not_installed(self):
+        import paragon_tv
+
+        self.assertFalse(paragon_tv.installed())
+        self.assertFalse(paragon_tv.enabled())
+        self.assertEqual(paragon_tv.todays_preset(self.SATURDAY), '')
+
+    def test_a_day_setting_holds_an_index_and_not_a_name(self):
+        """Reading it as a name would silently find nothing at all."""
+        tv = self.install_tv()
+
+        self.assertEqual(tv.todays_preset(self.SATURDAY), 'Alpha')
+        self.assertEqual(tv.preset_for_day(3), 'Sigma')
+
+    def test_a_day_set_to_none_has_no_preset(self):
+        tv = self.install_tv(SaturdayPreset='0')
+
+        self.assertEqual(tv.todays_preset(self.SATURDAY), '')
+
+    def test_an_index_out_of_range_is_no_preset_rather_than_a_crash(self):
+        for value in ('99', '-1', 'Alpha', ''):
+            tv = self.install_tv(SaturdayPreset=value)
+            self.assertEqual(tv.todays_preset(self.SATURDAY), '',
+                             'accepted %r as a preset index' % value)
+
+    def test_phase_times_come_back_for_the_named_preset(self):
+        tv = self.install_tv()
+
+        self.assertEqual(tv.phase_time('Alpha', 1), '04:00')
+        self.assertEqual(tv.phase_time('Alpha', 3), '23:30')
+        self.assertEqual(tv.phase_time('Alpha', 9), '')
+
+    def test_a_satellite_preset_has_no_maintenance_phase(self):
+        """Sigma, Omicron, Theta and Lambda skip phase 1 entirely."""
+        tv = self.install_tv(SigmaPhase1Time='04:00')
+
+        self.assertEqual(tv.phase_time('Sigma', 1), '')
+        self.assertEqual(tv.phase_time('Sigma', 2), '08:00')
+
+    def test_a_phase_number_out_of_range_has_no_time(self):
+        tv = self.install_tv()
+
+        self.assertEqual(tv.phase_time('Alpha', 0), '')
+        self.assertEqual(tv.phase_time('Alpha', 10), '')
+
+    def test_the_status_says_what_today_holds(self):
+        tv = self.install_tv()
+
+        text = tv.status(self.SATURDAY)
+
+        self.assertIn('Alpha', text)
+        self.assertIn('04:00', text)
+        self.assertIn('maintenance', text)
+
+    def test_the_status_says_when_there_is_nothing_to_say(self):
+        import paragon_tv
+        self.assertIn('not installed', paragon_tv.status(self.SATURDAY))
+
+        tv = self.install_tv(EnablePresetSystem='false')
+        self.assertIn('switched off', tv.status(self.SATURDAY))
+
+        tv = self.install_tv(SaturdayPreset='0')
+        self.assertIn('no preset scheduled', tv.status(self.SATURDAY))
+
+    # -- a rerack following a phase ----------------------------------------
+
+    def app(self, tv=None):
+        from paragon_home import ParagonHome
+
+        app = ParagonHome()
+        self.recorder = RecordingController()
+        self.recorder.capabilities = lambda d: set(['power', 'state'])
+        app.controller = self.recorder
+        app._devices = [Device('AA:BB', name='Lamp', driver='govee',
+                               lan=True)]
+        app._scenes = [scene_lib.make_scene('Warshade', targets=['AA:BB'])]
+        return app
+
+    def following(self, phase):
+        import reracks
+
+        return reracks.make_rerack(
+            'Curtain Up', [{'kind': 'scene', 'target': 'Warshade'}],
+            phase=phase)
+
+    def test_a_rerack_can_hang_off_a_phase_instead_of_a_clock(self):
+        self.install_tv()
+        app = self.app()
+        app._reracks = [self.following(2)]
+
+        # Alpha's phase 2 is 07:00, and today is a Saturday, which is Alpha.
+        at_seven = self.SATURDAY.replace(hour=7, minute=0)
+
+        self.assertEqual(app.run_due_reracks(now=at_seven), ['Curtain Up'])
+
+    def test_it_does_not_run_at_another_phases_time(self):
+        self.install_tv()
+        app = self.app()
+        app._reracks = [self.following(2)]
+
+        self.assertEqual(
+            app.run_due_reracks(now=self.SATURDAY.replace(hour=23, minute=30)),
+            [])
+
+    def test_it_follows_today_preset_rather_than_a_fixed_time(self):
+        """The same rerack runs at a different hour on a different day."""
+        self.install_tv()
+        app = self.app()
+        app._reracks = [self.following(2)]
+
+        # Thursday is Sigma, whose phase 2 is 08:00 rather than 07:00.
+        self.assertEqual(
+            app.run_due_reracks(now=self.THURSDAY.replace(hour=7)), [])
+        self.assertEqual(
+            app.run_due_reracks(now=self.THURSDAY.replace(hour=8)),
+            ['Curtain Up'])
+
+    def test_it_does_not_run_on_a_day_with_no_preset(self):
+        self.install_tv(SaturdayPreset='0')
+        app = self.app()
+        app._reracks = [self.following(2)]
+
+        self.assertEqual(
+            app.run_due_reracks(now=self.SATURDAY.replace(hour=7)), [])
+
+    def test_it_does_not_run_when_paragon_tv_is_switched_off(self):
+        """Paragon TV's own master switch governs this too."""
+        self.install_tv(EnablePresetSystem='false')
+        app = self.app()
+        app._reracks = [self.following(2)]
+
+        self.assertEqual(
+            app.run_due_reracks(now=self.SATURDAY.replace(hour=7)), [])
+
+    def test_it_does_nothing_at_all_without_paragon_tv(self):
+        app = self.app()
+        app._reracks = [self.following(2)]
+
+        self.assertEqual(
+            app.run_due_reracks(now=self.SATURDAY.replace(hour=7)), [])
+
+    def test_a_phase_a_satellite_preset_lacks_simply_never_comes_round(self):
+        self.install_tv()
+        app = self.app()
+        app._reracks = [self.following(1)]      # maintenance
+
+        # Thursday is Sigma, which has no phase 1.
+        self.assertEqual(
+            app.run_due_reracks(now=self.THURSDAY.replace(hour=4)), [])
+        # Saturday is Alpha, which does.
+        self.assertEqual(
+            app.run_due_reracks(now=self.SATURDAY.replace(hour=4)),
+            ['Curtain Up'])
+
+    def test_it_still_runs_only_once_a_day(self):
+        self.install_tv()
+        app = self.app()
+        app._reracks = [self.following(2)]
+        at_seven = self.SATURDAY.replace(hour=7)
+
+        app.run_due_reracks(now=at_seven)
+
+        self.assertEqual(
+            app.run_due_reracks(now=at_seven + datetime.timedelta(minutes=2)),
+            [])
+
+    def test_moving_a_phase_time_re_arms_the_rerack(self):
+        """The record holds the time, so a phase that moved counts as new."""
+        tv = self.install_tv()
+        app = self.app()
+        app._reracks = [self.following(2)]
+        app.run_due_reracks(now=self.SATURDAY.replace(hour=7))
+
+        xbmcaddon.FOREIGN['script.paragontv']['AlphaPhase2Time'] = '09:00'
+
+        self.assertEqual(
+            app.run_due_reracks(now=self.SATURDAY.replace(hour=9)),
+            ['Curtain Up'])
+
+    def test_following_a_phase_reads_as_such(self):
+        import reracks
+
+        self.assertEqual(reracks.describe_schedule(self.following(3)),
+                         'Paragon TV phase 3 (shut down)')
+
+    def test_paragon_tv_settings_are_never_written_to(self):
+        """A working television setup must not be disturbed by any of this."""
+        tv = self.install_tv()
+        before = dict(xbmcaddon.FOREIGN['script.paragontv'])
+        app = self.app()
+        app._reracks = [self.following(2)]
+
+        app.run_due_reracks(now=self.SATURDAY.replace(hour=7))
+
+        self.assertEqual(xbmcaddon.FOREIGN['script.paragontv'], before)
+
+
 class TestHexColours(unittest.TestCase):
     """The Govee app hands out 8-digit codes, so pasting one must work."""
 

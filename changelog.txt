@@ -1,3 +1,25 @@
+v2.13.0
+- A rerack can now follow Paragon TV. Paragon TV has a Rerack of its own -- a
+  nine-phase preset macro system with one preset per day -- and a rerack here
+  can hang off one of those phases instead of keeping its own clock, so the
+  lights come up when the channel does and the room goes dark when the box
+  shuts down.
+- It runs whenever that phase falls for whichever preset today is. The same
+  rerack runs at 07:00 on an Alpha day and 08:00 on a Sigma day, because
+  Paragon TV's weekly table decides, not a fixed time here.
+- Following a phase replaces the rerack's own time and days rather than adding
+  to them. Two schedules on one rerack would be two answers to one question.
+- Nothing runs on a day Paragon TV has no preset for, on a phase a preset does
+  not carry -- the satellite presets have no maintenance phase -- or while
+  Paragon TV's own preset system is switched off. A phase whose time moves
+  re-arms the rerack, because the record holds the time as well as the date.
+- New "What Paragon TV says about today" lists today's preset and every phase
+  time it holds, so a phase can be checked before it is relied on.
+- Paragon TV's settings are only ever read, never written, and are read the
+  way Paragon TV reads them: the day settings hold an index rather than a
+  name, and reading one as a name would find nothing without saying so.
+  Paragon TV needs no change and does not need to know this exists.
+
 v2.12.0
 - A rerack can now run itself: "Runs:" in the rerack editor gives it a time
   and the days it applies to, so "Ignition" can run on Saturdays at 6pm.

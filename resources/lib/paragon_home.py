@@ -635,12 +635,41 @@ class ParagonHome(object):
     def save_rerack_state(self):
         utils.write_json(rerack_lib.RERACK_STATE_FILE, self.rerack_state)
 
+    def resolved_schedule(self, rerack, now):
+        """The (time, days) a rerack really runs on.
+
+        A rerack following Paragon TV has no time or days of its own: Paragon
+        TV's weekly table decides whether today has a preset at all, and that
+        preset decides when the phase falls. Resolving it here rather than
+        inside the rerack engine keeps that engine free of any knowledge of
+        another add-on.
+        """
+        if not rerack_lib.follows_tv(rerack):
+            return rerack_lib.own_schedule(rerack)
+
+        import paragon_tv
+
+        if not paragon_tv.enabled():
+            return '', []
+        preset = paragon_tv.todays_preset(now)
+        if not preset:
+            return '', []
+        at_time = paragon_tv.phase_time(preset, rerack['phase'])
+        if not at_time:
+            return '', []
+        return at_time, [now.weekday()]
+
     def due_reracks(self, now=None):
         """The reracks whose time has come and that have not run yet today."""
         moment = now or rerack_lib.now()
         state = self.rerack_state
-        return [r for r in self.reracks
-                if rerack_lib.due(r, moment, state.get(r['name'], ''))]
+        due = []
+        for rerack in self.reracks:
+            schedule = self.resolved_schedule(rerack, moment)
+            if rerack_lib.due(rerack, moment, state.get(rerack['name'], ''),
+                              schedule=schedule):
+                due.append((rerack, schedule[0]))
+        return due
 
     def run_due_reracks(self, now=None, sleep_func=None, on_step=None):
         """Run whatever is due. Returns the names of the reracks that ran.
@@ -653,9 +682,9 @@ class ParagonHome(object):
         """
         moment = now or rerack_lib.now()
         ran = []
-        for rerack in self.due_reracks(moment):
-            self.rerack_state[rerack['name']] = rerack_lib.stamp(rerack,
-                                                                 moment)
+        for rerack, at_time in self.due_reracks(moment):
+            self.rerack_state[rerack['name']] = rerack_lib.stamp(
+                rerack, moment, at_time)
             self.save_rerack_state()
             utils.log('Rerack "%s" is due (%s)'
                       % (rerack['name'], rerack_lib.describe_schedule(rerack)))

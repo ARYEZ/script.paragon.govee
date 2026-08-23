@@ -1,3 +1,14 @@
+v2.18.0
+- Scenes can be duplicated. "Duplicate..." in the scene editor copies one
+  under a new name and opens the copy, because a duplicate exists to be
+  changed rather than to sit there identical -- copy Dawn to Dusk, turn the
+  brightness down, done.
+- It copies what is on screen rather than what is saved, so a change made just
+  before pressing it is in the copy. The original is left exactly as it was
+  either way.
+- The copy is a deep one. A scene holds lists and a per-device map, and a
+  shallow copy would have left the copy quietly editing the original's.
+
 v2.17.0
 - The weekly table can be matched to Paragon TV's and kept matched. It is read
   from Paragon TV every time rather than copied once, so changing a day there

@@ -14,6 +14,8 @@ handful of values -- dialogs work identically under Estuary, skin.paragon and
 whatever else the user has installed.
 """
 
+import copy
+
 import xbmcgui
 
 import addon_utils as utils
@@ -800,6 +802,8 @@ class ControlPanel(object):
                 ('Cycle colours: %s' % cycle_label,
                  lambda: self._edit_cycle(scene)),
                 ('Test this scene', lambda: self.app.apply_scene(scene)),
+                ('Duplicate...',
+                 lambda: self._duplicate_scene(scene, index)),
                 ('Save', lambda: self._save_and_close(scene, index)),
             ]
             if index is not None:
@@ -822,6 +826,50 @@ class ControlPanel(object):
         if pick != BACK:
             scene['power'] = [scene_lib.POWER_ON, scene_lib.POWER_OFF,
                               scene_lib.POWER_KEEP][pick]
+
+    def _copy_name(self, name):
+        """"Dawn" -> "Dawn 2", or the next number that is free."""
+        base = (name or 'Scene').strip()
+        for number in range(2, 100):
+            candidate = '%s %d' % (base, number)
+            if scene_lib.find(self.app.scenes, candidate) is None:
+                return candidate
+        return base
+
+    def _duplicate_scene(self, scene, index):
+        """Copy this scene under a new name and open the copy.
+
+        Copies what is on screen rather than what is saved, so a change made
+        just before pressing this is in the copy -- which is what anyone
+        pressing "duplicate" halfway through an edit meant.
+
+        The copy is opened straight away because that is invariably the point:
+        a duplicate exists to be changed, not to sit there identical.
+        """
+        suggestion = self._copy_name(scene['name'])
+        name = _dialog().input('Name for the copy', suggestion)
+        if name is None or not name.strip():
+            return
+        name = name.strip()
+        if scene_lib.find(self.app.scenes, name) is not None:
+            _dialog().ok(utils.ADDON_NAME,
+                         'There is already a scene called "%s".' % name)
+            return
+
+        # A deep copy, not dict(): a scene holds lists and a per-device map,
+        # and a shallow one would leave the copy editing the original's.
+        made = copy.deepcopy(scene)
+        made['name'] = name
+        cleaned = scene_lib.normalise(made)
+        if cleaned is None:
+            utils.force_notify('That scene could not be copied')
+            return
+
+        self.app.scenes.append(cleaned)
+        self.app.save_scenes()
+        utils.notify('Copied to "%s"' % name)
+        self.edit_scene(len(self.app.scenes) - 1)
+        return False
 
     def _save_and_close(self, scene, index):
         self._save_scene(scene, index)

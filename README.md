@@ -434,6 +434,16 @@ Sequences live under **Sequences...** on the first screen, and each one is also 
 RunScript(script.paragon.govee,action=sequence,name=Wind Down)
 ```
 
+### Copying a scene
+
+**Duplicate...** in the scene editor makes a copy under a new name and opens
+it, because a duplicate exists to be changed rather than to sit there
+identical. Copy `Dawn` to `Dusk`, turn the brightness down, done.
+
+It copies what is **on screen**, not what is saved — a change made just before
+pressing it is in the copy, which is what pressing "duplicate" halfway through
+an edit means. The original is untouched either way.
+
 ### Commands a scene sends
 
 A scene sets state. A command has none to set — an infrared blaster has no

@@ -7429,6 +7429,105 @@ class TestControlPanel(unittest.TestCase):
 
         self.assertNotIn('After a power cut...', labels)
 
+    def _dawn(self):
+        """A scene with something in every kind of field it can hold."""
+        return scene_lib.normalise(scene_lib.make_scene(
+            'Dawn', brightness=50, mode=scene_lib.MODE_COLOR,
+            color=[255, 180, 90], targets=['AA:BB'],
+            actions=[{'device': 'EE:FF', 'command': 'AVR Power'}]))
+
+    def _duplicate(self, name):
+        panel = self.panel()
+        rows = menu_row(lambda: panel.edit_scene(0), 'Duplicate')[1]
+        xbmcgui.INPUT_QUEUE.append(name)
+        # Duplicate, then leave the editor the copy opens in.
+        xbmcgui.SELECT_QUEUE.extend([rows.index('Duplicate...'), -1])
+        panel.edit_scene(0)
+        return self.app.scene_by_name(name)
+
+    def test_a_scene_can_be_copied_under_a_new_name(self):
+        """Dawn at 50%, copied to Dusk, ready to be turned down to 5%."""
+        self.app._scenes = [self._dawn()]
+
+        dusk = self._duplicate('Dusk')
+
+        self.assertIsNotNone(dusk)
+        self.assertEqual(dusk['brightness'], 50)
+        self.assertEqual(dusk['color'], [255, 180, 90])
+        self.assertEqual(dusk['targets'], ['AA:BB'])
+        self.assertEqual(dusk['actions'],
+                         [{'device': 'EE:FF', 'command': 'AVR Power'}])
+
+    def test_the_original_is_left_exactly_as_it_was(self):
+        self.app._scenes = [self._dawn()]
+        before = json.dumps(self.app.scenes[0], sort_keys=True)
+
+        self._duplicate('Dusk')
+
+        self.assertEqual(json.dumps(self.app.scene_by_name('Dawn'),
+                                    sort_keys=True), before)
+
+    def test_changing_the_copy_does_not_change_the_original(self):
+        """The shallow-copy trap: a scene holds lists and a per-device map."""
+        self.app._scenes = [self._dawn()]
+
+        dusk = self._duplicate('Dusk')
+        dusk['brightness'] = 5
+        dusk['targets'].append('CC:DD')
+        dusk['color'][0] = 0
+        dusk['actions'].append({'device': 'EE:FF', 'command': 'TV power'})
+
+        dawn = self.app.scene_by_name('Dawn')
+        self.assertEqual(dawn['brightness'], 50)
+        self.assertEqual(dawn['targets'], ['AA:BB'])
+        self.assertEqual(dawn['color'], [255, 180, 90])
+        self.assertEqual(len(dawn['actions']), 1)
+
+    def test_the_copy_carries_unsaved_changes_from_the_screen(self):
+        """What is on screen is what "duplicate" means."""
+        self.app._scenes = [self._dawn()]
+        panel = self.panel()
+        rows = menu_row(lambda: panel.edit_scene(0), 'Duplicate')[1]
+
+        xbmcgui.INPUT_QUEUE.append('Dusk')
+        # Power -> "Turn off", then Duplicate, then leave.
+        xbmcgui.SELECT_QUEUE.extend([rows.index('Power: on'), 1,
+                                     rows.index('Duplicate...'), -1])
+        panel.edit_scene(0)
+
+        self.assertEqual(self.app.scene_by_name('Dusk')['power'], 'off')
+        # And Dawn keeps its own, because that edit was never saved.
+        self.assertEqual(self.app.scene_by_name('Dawn')['power'], 'on')
+
+    def test_the_suggested_name_is_the_next_free_number(self):
+        self.app._scenes = [self._dawn()]
+
+        self.assertEqual(self.panel()._copy_name('Dawn'), 'Dawn 2')
+
+        self.app._scenes.append(scene_lib.normalise(
+            scene_lib.make_scene('Dawn 2')))
+        self.assertEqual(self.panel()._copy_name('Dawn'), 'Dawn 3')
+
+    def test_a_name_already_in_use_is_refused(self):
+        self.app._scenes = [self._dawn(),
+                            scene_lib.normalise(scene_lib.make_scene('Dusk'))]
+
+        self._duplicate('dusk')
+
+        self.assertEqual(len(self.app.scenes), 2)
+        self.assertIn('already a scene', xbmcgui.OK_DIALOGS[-1][1])
+
+    def test_backing_out_of_the_name_copies_nothing(self):
+        self.app._scenes = [self._dawn()]
+        panel = self.panel()
+        rows = menu_row(lambda: panel.edit_scene(0), 'Duplicate')[1]
+
+        xbmcgui.INPUT_QUEUE.append('')
+        xbmcgui.SELECT_QUEUE.extend([rows.index('Duplicate...'), -1])
+        panel.edit_scene(0)
+
+        self.assertEqual(len(self.app.scenes), 1)
+
     def test_main_menu_shows_the_version(self):
         xbmcgui.SELECT_QUEUE.extend([-1])
         self.panel().run()

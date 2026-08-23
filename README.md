@@ -865,6 +865,53 @@ and says so rather than failing obscurely.
 
 ---
 
+## Moving to another box
+
+Everything the add-on knows lives in one folder as plain JSON, so moving to
+another Kodi machine is a copy. Device names, scenes, sequences, reracks, the
+colour palette, learned infrared codes and the Tuya keys all come across.
+
+```
+Windows     %APPDATA%\Kodi\userdata\addon_data\script.paragon.govee\
+Linux       ~/.kodi/userdata/addon_data/script.paragon.govee/
+LibreELEC   /storage/.kodi/userdata/addon_data/script.paragon.govee/
+```
+
+| File | Holds |
+|---|---|
+| `devices.json` | every device: name, address, driver, whether it is enabled |
+| `scenes.json` | scenes |
+| `sequences.json` | sequences and their schedules |
+| `rerack_presets.json` | the nine reracks and the weekly table |
+| `palette.json` | the speed-dial colours |
+| `broadlink_codes.json` | learned infrared codes |
+| `tuya_keys.json` | Tuya local keys |
+| `settings.xml` | the add-on's settings, including the Kasa account |
+| `cycle.json`, `*_state.json` | what is running and what has already run today |
+
+**Stop Kodi on both machines before copying.** Kodi writes `settings.xml` when
+it exits, so a running instance will overwrite what you just put there.
+
+1. Install the add-on on the new box — copy the whole repository folder to
+   `addons/script.paragon.govee`, or install the ZIP.
+2. Copy the `addon_data/script.paragon.govee` folder across.
+3. Start Kodi. Open the add-on and run **Refresh devices** once: addresses are
+   re-checked, and a device that has moved on DHCP is found again under the
+   name you gave it.
+
+### Two things to watch
+
+**Do not leave both machines running it.** The Govee status read needs UDP
+4002 and only one program on a network segment gets it cleanly — and a
+scheduled sequence would fire from both boxes at once. Disable the background
+service on the old machine, or stop using the add-on there.
+
+**Keys and passwords come across in the copy.** `tuya_keys.json` and the Kasa
+account in `settings.xml` are plain text; treat the folder as you would a
+password file.
+
+---
+
 ## Settings
 
 | Setting | Default | Notes |

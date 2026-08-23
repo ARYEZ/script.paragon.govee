@@ -199,6 +199,11 @@ def check_readme_actions():
     finally:
         handle.close()
     handled = set(re.findall(r"action == '(\w+)'", source))
+    # An action can also be one of several spellings, which is how a renamed
+    # verb keeps its old name working. Reading only the == form reported a
+    # documented action as unhandled when it was handled perfectly well.
+    for group in re.findall(r"action in \(([^)]*)\)", source):
+        handled.update(re.findall(r"'(\w+)'", group))
     handled.update(['panel'])
 
     for action in sorted(documented - handled):

@@ -827,12 +827,13 @@ class ControlPanel(object):
             scene['power'] = [scene_lib.POWER_ON, scene_lib.POWER_OFF,
                               scene_lib.POWER_KEEP][pick]
 
-    def _copy_name(self, name):
-        """"Dawn" -> "Dawn 2", or the next number that is free."""
-        base = (name or 'Scene').strip()
+    @staticmethod
+    def _copy_name(name, taken):
+        """"Dawn" -> "Dawn 2", or the next number `taken` says is free."""
+        base = (name or 'Copy').strip()
         for number in range(2, 100):
             candidate = '%s %d' % (base, number)
-            if scene_lib.find(self.app.scenes, candidate) is None:
+            if not taken(candidate):
                 return candidate
         return base
 
@@ -846,7 +847,9 @@ class ControlPanel(object):
         The copy is opened straight away because that is invariably the point:
         a duplicate exists to be changed, not to sit there identical.
         """
-        suggestion = self._copy_name(scene['name'])
+        suggestion = self._copy_name(
+            scene['name'],
+            lambda n: scene_lib.find(self.app.scenes, n) is not None)
         name = _dialog().input('Name for the copy', suggestion)
         if name is None or not name.strip():
             return
@@ -1584,6 +1587,8 @@ class ControlPanel(object):
                          lambda: self.schedule_sequence(sequence)))
             rows.append(('Run it now', lambda: self.run_sequence(sequence)))
             rows.append(('Rename', lambda: self._rename_sequence(sequence)))
+            rows.append(('Duplicate...',
+                         lambda: self._duplicate_sequence(sequence)))
             rows.append(('Delete this sequence',
                          lambda: self._delete_sequence(sequence)))
 
@@ -1599,6 +1604,49 @@ class ControlPanel(object):
         _dialog().ok(utils.ADDON_NAME,
                      '"%s" runs at:\n\n%s\n\nEditing it changes all of '
                      'them.' % (sequence['name'], '\n'.join(used)))
+
+    def _duplicate_sequence(self, sequence):
+        """Copy a sequence under a new name and open the copy.
+
+        The copy is deliberately not scheduled, however the original was. Two
+        sequences firing at the same minute on the same days is not what
+        anyone means by "make me a variant of this", and it is the sort of
+        thing that would only be noticed the following morning.
+        """
+        suggestion = self._copy_name(
+            sequence['name'],
+            lambda n: self.app.sequence_by_name(n) is not None)
+        name = _dialog().input('Name for the copy', suggestion)
+        if name is None or not name.strip():
+            return
+        name = name.strip()
+        if self.app.sequence_by_name(name) is not None:
+            _dialog().ok(utils.ADDON_NAME,
+                         'There is already a sequence called "%s".' % name)
+            return
+
+        # Deep, as for a scene: the steps are a list of dicts and a shallow
+        # copy would leave the two editing the same steps.
+        made = copy.deepcopy(sequence)
+        made['name'] = name
+        made['time'] = ''
+        made['days'] = []
+        made['phase'] = 0
+
+        copied = self.app.save_sequence(made)
+        if copied is None:
+            utils.force_notify('That sequence could not be copied')
+            return
+        if sequence_lib.scheduled(sequence):
+            _dialog().ok(utils.ADDON_NAME,
+                         '"%s" is a copy of "%s" with no schedule of its own.'
+                         '\n\nTwo of them running at the same moment is '
+                         'rarely what a copy is for, so set its own under '
+                         '"Runs:".' % (name, sequence['name']))
+        else:
+            utils.notify('Copied to "%s"' % name)
+        self.edit_sequence(copied)
+        return False
 
     def _rename_sequence(self, sequence):
         name = _dialog().input('Sequence name', sequence['name'])

@@ -1,3 +1,11 @@
+v2.18.1
+- Sequences can be duplicated too. "Duplicate..." copies all ten slots under a
+  new name and opens the copy.
+- The copy is deliberately not scheduled, however the original was. Two
+  sequences firing at the same minute on the same days is not what anyone
+  means by a variant, and it is the sort of thing that would only be noticed
+  the following morning -- so it says so, and points at where to set one.
+
 v2.18.0
 - Scenes can be duplicated. "Duplicate..." in the scene editor copies one
   under a new name and opens the copy, because a duplicate exists to be

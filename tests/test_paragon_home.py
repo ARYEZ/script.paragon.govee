@@ -986,6 +986,105 @@ class TestSequences(unittest.TestCase):
         self.assertEqual(saved['time'], '18:00')
         self.assertEqual(saved['days'], [5])
 
+    # -- duplicating -------------------------------------------------------
+
+    def _ignition(self, **extra):
+        import sequences
+
+        return sequences.make_sequence('Ignition', [
+            {'kind': 'scene', 'target': 'Warshade'},
+            {'kind': 'power', 'driver': 'tuya', 'target': 'WP9ABC#ALL',
+             'action': 'on', 'pause': 3},
+            {'kind': 'command', 'driver': 'broadlink', 'target': 'EE:FF',
+             'action': 'TV power'},
+        ], **extra)
+
+    def _duplicate(self, panel, original, name):
+        rows = menu_row(lambda: panel.edit_sequence(original), 'Duplicate')[1]
+        xbmcgui.INPUT_QUEUE.append(name)
+        xbmcgui.SELECT_QUEUE.extend([rows.index('Duplicate...'), -1])
+        panel.edit_sequence(original)
+
+    def panel_for(self, app):
+        import gui
+
+        return gui.ControlPanel(app)
+
+    def test_all_ten_slots_come_across(self):
+        """Ten steps is what makes retyping a variant worth avoiding."""
+        app = self.app()
+        app._sequences = [self._ignition()]
+        panel = self.panel_for(app)
+
+        self._duplicate(panel, app.sequences[0], 'Ignition Late')
+
+        copied = app.sequence_by_name('Ignition Late')
+        self.assertIsNotNone(copied)
+        self.assertEqual(len(copied['steps']), 10)
+        self.assertEqual(
+            [self.sequences.describe_step(s) for s in copied['steps'][:3]],
+            [self.sequences.describe_step(s)
+             for s in app.sequence_by_name('Ignition')['steps'][:3]])
+
+    def test_the_copy_does_not_inherit_the_schedule(self):
+        """Two of them at the same minute is not what a variant means."""
+        app = self.app()
+        app._sequences = [self._ignition(time='6pm', days=[5])]
+        panel = self.panel_for(app)
+
+        self._duplicate(panel, app.sequences[0], 'Ignition Late')
+
+        copied = app.sequence_by_name('Ignition Late')
+        self.assertEqual(copied['time'], '')
+        self.assertEqual(copied['days'], [])
+        self.assertEqual(copied['phase'], 0)
+        # And the original keeps its own.
+        self.assertEqual(app.sequence_by_name('Ignition')['time'], '18:00')
+
+    def test_the_copy_does_not_inherit_a_paragon_tv_phase_either(self):
+        app = self.app()
+        app._sequences = [self._ignition(phase=2)]
+        panel = self.panel_for(app)
+
+        self._duplicate(panel, app.sequences[0], 'Ignition Late')
+
+        self.assertEqual(app.sequence_by_name('Ignition Late')['phase'], 0)
+
+    def test_editing_the_copys_steps_does_not_touch_the_original(self):
+        """The shallow-copy trap again: steps are a list of dicts."""
+        app = self.app()
+        app._sequences = [self._ignition()]
+        panel = self.panel_for(app)
+
+        self._duplicate(panel, app.sequences[0], 'Ignition Late')
+        copied = app.sequence_by_name('Ignition Late')
+        copied['steps'][1]['action'] = 'off'
+        copied['steps'][1]['pause'] = 99
+
+        original = app.sequence_by_name('Ignition')
+        self.assertEqual(original['steps'][1]['action'], 'on')
+        self.assertEqual(original['steps'][1]['pause'], 3)
+
+    def test_a_name_already_in_use_is_refused(self):
+        app = self.app()
+        app._sequences = [self._ignition(),
+                          self.sequences.make_sequence('Ignition Late')]
+        panel = self.panel_for(app)
+
+        self._duplicate(panel, app.sequences[0], 'ignition late')
+
+        self.assertEqual(len(app.sequences), 2)
+        self.assertIn('already a sequence', xbmcgui.OK_DIALOGS[-1][1])
+
+    def test_backing_out_of_the_name_copies_nothing(self):
+        app = self.app()
+        app._sequences = [self._ignition()]
+        panel = self.panel_for(app)
+
+        self._duplicate(panel, app.sequences[0], '')
+
+        self.assertEqual(len(app.sequences), 1)
+
     # -- persistence -------------------------------------------------------
 
     def test_sequences_saved_as_reracks_are_carried_over(self):
@@ -7501,12 +7600,13 @@ class TestControlPanel(unittest.TestCase):
 
     def test_the_suggested_name_is_the_next_free_number(self):
         self.app._scenes = [self._dawn()]
+        taken = lambda n: scene_lib.find(self.app.scenes, n) is not None
 
-        self.assertEqual(self.panel()._copy_name('Dawn'), 'Dawn 2')
+        self.assertEqual(self.panel()._copy_name('Dawn', taken), 'Dawn 2')
 
         self.app._scenes.append(scene_lib.normalise(
             scene_lib.make_scene('Dawn 2')))
-        self.assertEqual(self.panel()._copy_name('Dawn'), 'Dawn 3')
+        self.assertEqual(self.panel()._copy_name('Dawn', taken), 'Dawn 3')
 
     def test_a_name_already_in_use_is_refused(self):
         self.app._scenes = [self._dawn(),

@@ -470,6 +470,17 @@ appeared to be switching far more than it had been asked to.
 To put a plug in a colour scene deliberately, name it in the scene's target
 list. Named targets are honoured exactly.
 
+### Copying a sequence
+
+**Duplicate...** in the sequence editor copies all ten slots under a new name
+and opens the copy, which is the point — ten steps is a lot to retype for a
+variant.
+
+**The copy is not scheduled**, however the original was. Two sequences firing
+at the same minute on the same days is not what anyone means by "make me a
+variant of this", and it is the sort of thing that would only be noticed the
+following morning. Give the copy its own under **Runs:**.
+
 ### Running one on a schedule
 
 **Runs:** in the sequence editor gives it a time and the days it applies to:

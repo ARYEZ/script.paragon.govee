@@ -1,3 +1,23 @@
+v2.15.0
+- Reracks are back, as the layer above sequences: a day laid out in nine
+  phases, each holding a sequence or left empty. Shaped after the Paragon TV
+  Rerack down to the preset names, so the two line up.
+- The nine presets -- Alpha, Omega, Delta, Epsilon, Gamma, Sigma, Omicron,
+  Theta, Lambda -- always exist. An empty one costs nothing and is simply
+  never given a day. A weekly table says which rerack a day gets.
+- The point of the layer is reuse: one sequence can sit in several phases of
+  the same day, written once. Its own editor shows where it is used, so
+  changing it is never a surprise somewhere else.
+- Where a phase's times come from is a switch per rerack. Its own, set on each
+  phase and needing no Paragon TV at all; or Paragon TV's, taken from the
+  preset of the same name -- which is why the names match.
+- Switching to Paragon TV keeps the local times rather than clearing them, so
+  switching back brings them with it. A phase Paragon TV has no time for does
+  not run at all, because falling back to a local time would fire it at an
+  hour nobody set.
+- A phase runs once a day, recorded on disk, and is marked as run before it
+  runs -- the same rules a scheduled sequence follows, for the same reasons.
+
 v2.14.0
 - Reracks are now called sequences. The name is wanted for the layer above:
   a rerack becomes a named preset holding nine phases, each of which can point

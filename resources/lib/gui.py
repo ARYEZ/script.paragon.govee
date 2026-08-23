@@ -18,6 +18,7 @@ import xbmcgui
 
 import addon_utils as utils
 import palette as palette_lib
+import reracks as rerack_lib
 import sequences as sequence_lib
 import scenes as scene_lib
 from devices import (CAP_BRIGHTNESS, CAP_COLOR, CAP_COLOR_TEMP,
@@ -172,6 +173,7 @@ class ControlPanel(object):
         rows.extend([
             ('Scenes...', self.scene_menu),
             ('Sequences...', self.sequence_menu),
+            ('Reracks...', self.rerack_menu),
             ('Refresh devices', self.refresh_devices),
             # Stays at the top level rather than inside a driver: the time you
             # need it is when a driver found nothing and so has no menu.
@@ -1526,6 +1528,10 @@ class ControlPanel(object):
                                 sequence_lib.describe_step(
                                     step, self._target_name(step))),
                              lambda i=index: self.edit_step(sequence, i)))
+            used = self.app.sequence_used_by(sequence['name'])
+            if used:
+                rows.append(('Used by: %s' % ', '.join(used),
+                             lambda: self._show_used_by(sequence)))
             rows.append(('Runs: %s' % sequence_lib.describe_schedule(sequence),
                          lambda: self.schedule_sequence(sequence)))
             rows.append(('Run it now', lambda: self.run_sequence(sequence)))
@@ -1538,6 +1544,13 @@ class ControlPanel(object):
                 return
             if rows[choice][1]() is False:
                 return
+
+    def _show_used_by(self, sequence):
+        """Where a sequence is used, so a change is not a surprise elsewhere."""
+        used = self.app.sequence_used_by(sequence['name'])
+        _dialog().ok(utils.ADDON_NAME,
+                     '"%s" runs at:\n\n%s\n\nEditing it changes all of '
+                     'them.' % (sequence['name'], '\n'.join(used)))
 
     def _rename_sequence(self, sequence):
         name = _dialog().input('Sequence name', sequence['name'])
@@ -1559,6 +1572,160 @@ class ControlPanel(object):
         self.app.delete_sequence(sequence)
         utils.notify('Deleted %s' % sequence['name'])
         return False
+
+    # -- reracks: a day in nine phases -------------------------------------
+
+    def rerack_menu(self):
+        """The nine presets, and the week that says which day gets which."""
+        while True:
+            rows = [('Which rerack runs on which day...', self.week_menu)]
+            for rerack in self.app.reracks:
+                days = self._days_using(rerack['name'])
+                label = '%s  -  %s' % (rerack['name'],
+                                       rerack_lib.describe(rerack))
+                if days:
+                    label += '  [%s]' % days
+                rows.append((label,
+                             lambda r=rerack: self.edit_rerack(r)))
+
+            choice = _select('Reracks', [label for label, _h in rows])
+            if choice == BACK:
+                return
+            rows[choice][1]()
+
+    def _days_using(self, name):
+        return ', '.join(rerack_lib.DAYS[day][:3]
+                         for day, assigned in enumerate(self.app.week)
+                         if assigned == name)
+
+    def week_menu(self):
+        """Which rerack each day gets, laid out as a week."""
+        while True:
+            rows = []
+            for day, name in enumerate(self.app.week):
+                rows.append(('%-10s %s' % (rerack_lib.DAYS[day],
+                                           name or 'nothing'),
+                             lambda d=day: self._pick_day_rerack(d)))
+
+            choice = _select('Which rerack runs on which day',
+                             [label for label, _h in rows])
+            if choice == BACK:
+                return
+            rows[choice][1]()
+
+    def _pick_day_rerack(self, weekday):
+        options = ['Nothing'] + [r['name'] for r in self.app.reracks]
+        choice = _select(rerack_lib.DAYS[weekday], options)
+        if choice == BACK:
+            return
+        self.app.set_day(weekday, '' if choice == 0 else options[choice])
+
+    def edit_rerack(self, rerack):
+        """The nine phases, always all nine, and where their times come from."""
+        while True:
+            tv_times = self.app.tv_phase_times(rerack, sequence_lib.now())
+            rows = []
+            for number in range(1, rerack_lib.PHASE_COUNT + 1):
+                phase = rerack['phases'][number - 1]
+                rows.append((rerack_lib.describe_phase_row(
+                    rerack, number, phase, tv_times.get(number)),
+                    lambda n=number: self.edit_phase(rerack, n)))
+
+            rows.append(('Times: %s' % ('from Paragon TV'
+                                        if rerack['follow_tv']
+                                        else 'its own'),
+                         lambda: self._toggle_follow_tv(rerack)))
+            rows.append(('Run this rerack now',
+                         lambda: self._run_rerack_now(rerack)))
+
+            choice = _select('%s  -  %s' % (rerack['name'],
+                                            self._days_using(rerack['name'])
+                                            or 'no day yet'),
+                             [label for label, _h in rows])
+            if choice == BACK:
+                return
+            rows[choice][1]()
+
+    def _toggle_follow_tv(self, rerack):
+        """Its own times, or Paragon TV's for the preset of the same name."""
+        import paragon_tv
+
+        if not rerack['follow_tv'] and not paragon_tv.installed():
+            _dialog().ok(utils.ADDON_NAME,
+                         'Paragon TV is not installed, so there are no times '
+                         'to take from it.')
+            return
+        rerack['follow_tv'] = not rerack['follow_tv']
+        self.app.save_reracks()
+        if rerack['follow_tv']:
+            _dialog().ok(
+                utils.ADDON_NAME,
+                '%s now runs at Paragon TV\'s times for its own %s preset.'
+                '\n\nThe times set here are kept, and come back if you '
+                'switch this off.' % (rerack['name'], rerack['name']))
+
+    def edit_phase(self, rerack, number):
+        """What a phase does, and when -- unless Paragon TV says when."""
+        phase = rerack['phases'][number - 1]
+        rows = [('Sequence: %s' % (phase['sequence'] or 'none'),
+                 lambda: self._pick_phase_sequence(rerack, number))]
+        if not rerack['follow_tv']:
+            rows.append(('Time: %s' % (phase['time'] or 'not set'),
+                         lambda: self._pick_phase_time(rerack, number)))
+        if phase['sequence']:
+            rows.append(('Clear this phase',
+                         lambda: self._clear_phase(rerack, number)))
+
+        choice = _select('%s - %s' % (rerack['name'],
+                                      sequence_lib.describe_phase(number)),
+                         [label for label, _h in rows])
+        if choice == BACK:
+            return
+        rows[choice][1]()
+
+    def _pick_phase_sequence(self, rerack, number):
+        names = [s['name'] for s in self.app.sequences]
+        if not names:
+            utils.force_notify('No sequences to choose from yet')
+            return
+        choice = _select('Which sequence', names)
+        if choice == BACK:
+            return
+        rerack['phases'][number - 1]['sequence'] = names[choice]
+        self.app.save_reracks()
+
+    def _pick_phase_time(self, rerack, number):
+        phase = rerack['phases'][number - 1]
+        value = _dialog().input('Time of day (18:00, or 6pm)',
+                                phase['time'] or '')
+        if value is None:
+            return
+        parsed = sequence_lib.parse_time(value)
+        if value.strip() and not parsed:
+            _dialog().ok(utils.ADDON_NAME,
+                         'Could not read "%s" as a time.\n\n'
+                         'Try 18:00, 6pm or 1800.' % value.strip())
+            return
+        phase['time'] = parsed
+        self.app.save_reracks()
+
+    def _clear_phase(self, rerack, number):
+        rerack['phases'][number - 1] = rerack_lib.empty_phase()
+        self.app.save_reracks()
+
+    def _run_rerack_now(self, rerack):
+        """Run every filled phase in order, ignoring the clock."""
+        filled = rerack_lib.filled_phases(rerack)
+        if not filled:
+            utils.force_notify('%s has no phases yet' % rerack['name'])
+            return
+        for number, phase in filled:
+            sequence = self.app.sequence_by_name(phase['sequence'])
+            if sequence is None:
+                utils.force_notify('No sequence called "%s"'
+                                   % phase['sequence'])
+                continue
+            self.run_sequence(sequence)
 
     # -- when it runs ------------------------------------------------------
 

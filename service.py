@@ -237,9 +237,13 @@ class GoveeService(xbmc.Monitor):
             return []
         self._last_sequence_check = moment
 
-        return self.app.run_due_sequences(
-            sleep_func=self.waitForAbort,
-            on_step=lambda index, step: not self.abortRequested())
+        alive = lambda index, step: not self.abortRequested()
+        ran = self.app.run_due_sequences(sleep_func=self.waitForAbort,
+                                         on_step=alive)
+        # Today's rerack is checked in the same pass and for the same reason.
+        ran.extend(self.app.run_due_phases(sleep_func=self.waitForAbort,
+                                           on_step=alive))
+        return ran
 
     def run(self):
         utils.log('Service started')

@@ -536,6 +536,59 @@ invented one would be ten slots pointing at nothing.
 
 ---
 
+## Reracks
+
+A **rerack** is a day laid out in nine phases, each holding a sequence. Shaped
+after the Paragon TV Rerack down to the preset names, so the two line up.
+
+```
+Alpha  -  Mon, Tue, Wed, Sat
+   Phase 1 (maintenance)        -  empty
+   Phase 2 (wake and tune)      -  Curtain Up  (07:00)
+   Phase 3 (shut down)          -  Wind Down   (23:30)
+   Phase 5 (wake and tune)      -  Curtain Up  (17:00)
+   ...
+   Times: its own
+   Run this rerack now
+```
+
+The nine presets — Alpha, Omega, Delta, Epsilon, Gamma, Sigma, Omicron, Theta,
+Lambda — always exist. An empty one costs nothing and is simply never given a
+day.
+
+**The point of the layer is reuse.** `Curtain Up` above is written once and
+used at two points in the day. Its own editor says so, under **Used by**, so
+changing it is never a surprise somewhere else.
+
+A **weekly table** says which rerack a day gets, exactly as Paragon TV's does.
+
+### Where the phase times come from
+
+Per rerack, one switch:
+
+* **Its own** — a time you set on each phase. Works with no Paragon TV at all.
+* **From Paragon TV** — the times of the television's preset *of the same
+  name*. Alpha here runs at Alpha's times there, which is why the names match
+  and why nothing has to be said twice.
+
+Switching to Paragon TV keeps the local times rather than clearing them, so
+switching back brings them with it.
+
+A phase Paragon TV has no time for does not run. Falling back to a local time
+would fire it at an hour nobody set.
+
+### Rerack, sequence, scene
+
+Three layers, each answering one question:
+
+| | Answers |
+|---|---|
+| **Scene** | how the lights should *look* |
+| **Sequence** | what to *do*, in order — ten steps |
+| **Rerack** | when a *day* does it — nine phases |
+
+---
+
 ## Smart plugs (TP-Link Kasa)
 
 **Older hardware needs nothing at all.** Run **Refresh devices** and it

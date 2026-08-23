@@ -1103,6 +1103,245 @@ class TestSequences(unittest.TestCase):
                          'all tuya devices: Off')
 
 
+class TestReracks(unittest.TestCase):
+    """A day laid out in nine phases, each holding a sequence."""
+
+    SATURDAY = datetime.datetime(2026, 8, 22, 7, 0)     # a Saturday
+    THURSDAY = datetime.datetime(2026, 8, 20, 7, 0)
+
+    def setUp(self):
+        clean_profile()
+        xbmcaddon.reset()
+        xbmcgui.reset()
+        for name in ('addon_utils', 'paragon_home', 'paragon_tv', 'reracks',
+                     'sequences', 'gui'):
+            if name in sys.modules:
+                del sys.modules[name]
+        import reracks
+
+        self.reracks = reracks
+
+    def tearDown(self):
+        clean_profile()
+
+    def app(self):
+        from paragon_home import ParagonHome
+        import sequences
+
+        app = ParagonHome()
+        self.recorder = RecordingController()
+        self.recorder.capabilities = lambda d: set(['power', 'state'])
+        app.controller = self.recorder
+        app._devices = [Device('AA:BB', name='Lamp', driver='govee',
+                               lan=True)]
+        app._scenes = [scene_lib.make_scene('Warshade', targets=['AA:BB'])]
+        app._sequences = [
+            sequences.make_sequence('Curtain Up',
+                                    [{'kind': 'scene', 'target': 'Warshade'}]),
+            sequences.make_sequence('Wind Down',
+                                    [{'kind': 'power', 'target': 'AA:BB',
+                                      'action': 'off'}]),
+        ]
+        return app
+
+    def alpha(self, follow_tv=False):
+        return self.reracks.make_rerack('Alpha', [
+            {},
+            {'sequence': 'Curtain Up', 'time': '07:00'},
+            {'sequence': 'Wind Down', 'time': '23:30'},
+            {},
+            {'sequence': 'Curtain Up', 'time': '17:00'},
+        ], follow_tv=follow_tv)
+
+    def with_alpha(self, follow_tv=False, days=('Alpha',) * 7):
+        app = self.app()
+        app._reracks = self.reracks.normalise_all([self.alpha(follow_tv)])
+        app._week = list(days)
+        app._phase_state = set()
+        return app
+
+    # -- shape -------------------------------------------------------------
+
+    def test_the_nine_presets_always_exist(self):
+        """As Paragon TV's do. An empty one costs nothing."""
+        presets = self.reracks.default_reracks()
+
+        self.assertEqual([p['name'] for p in presets],
+                         list(self.reracks.PRESET_NAMES))
+        self.assertEqual(len(self.reracks.PRESET_NAMES), 9)
+
+    def test_a_rerack_always_has_nine_phases(self):
+        rerack = self.reracks.make_rerack('Alpha')
+
+        self.assertEqual(len(rerack['phases']), 9)
+        self.assertTrue(all(not p['sequence'] for p in rerack['phases']))
+
+    def test_a_file_missing_presets_still_opens_on_all_nine(self):
+        """A hand-edited or older file should not lose the familiar order."""
+        presets = self.reracks.normalise_all([self.alpha()])
+
+        self.assertEqual([p['name'] for p in presets],
+                         list(self.reracks.PRESET_NAMES))
+        self.assertEqual(len(self.reracks.filled_phases(presets[0])), 3)
+
+    def test_an_unrecognised_preset_name_is_dropped(self):
+        presets = self.reracks.normalise_all(
+            [self.reracks.make_rerack('Rogue')])
+
+        self.assertNotIn('Rogue', [p['name'] for p in presets])
+
+    def test_a_phase_with_no_sequence_does_nothing_whatever_else_it_holds(self):
+        phase = self.reracks.normalise_phase({'time': '07:00',
+                                              'sequence': '  '})
+
+        self.assertEqual(phase, {'time': '', 'sequence': ''})
+
+    # -- the reuse this exists for -----------------------------------------
+
+    def test_one_sequence_can_sit_in_several_phases_of_a_day(self):
+        """The whole point: written once, used at several points in a day."""
+        rerack = self.alpha()
+
+        self.assertEqual(self.reracks.used_by([rerack], 'Curtain Up'),
+                         ['Alpha phase 2', 'Alpha phase 5'])
+
+    def test_each_of_those_phases_runs_at_its_own_time(self):
+        app = self.with_alpha()
+
+        morning = app.run_due_phases(now=self.SATURDAY)
+        evening = app.run_due_phases(now=self.SATURDAY.replace(hour=17))
+
+        self.assertEqual(morning, ['Alpha phase 2'])
+        self.assertEqual(evening, ['Alpha phase 5'])
+
+    # -- the week ----------------------------------------------------------
+
+    def test_a_day_with_no_rerack_runs_nothing(self):
+        app = self.with_alpha(days=('', '', '', '', '', '', ''))
+
+        self.assertEqual(app.run_due_phases(now=self.SATURDAY), [])
+
+    def test_only_the_day_that_has_it_runs_it(self):
+        app = self.with_alpha(days=('Alpha', '', '', '', '', '', ''))
+
+        self.assertEqual(app.run_due_phases(now=self.SATURDAY), [])
+        # Monday
+        self.assertEqual(
+            app.run_due_phases(now=self.SATURDAY + datetime.timedelta(days=2)),
+            ['Alpha phase 2'])
+
+    def test_the_week_survives_a_restart(self):
+        app = self.with_alpha(days=('', '', '', '', '', 'Alpha', ''))
+        app.save_reracks()
+
+        from paragon_home import ParagonHome
+        again = ParagonHome()
+
+        self.assertEqual(again.week[5], 'Alpha')
+        self.assertEqual(len(again.reracks), 9)
+        self.assertEqual(len(self.reracks.filled_phases(again.reracks[0])), 3)
+
+    # -- firing ------------------------------------------------------------
+
+    def test_a_phase_runs_once_a_day(self):
+        app = self.with_alpha()
+
+        app.run_due_phases(now=self.SATURDAY)
+
+        self.assertEqual(
+            app.run_due_phases(now=self.SATURDAY
+                               + datetime.timedelta(minutes=2)), [])
+
+    def test_a_restart_does_not_repeat_a_phase(self):
+        app = self.with_alpha()
+        app.save_reracks()
+        app.run_due_phases(now=self.SATURDAY)
+
+        from paragon_home import ParagonHome
+        again = ParagonHome()
+        again.controller = self.recorder
+        again._sequences = app._sequences
+
+        self.assertEqual(again.run_due_phases(now=self.SATURDAY), [])
+
+    def test_a_phase_naming_a_missing_sequence_says_so_and_carries_on(self):
+        app = self.with_alpha()
+        app._sequences = [s for s in app._sequences
+                          if s['name'] != 'Curtain Up']
+
+        self.assertEqual(app.run_due_phases(now=self.SATURDAY), [])
+        # And it does not keep retrying it every tick.
+        self.assertEqual(app.run_due_phases(now=self.SATURDAY), [])
+
+    def test_the_sequence_actually_runs(self):
+        app = self.with_alpha()
+
+        app.run_due_phases(now=self.SATURDAY)
+
+        self.assertEqual([call[:2] for call in self.recorder.calls],
+                         [('turn', 'AA:BB')])
+
+    # -- where the times come from -----------------------------------------
+
+    def install_tv(self, **settings):
+        base = {'EnablePresetSystem': 'true',
+                'SaturdayPreset': '1',
+                'AlphaPhase2Time': '09:00',
+                'AlphaPhase5Time': '19:00'}
+        base.update(settings)
+        xbmcaddon.install('script.paragontv', base)
+
+    def test_its_own_times_need_no_paragon_tv_at_all(self):
+        app = self.with_alpha(follow_tv=False)
+
+        self.assertEqual(app.run_due_phases(now=self.SATURDAY),
+                         ['Alpha phase 2'])
+
+    def test_following_paragon_tv_takes_the_matching_presets_times(self):
+        """Alpha here lines up with Alpha there, which is why the names match."""
+        self.install_tv()
+        app = self.with_alpha(follow_tv=True)
+
+        self.assertEqual(app.run_due_phases(now=self.SATURDAY), [])
+        self.assertEqual(
+            app.run_due_phases(now=self.SATURDAY.replace(hour=9)),
+            ['Alpha phase 2'])
+
+    def test_a_phase_paragon_tv_has_no_time_for_does_not_run(self):
+        """Falling back to a stale local time would fire it at an hour
+        nobody set."""
+        self.install_tv()
+        app = self.with_alpha(follow_tv=True)
+
+        # Phase 3 has a local time of 23:30 and no Paragon TV time.
+        self.assertEqual(
+            app.run_due_phases(now=self.SATURDAY.replace(hour=23, minute=30)),
+            [])
+
+    def test_switching_back_brings_the_local_times_with_it(self):
+        """They are kept rather than cleared, so the switch is reversible."""
+        self.install_tv()
+        app = self.with_alpha(follow_tv=True)
+        app.reracks[0]['follow_tv'] = False
+
+        self.assertEqual(app.run_due_phases(now=self.SATURDAY),
+                         ['Alpha phase 2'])
+
+    def test_following_paragon_tv_with_it_switched_off_runs_nothing(self):
+        self.install_tv(EnablePresetSystem='false')
+        app = self.with_alpha(follow_tv=True)
+
+        self.assertEqual(
+            app.run_due_phases(now=self.SATURDAY.replace(hour=9)), [])
+
+    def test_following_paragon_tv_without_it_installed_runs_nothing(self):
+        app = self.with_alpha(follow_tv=True)
+
+        for hour in (7, 9, 17, 19):
+            self.assertEqual(
+                app.run_due_phases(now=self.SATURDAY.replace(hour=hour)), [])
+
+
 class TestParagonTV(unittest.TestCase):
     """Reading Paragon TV's own Sequence schedule, exactly as it reads it."""
 

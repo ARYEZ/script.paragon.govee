@@ -17,6 +17,7 @@ import time
 
 import addon_utils as utils
 import palette as palette_lib
+import reracks as rerack_lib
 import sequences as sequence_lib
 import scenes as scene_lib
 from devices import (DEVICE_CACHE, Device, TRANSPORT_AUTO, TRANSPORT_CLOUD,
@@ -51,6 +52,9 @@ class ParagonHome(object):
         self._scenes = None
         self._sequences = None
         self._sequence_state = None
+        self._reracks = None
+        self._week = None
+        self._phase_state = None
         self._palette = None
         # How many known lights failed to answer the last refresh, so the
         # control panel can say so rather than silently showing a short list.
@@ -706,6 +710,107 @@ class ParagonHome(object):
             self.run_sequence(sequence, announce=True, sleep_func=sleep_func,
                             on_step=on_step)
             ran.append(sequence['name'])
+        return ran
+
+    # -- reracks: a day in nine phases --------------------------------------
+
+    def _load_reracks(self):
+        raw = utils.read_json(rerack_lib.RERACK_FILE, default={}) or {}
+        if not isinstance(raw, dict):
+            raw = {}
+        self._reracks = rerack_lib.normalise_all(raw.get('presets'))
+        self._week = rerack_lib.clean_week(raw.get('week'))
+
+    @property
+    def reracks(self):
+        """The nine presets. They always exist; an empty one costs nothing."""
+        if self._reracks is None:
+            self._load_reracks()
+        return self._reracks
+
+    @property
+    def week(self):
+        """Which rerack each day gets, as seven names or blanks."""
+        if self._week is None:
+            self._load_reracks()
+        return self._week
+
+    def save_reracks(self):
+        utils.write_json(rerack_lib.RERACK_FILE,
+                         {'presets': self.reracks, 'week': self.week})
+
+    def set_day(self, weekday, name):
+        if 0 <= weekday <= 6:
+            self.week[weekday] = name or ''
+            self.save_reracks()
+
+    def rerack_by_name(self, name):
+        return rerack_lib.find(self.reracks, name)
+
+    def todays_rerack(self, now=None):
+        return rerack_lib.todays_rerack(self.week, self.reracks,
+                                        now or sequence_lib.now())
+
+    def sequence_used_by(self, name):
+        return rerack_lib.used_by(self.reracks, name)
+
+    @property
+    def phase_state(self):
+        """Which phases have already run, so a restart does not repeat one."""
+        if self._phase_state is None:
+            raw = utils.read_json(rerack_lib.RERACK_STATE_FILE, default=[])
+            self._phase_state = set(raw if isinstance(raw, list) else [])
+        return self._phase_state
+
+    def save_phase_state(self):
+        # Kept to a few days' worth: a phase key names its own date, so an old
+        # one can never match again and would only grow the file forever.
+        keys = sorted(self.phase_state)[-200:]
+        self._phase_state = set(keys)
+        utils.write_json(rerack_lib.RERACK_STATE_FILE, keys)
+
+    def tv_phase_times(self, rerack, now):
+        """Paragon TV's times for the preset of the same name, if wanted."""
+        if not rerack.get('follow_tv'):
+            return {}
+
+        import paragon_tv
+
+        if not paragon_tv.enabled():
+            return {}
+        times = {}
+        for number in range(1, rerack_lib.PHASE_COUNT + 1):
+            at_time = paragon_tv.phase_time(rerack['name'], number)
+            if at_time:
+                times[number] = at_time
+        return times
+
+    def run_due_phases(self, now=None, sleep_func=None, on_step=None):
+        """Run whatever today's rerack says is due. Returns what ran."""
+        moment = now or sequence_lib.now()
+        rerack = self.todays_rerack(moment)
+        if rerack is None:
+            return []
+
+        due = rerack_lib.due_phases(rerack, moment, self.phase_state,
+                                    self.tv_phase_times(rerack, moment))
+        ran = []
+        for number, name, at_time, key in due:
+            # Marked before running, for the same reason a sequence is: a
+            # phase that fails half way must not be due again on every tick.
+            self.phase_state.add(key)
+            self.save_phase_state()
+
+            sequence = self.sequence_by_name(name)
+            if sequence is None:
+                utils.log('%s phase %d wanted the sequence "%s", which is '
+                          'not there' % (rerack['name'], number, name))
+                continue
+            utils.log('%s phase %d (%s) is due: %s'
+                      % (rerack['name'], number, at_time, name))
+            self.run_sequence(sequence, announce=True, sleep_func=sleep_func,
+                              on_step=on_step)
+            ran.append('%s phase %d' % (rerack['name'], number))
         return ran
 
     def run_sequence_by_name(self, name, announce=True):

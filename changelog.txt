@@ -1,3 +1,14 @@
+v2.19.2
+- The Paragon TV report now names the settings the installed Paragon TV
+  actually declares, when it declares none of the ones Paragon Home looks for.
+  Paragon TV has been ahead of its published source more than once, and a
+  scheme that was renamed or replaced there is invisible from here -- Kodi
+  will hand one add-on another's setting by name but will not say what names
+  exist, so this reads the settings page itself.
+- Fixed that reading it with an empty add-on path fell through to a relative
+  path, which quietly read Paragon Home's own settings page instead and
+  reported names that had nothing to do with Paragon TV.
+
 v2.19.1
 - New "What Paragon TV says about <rerack>" in the rerack editor. A phase
   reading "with Paragon TV, which has no time for it" is true and says nothing

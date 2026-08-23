@@ -13,6 +13,7 @@ OPENED_SETTINGS = []
 # "Paragon TV has nothing set".
 FOREIGN = {}
 PROFILES = {}
+PATHS = {}
 
 _PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _PROFILE = os.path.join(tempfile.gettempdir(), 'paragon-home-test-profile')
@@ -33,10 +34,11 @@ def reset(defaults=None):
         SETTINGS.update(defaults)
     FOREIGN.clear()
     PROFILES.clear()
+    PATHS.clear()
     del OPENED_SETTINGS[:]
 
 
-def install(addon_id, settings=None, profile=None):
+def install(addon_id, settings=None, profile=None, path=None):
     """Pretend another add-on is installed, with the settings given.
 
     `profile` is its saved-data folder, which Kodi gives every add-on and
@@ -45,6 +47,8 @@ def install(addon_id, settings=None, profile=None):
     FOREIGN[addon_id] = dict(settings or {})
     if profile is not None:
         PROFILES[addon_id] = profile
+    if path is not None:
+        PATHS[addon_id] = path
     return FOREIGN[addon_id]
 
 
@@ -67,6 +71,8 @@ class Addon(object):
                 return self._id
             if key == 'profile':
                 return PROFILES.get(self._id, '')
+            if key == 'path':
+                return PATHS.get(self._id, '')
             return ''
         return _INFO.get(key, '')
 

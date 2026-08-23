@@ -22,7 +22,12 @@ The one detail that matters: the day settings hold an *index*, not a name.
 as a name would silently find nothing.
 """
 
+import os
+import re
+
 import xbmcaddon
+
+from addon_utils import _translate
 
 ADDON_ID = 'script.paragontv'
 
@@ -133,6 +138,45 @@ def describe_phase(phase):
     return 'phase %d (%s)' % (phase, PHASE_LABELS[phase - 1])
 
 
+def setting_ids(match=''):
+    """Every setting id Paragon TV's own settings page declares.
+
+    Read from its settings.xml on disk, because Kodi offers no way to ask an
+    add-on what settings it has -- only to ask for one by name, which is no
+    help when the name is the thing in doubt. Paragon TV has been ahead of
+    its published source more than once, and a scheme that was renamed there
+    is invisible from here until something looks.
+    """
+    addon = _addon()
+    if addon is None:
+        return []
+    root = _translate(addon.getAddonInfo('path'))
+    if not root:
+        # Without this an empty path joins to a relative one, which reads
+        # whichever settings.xml happens to be under the working directory --
+        # ours, as it turned out.
+        return []
+    try:
+        path = os.path.join(root, 'resources', 'settings.xml')
+        handle = open(path, 'r')
+        try:
+            text = handle.read()
+        finally:
+            handle.close()
+    except Exception:
+        return []
+
+    found = re.findall(r'id="([^"]+)"', text)
+    if match:
+        needle = match.lower()
+        found = [name for name in found if needle in name.lower()]
+    seen = []
+    for name in found:
+        if name not in seen:
+            seen.append(name)
+    return seen
+
+
 def report(preset, now):
     """Everything Paragon Home can see about one preset, and why not.
 
@@ -166,10 +210,27 @@ def report(preset, now):
 
     if not found:
         lines.append('')
-        lines.append('None at all. If Paragon TV shows times on its own '
-                     'settings page, open that page and press OK once: Kodi '
-                     'only lets one add-on read another\'s settings after '
-                     'they have been saved at least once.')
+        lines.append('None at all. Paragon Home looks for settings named '
+                     '%sPhase1Time and so on.' % preset)
+
+        declared = setting_ids(preset)
+        if declared:
+            lines.append('')
+            lines.append('What this Paragon TV actually declares for %s:'
+                         % preset)
+            for name in declared[:14]:
+                lines.append('  %s' % name)
+            if len(declared) > 14:
+                lines.append('  ... and %d more' % (len(declared) - 14))
+        elif setting_ids():
+            lines.append('')
+            lines.append('This Paragon TV declares no setting mentioning '
+                         '%s at all, so its phase times are not stored the '
+                         'way Paragon Home expects.' % preset)
+        else:
+            lines.append('')
+            lines.append('Its settings page could not be read, so this '
+                         'cannot say which names it uses.')
     return '\n'.join(lines)
 
 

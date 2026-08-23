@@ -1796,13 +1796,72 @@ class TestParagonTV(unittest.TestCase):
                              AlphaPhase3Time='')
         text = tv.report('Alpha', self.SATURDAY)
         self.assertIn('None at all', text)
-        self.assertIn('press OK once', text)
+        self.assertIn('AlphaPhase1Time', text)
 
         # 4. On, with times.
         tv = self.install_tv()
         text = tv.report('Alpha', self.SATURDAY)
         self.assertIn('04:00', text)
         self.assertNotIn('None at all', text)
+
+    def _paragon_tv_declaring(self, settings_xml, **settings):
+        """A Paragon TV whose own settings page declares what is given.
+
+        The point is a build whose scheme differs from the published one --
+        which is exactly what turned up in practice, and is invisible from
+        here unless something reads the settings page itself.
+        """
+        root = os.path.join(tempfile.gettempdir(), 'fake-paragontv')
+        resources = os.path.join(root, 'resources')
+        if os.path.isdir(root):
+            shutil.rmtree(root)
+        os.makedirs(resources)
+        handle = open(os.path.join(resources, 'settings.xml'), 'w')
+        try:
+            handle.write(settings_xml)
+        finally:
+            handle.close()
+        self.addCleanup(shutil.rmtree, root, True)
+
+        base = {'EnablePresetSystem': 'true', 'SaturdayPreset': '1'}
+        base.update(settings)
+        xbmcaddon.install('script.paragontv', base, path=root)
+        import paragon_tv
+        return paragon_tv
+
+    def test_it_reports_the_names_the_installed_build_actually_uses(self):
+        """When a build stores its times some other way, say so with names."""
+        tv = self._paragon_tv_declaring(
+            '<settings>'
+            '<setting id="EnablePresetSystem" type="bool"/>'
+            '<setting id="AlphaAnchorTime" type="time"/>'
+            '<setting id="AlphaPhase2Offset" type="number"/>'
+            '</settings>')
+
+        text = tv.report('Alpha', self.SATURDAY)
+
+        self.assertIn('AlphaAnchorTime', text)
+        self.assertIn('AlphaPhase2Offset', text)
+        self.assertNotIn('EnablePresetSystem', text.split('actually')[-1])
+
+    def test_it_says_when_the_build_mentions_the_preset_nowhere(self):
+        tv = self._paragon_tv_declaring(
+            '<settings><setting id="EnablePresetSystem" type="bool"/>'
+            '</settings>')
+
+        self.assertIn('declares no setting mentioning Alpha',
+                      tv.report('Alpha', self.SATURDAY))
+
+    def test_an_unreadable_settings_page_is_not_mistaken_for_our_own(self):
+        """An empty add-on path once joined to a relative one and read ours."""
+        import paragon_tv
+
+        xbmcaddon.install('script.paragontv',
+                          {'EnablePresetSystem': 'true'})
+
+        self.assertEqual(paragon_tv.setting_ids(), [])
+        self.assertIn('could not be read',
+                      paragon_tv.report('Alpha', self.SATURDAY))
 
     def test_the_report_lists_all_nine_phases_whether_set_or_not(self):
         tv = self.install_tv()

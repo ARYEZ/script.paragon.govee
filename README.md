@@ -55,8 +55,8 @@ otherwise eat cloud quota.
 2. In Kodi: **Settings → Add-ons → Install from zip file**.
 3. Pick the ZIP.
 
-Kodi requires the folder inside the ZIP to be named `script.paragon.govee`.
-GitHub's ZIP names it `script.paragon.govee-main`, so either rename the folder
+Kodi requires the folder inside the ZIP to be named `script.paragon.home`.
+GitHub's ZIP names it `script.paragon.home-main`, so either rename the folder
 before zipping, or copy the folder straight into your Kodi `addons` directory
 and restart Kodi.
 
@@ -153,10 +153,10 @@ lights still on placeholder names.
 Names are stored in `devices.json` in the add-on's profile directory:
 
 ```
-Windows   %APPDATA%\Kodi\userdata\addon_data\script.paragon.govee\
+Windows   %APPDATA%\Kodi\userdata\addon_data\script.paragon.home\
           (portable: <kodi>\portable_data\userdata\addon_data\...)
-Linux     ~/.kodi/userdata/addon_data/script.paragon.govee/
-LibreELEC /storage/.kodi/userdata/addon_data/script.paragon.govee/
+Linux     ~/.kodi/userdata/addon_data/script.paragon.home/
+LibreELEC /storage/.kodi/userdata/addon_data/script.paragon.home/
 ```
 
 They are written every time a light is renamed or a search completes, so
@@ -193,7 +193,7 @@ offered in the scene editor, so anything added once is available everywhere.
 A saved colour can also be driven by name:
 
 ```
-RunScript(script.paragon.govee,action=color,value=Govee Pink)
+RunScript(script.paragon.home,action=color,value=Govee Pink)
 ```
 
 ### Scenes
@@ -364,24 +364,24 @@ stopping a stream will never switch on lights you deliberately left off.
 For keymaps, Favourites, or other add-ons:
 
 ```
-RunScript(script.paragon.govee)                                  # control panel
-RunScript(script.paragon.govee,action=toggle)
-RunScript(script.paragon.govee,action=on)
-RunScript(script.paragon.govee,action=off)
-RunScript(script.paragon.govee,action=brightness,value=20)       # 1-100
-RunScript(script.paragon.govee,action=color,value=FF8800)        # RRGGBB, AARRGGBB,
-RunScript(script.paragon.govee,action=color,value=Govee Pink)    #   or a saved colour name
-RunScript(script.paragon.govee,action=temp,value=2700)           # Kelvin
-RunScript(script.paragon.govee,action=scene,name=Movie Night)
-RunScript(script.paragon.govee,action=refresh)
-RunScript(script.paragon.govee,action=diagnose)                  # why no lights?
-RunScript(script.paragon.govee,action=verifystatus)              # does status work?
+RunScript(script.paragon.home)                                  # control panel
+RunScript(script.paragon.home,action=toggle)
+RunScript(script.paragon.home,action=on)
+RunScript(script.paragon.home,action=off)
+RunScript(script.paragon.home,action=brightness,value=20)       # 1-100
+RunScript(script.paragon.home,action=color,value=FF8800)        # RRGGBB, AARRGGBB,
+RunScript(script.paragon.home,action=color,value=Govee Pink)    #   or a saved colour name
+RunScript(script.paragon.home,action=temp,value=2700)           # Kelvin
+RunScript(script.paragon.home,action=scene,name=Movie Night)
+RunScript(script.paragon.home,action=refresh)
+RunScript(script.paragon.home,action=diagnose)                  # why no lights?
+RunScript(script.paragon.home,action=verifystatus)              # does status work?
 ```
 
 Add `target=<name or device id>` to any of them to hit one light:
 
 ```
-RunScript(script.paragon.govee,action=off,target=Bedside Lamp)
+RunScript(script.paragon.home,action=off,target=Bedside Lamp)
 ```
 
 Example `keymaps/govee.xml` in your Kodi userdata:
@@ -390,8 +390,8 @@ Example `keymaps/govee.xml` in your Kodi userdata:
 <keymap>
   <global>
     <keyboard>
-      <f9>RunScript(script.paragon.govee,action=toggle)</f9>
-      <f10>RunScript(script.paragon.govee,action=scene,name=Movie Night)</f10>
+      <f9>RunScript(script.paragon.home,action=toggle)</f9>
+      <f10>RunScript(script.paragon.home,action=scene,name=Movie Night)</f10>
     </keyboard>
   </global>
 </keymap>
@@ -431,7 +431,7 @@ Sequences live under **Sequences...** on the first screen, and each one is also 
 `RunScript()` target:
 
 ```
-RunScript(script.paragon.govee,action=sequence,name=Wind Down)
+RunScript(script.paragon.home,action=sequence,name=Wind Down)
 ```
 
 ### Copying a scene
@@ -872,9 +872,9 @@ another Kodi machine is a copy. Device names, scenes, sequences, reracks, the
 colour palette, learned infrared codes and the Tuya keys all come across.
 
 ```
-Windows     %APPDATA%\Kodi\userdata\addon_data\script.paragon.govee\
-Linux       ~/.kodi/userdata/addon_data/script.paragon.govee/
-LibreELEC   /storage/.kodi/userdata/addon_data/script.paragon.govee/
+Windows     %APPDATA%\Kodi\userdata\addon_data\script.paragon.home\
+Linux       ~/.kodi/userdata/addon_data/script.paragon.home/
+LibreELEC   /storage/.kodi/userdata/addon_data/script.paragon.home/
 ```
 
 | File | Holds |
@@ -889,12 +889,18 @@ LibreELEC   /storage/.kodi/userdata/addon_data/script.paragon.govee/
 | `settings.xml` | the add-on's settings, including the Kasa account |
 | `cycle.json`, `*_state.json` | what is running and what has already run today |
 
+The add-on id was `script.paragon.govee` before v2.19. Updating an existing
+installation in place carries everything over on first run — Kodi files saved
+data under the id, so the old folder is copied rather than left stranded. It
+is a copy: the old folder stays where it is and an older installation still
+works.
+
 **Stop Kodi on both machines before copying.** Kodi writes `settings.xml` when
 it exits, so a running instance will overwrite what you just put there.
 
 1. Install the add-on on the new box — copy the whole repository folder to
-   `addons/script.paragon.govee`, or install the ZIP.
-2. Copy the `addon_data/script.paragon.govee` folder across.
+   `addons/script.paragon.home`, or install the ZIP.
+2. Copy the `addon_data/script.paragon.home` folder across.
 3. Start Kodi. Open the add-on and run **Refresh devices** once: addresses are
    re-checked, and a device that has moved on DHCP is found again under the
    name you gave it.
@@ -990,11 +996,11 @@ encoding, transport selection, the scene engine and the menu walks.
 ### Why the add-on id still says "govee"
 
 The display name is **Paragon Home**, but the add-on id is still
-`script.paragon.govee` and will stay that way. The id is what Kodi uses to name
+`script.paragon.home` and will stay that way. The id is what Kodi uses to name
 the settings folder, so changing it would strand every device name, scene,
 colour, learned IR code and Tuya key in an `addon_data` directory the add-on no
 longer reads — and would break any keymap or favourite holding a
-`RunScript(script.paragon.govee,…)` line. A cosmetic rename is not worth
+`RunScript(script.paragon.home,…)` line. A cosmetic rename is not worth
 re-naming thirty-four bulbs over.
 
 Inside the code, `govee_lan.py`, `govee_cloud.py` and `GoveeController` keep

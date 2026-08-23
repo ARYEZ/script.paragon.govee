@@ -9,9 +9,9 @@ the add-on ships a single locale.
 <settings>
     <category label="Lights">
         <setting id="run_panel" type="action" label="Open the control panel"
-                 action="RunScript(script.paragon.govee)" option="close"/>
+                 action="RunScript(script.paragon.home)" option="close"/>
         <setting id="run_discover" type="action" label="Search for lights now"
-                 action="RunScript(script.paragon.govee,action=refresh)"
+                 action="RunScript(script.paragon.home,action=refresh)"
                  option="close"/>
         <setting type="sep"/>
         <setting id="transport_mode" type="enum" label="How to reach the lights"
@@ -59,15 +59,15 @@ the add-on ships a single locale.
         <setting id="scene_playing" type="text" label="Scene while playing"
                  default="Movie Night"/>
         <setting id="pick_playing" type="action" label="   Choose..."
-                 action="RunScript(script.paragon.govee,action=pick_scene&amp;setting=scene_playing)"/>
+                 action="RunScript(script.paragon.home,action=pick_scene&amp;setting=scene_playing)"/>
         <setting id="scene_paused" type="text" label="Scene while paused"
                  default="Paused"/>
         <setting id="pick_paused" type="action" label="   Choose..."
-                 action="RunScript(script.paragon.govee,action=pick_scene&amp;setting=scene_paused)"/>
+                 action="RunScript(script.paragon.home,action=pick_scene&amp;setting=scene_paused)"/>
         <setting id="scene_stopped" type="text" label="Scene when playback stops"
                  default="Lights Up"/>
         <setting id="pick_stopped" type="action" label="   Choose..."
-                 action="RunScript(script.paragon.govee,action=pick_scene&amp;setting=scene_stopped)"/>
+                 action="RunScript(script.paragon.home,action=pick_scene&amp;setting=scene_stopped)"/>
         <setting type="sep"/>
         <setting id="notify_playback" type="bool"
                  label="Show a notification on each playback change"

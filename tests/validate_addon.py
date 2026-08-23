@@ -20,7 +20,7 @@ import xml.etree.ElementTree as ET
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 
-ADDON_ID = 'script.paragon.govee'
+ADDON_ID = 'script.paragon.home'
 
 # Settings read through a computed id, so the regex scan cannot see them.
 DYNAMIC_SETTINGS = {'scene_playing', 'scene_paused', 'scene_stopped'}

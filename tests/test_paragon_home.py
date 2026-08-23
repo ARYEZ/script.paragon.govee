@@ -20,6 +20,7 @@ import shutil
 import socket
 import struct
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -1575,6 +1576,112 @@ class TestReracks(unittest.TestCase):
         for hour in (7, 9, 17, 19):
             self.assertEqual(
                 app.run_due_phases(now=self.SATURDAY.replace(hour=hour)), [])
+
+
+class TestAdoptingTheOldId(unittest.TestCase):
+    """Kodi files saved data under the add-on id, and the id changed.
+
+    Without this, updating an existing installation would open to an empty
+    house: no devices, no scenes, no sequences, and a Tuya key to go and
+    fetch again.
+    """
+
+    def setUp(self):
+        clean_profile()
+        xbmcaddon.reset()
+        for name in ('addon_utils', 'paragon_home'):
+            if name in sys.modules:
+                del sys.modules[name]
+        self.old = os.path.join(tempfile.gettempdir(), 'paragon-old-profile')
+        if os.path.isdir(self.old):
+            shutil.rmtree(self.old)
+        os.makedirs(self.old)
+
+    def tearDown(self):
+        clean_profile()
+        if os.path.isdir(self.old):
+            shutil.rmtree(self.old)
+
+    def install_old(self, files):
+        for name, payload in files.items():
+            handle = open(os.path.join(self.old, name), 'w')
+            try:
+                handle.write(payload)
+            finally:
+                handle.close()
+        xbmcaddon.install('script.paragon.govee', {}, profile=self.old)
+
+    def test_everything_saved_under_the_old_id_comes_across(self):
+        self.install_old({
+            'devices.json': '[{"device_id": "AA:BB", "name": "Hall Lamp"}]',
+            'scenes.json': '[{"name": "Warshade"}]',
+            'sequences.json': '[{"name": "Ignition"}]',
+            'rerack_presets.json': '{"week": ["Alpha"]}',
+            'tuya_keys.json': '{"wp9abc": "0123456789abcdef"}',
+            'broadlink_codes.json': '{"EE:FF": {"TV power": "26"}}',
+            'palette.json': '[{"name": "Paragon Purple"}]',
+            'settings.xml': '<settings />',
+        })
+        import addon_utils
+
+        taken = addon_utils.adopt_legacy_profile()
+
+        self.assertEqual(len(taken), 8)
+        from paragon_home import ParagonHome
+        app = ParagonHome()
+        self.assertEqual(app.devices[0].name, 'Hall Lamp')
+        self.assertIsNotNone(app.scene_by_name('Warshade'))
+        self.assertIsNotNone(app.sequence_by_name('Ignition'))
+
+    def test_the_old_folder_is_left_exactly_as_it_was(self):
+        """A copy, never a move: the older installation still works."""
+        self.install_old({'devices.json': '[]', 'scenes.json': '[]'})
+        import addon_utils
+
+        addon_utils.adopt_legacy_profile()
+
+        self.assertTrue(os.path.exists(
+            os.path.join(self.old, 'devices.json')))
+
+    def test_nothing_is_taken_when_there_is_already_something_here(self):
+        """Only ever on a fresh install, so it cannot overwrite live data."""
+        import addon_utils
+
+        addon_utils.write_json('devices.json',
+                               [{'device_id': 'CC:DD', 'name': 'Mine'}])
+        self.install_old({'devices.json':
+                          '[{"device_id": "AA:BB", "name": "Theirs"}]'})
+
+        self.assertEqual(addon_utils.adopt_legacy_profile(), [])
+
+        from paragon_home import ParagonHome
+        self.assertEqual(ParagonHome().devices[0].name, 'Mine')
+
+    def test_a_file_already_here_is_not_overwritten(self):
+        import addon_utils
+
+        addon_utils.write_json('scenes.json', [{'name': 'Kept'}])
+        self.install_old({'devices.json': '[]',
+                          'scenes.json': '[{"name": "Replaced"}]'})
+
+        taken = addon_utils.adopt_legacy_profile()
+
+        self.assertIn('devices.json', taken)
+        self.assertNotIn('scenes.json', taken)
+
+    def test_nothing_happens_when_the_old_add_on_is_gone(self):
+        import addon_utils
+
+        self.assertEqual(addon_utils.adopt_legacy_profile(), [])
+
+    def test_only_our_own_kinds_of_file_are_taken(self):
+        self.install_old({'devices.json': '[]', 'notes.txt': 'hello',
+                          'icon.png': 'x'})
+        import addon_utils
+
+        taken = addon_utils.adopt_legacy_profile()
+
+        self.assertEqual(taken, ['devices.json'])
 
 
 class TestParagonTV(unittest.TestCase):

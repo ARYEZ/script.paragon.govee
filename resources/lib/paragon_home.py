@@ -34,6 +34,10 @@ class ParagonHome(object):
     KEY_FILE = 'tuya_keys.json'
 
     def __init__(self):
+        # Before anything is read: the add-on id changed in v2.19,
+        # and Kodi files saved data under the id.
+        utils.adopt_legacy_profile()
+
         # Learned IR/RF codes are loaded before the hub is built: the
         # Broadlink driver holds the same dict, so a code learned through the
         # driver is saved by this session without a round trip.

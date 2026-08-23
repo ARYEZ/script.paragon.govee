@@ -11,14 +11,14 @@ With no arguments this opens the control panel. With arguments it performs a
 single action and exits, which is what makes the add-on usable from a remote
 button, a keymap or a favourite:
 
-    RunScript(script.paragon.govee,action=toggle)
-    RunScript(script.paragon.govee,action=scene,name=Movie Night)
-    RunScript(script.paragon.govee,action=sequence,name=Bedtime)
-    RunScript(script.paragon.govee,action=brightness,value=20)
-    RunScript(script.paragon.govee,action=color,value=FF8800)
-    RunScript(script.paragon.govee,action=color,value=Paragon Purple)
-    RunScript(script.paragon.govee,action=temp,value=2700)
-    RunScript(script.paragon.govee,action=off,target=Living Room Strip)
+    RunScript(script.paragon.home,action=toggle)
+    RunScript(script.paragon.home,action=scene,name=Movie Night)
+    RunScript(script.paragon.home,action=sequence,name=Bedtime)
+    RunScript(script.paragon.home,action=brightness,value=20)
+    RunScript(script.paragon.home,action=color,value=FF8800)
+    RunScript(script.paragon.home,action=color,value=Paragon Purple)
+    RunScript(script.paragon.home,action=temp,value=2700)
+    RunScript(script.paragon.home,action=off,target=Living Room Strip)
 
 `target` accepts a device name or a Govee device id; leave it out to act on
 every enabled light.

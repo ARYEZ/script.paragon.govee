@@ -37,10 +37,68 @@ def _translate(path):
 
 PROFILE_PATH = _translate(ADDON.getAddonInfo('profile'))
 
+# What this add-on was called before v2.19. Kodi keeps a folder of saved
+# data per add-on id, so renaming the id leaves the old folder behind
+# untouched -- with every device name, scene, sequence and key in it.
+LEGACY_ADDON_ID = "script.paragon.govee"
+
 
 def profile_file(name):
     """Absolute path to `name` inside the add-on's profile directory."""
     return os.path.join(PROFILE_PATH, name)
+
+
+def adopt_legacy_profile():
+    """Take over the saved data of the add-on's previous id, once.
+
+    Kodi files saved data under the add-on id, so changing that id would
+    otherwise mean opening to an empty house: no devices, no scenes, no
+    sequences, and a Tuya key to go and fetch again.
+
+    Only ever a copy, and only when there is nothing here yet. The old folder
+    is left exactly as it was, so an older installation still works and
+    nothing is destroyed if this goes wrong. Returns the names copied.
+    """
+    import shutil
+
+    if os.path.exists(profile_file('devices.json')):
+        return []
+
+    try:
+        legacy = xbmcaddon.Addon(LEGACY_ADDON_ID)
+        source = _translate(legacy.getAddonInfo('profile'))
+    except Exception:
+        # Kodi raises for an add-on that is not installed, and the exception
+        # type has varied across versions.
+        return []
+
+    if not source or not os.path.isdir(source):
+        return []
+
+    try:
+        names = sorted(os.listdir(source))
+    except OSError as exc:
+        log('Could not read %s: %s' % (source, exc), xbmc.LOGERROR)
+        return []
+
+    ensure_profile()
+    taken = []
+    for name in names:
+        if not (name.endswith('.json') or name == 'settings.xml'):
+            continue
+        destination = profile_file(name)
+        if os.path.exists(destination):
+            continue
+        try:
+            shutil.copyfile(os.path.join(source, name), destination)
+            taken.append(name)
+        except (OSError, IOError) as exc:
+            log('Could not carry %s over: %s' % (name, exc), xbmc.LOGERROR)
+
+    if taken:
+        log('Carried %d file(s) over from %s: %s'
+            % (len(taken), LEGACY_ADDON_ID, ', '.join(taken)))
+    return taken
 
 
 def ensure_profile():

@@ -1,3 +1,18 @@
+v2.19.0
+- The add-on id is now script.paragon.home. It has been called Paragon Home
+  since v2.0 and was still installing itself as script.paragon.govee, which is
+  the one place the old name was still visible.
+- Everything saved under the old id is carried over on first run. Kodi files
+  saved data under the add-on id, so without this an update would have opened
+  to an empty house: no devices, no scenes, no sequences, and a Tuya key to go
+  and fetch again.
+- It is a copy and never a move. The old folder is left exactly as it was, so
+  an older installation still works and nothing is destroyed if it goes wrong,
+  and it only ever runs when there is nothing here yet.
+- The folder the add-on is installed into must be renamed to match the id, and
+  a keymap or favourite holding RunScript(script.paragon.govee,...) needs the
+  new id -- that one cannot be helped, since it is Kodi doing the looking up.
+
 v2.18.1
 - Sequences can be duplicated too. "Duplicate..." copies all ten slots under a
   new name and opens the copy.

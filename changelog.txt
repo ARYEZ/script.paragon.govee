@@ -1,3 +1,14 @@
+v2.19.1
+- New "What Paragon TV says about <rerack>" in the rerack editor. A phase
+  reading "with Paragon TV, which has no time for it" is true and says nothing
+  about which of four quite different things is the case: Paragon TV not
+  installed, its Rerack system switched off, no times saved for that preset,
+  or some phases set and others not. The report names which.
+- When it holds no times at all it says what to do about it: open Paragon TV's
+  own settings page and press OK once. Kodi hands one add-on another's
+  settings out of the saved file, and a setting that has never been saved is
+  not in it -- a default shown on screen is not a value written down.
+
 v2.19.0
 - The add-on id is now script.paragon.home. It has been called Paragon Home
   since v2.0 and was still installing itself as script.paragon.govee, which is

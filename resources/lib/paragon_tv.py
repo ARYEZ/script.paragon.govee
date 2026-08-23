@@ -133,6 +133,46 @@ def describe_phase(phase):
     return 'phase %d (%s)' % (phase, PHASE_LABELS[phase - 1])
 
 
+def report(preset, now):
+    """Everything Paragon Home can see about one preset, and why not.
+
+    Written because "with Paragon TV, which has no time for it" is true but
+    says nothing about which of four quite different things went wrong.
+    """
+    lines = []
+    if not installed():
+        return ('Paragon TV is not installed on this machine, or its add-on '
+                'id is not "%s".' % ADDON_ID)
+
+    lines.append('Paragon TV is installed.')
+    lines.append('Its Rerack system is %s.'
+                 % ('on' if enabled() else 'OFF -- switch it on in Paragon '
+                    'TV\'s own settings'))
+
+    today = todays_preset(now)
+    lines.append('Today it runs: %s' % (today or 'nothing'))
+    lines.append('')
+
+    if not preset:
+        return '\n'.join(lines)
+
+    lines.append('Times it holds for %s:' % preset)
+    found = 0
+    for phase in range(1, PHASE_COUNT + 1):
+        at_time = phase_time(preset, phase)
+        if at_time:
+            found += 1
+        lines.append('  Phase %d  %s' % (phase, at_time or '(none)'))
+
+    if not found:
+        lines.append('')
+        lines.append('None at all. If Paragon TV shows times on its own '
+                     'settings page, open that page and press OK once: Kodi '
+                     'only lets one add-on read another\'s settings after '
+                     'they have been saved at least once.')
+    return '\n'.join(lines)
+
+
 def status(now):
     """A short account of what Paragon TV says about today, for a dialog."""
     if not installed():

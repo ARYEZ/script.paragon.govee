@@ -1724,6 +1724,13 @@ class ControlPanel(object):
                 return
             rows[choice][1]()
 
+    def _show_tv_report(self, rerack):
+        """Exactly what Paragon Home can read, and why it might be nothing."""
+        import paragon_tv
+
+        _dialog().ok('%s - Paragon TV' % utils.ADDON_NAME,
+                     paragon_tv.report(rerack['name'], sequence_lib.now()))
+
     def _toggle_week_follows_tv(self):
         """Match the week to Paragon TV's, and keep matching it.
 
@@ -1782,6 +1789,8 @@ class ControlPanel(object):
 
     def edit_rerack(self, rerack):
         """The nine phases, always all nine, and where their times come from."""
+        import paragon_tv
+
         while True:
             tv_times = self.app.tv_phase_times(rerack, sequence_lib.now())
             rows = []
@@ -1791,6 +1800,10 @@ class ControlPanel(object):
                     rerack, number, phase, tv_times.get(number)),
                     lambda n=number: self.edit_phase(rerack, n)))
 
+            if paragon_tv.installed() or rerack_lib.needs_tv(rerack):
+                rows.append(('What Paragon TV says about %s'
+                             % rerack['name'],
+                             lambda: self._show_tv_report(rerack)))
             rows.append(('Run this rerack now',
                          lambda: self._run_rerack_now(rerack)))
 

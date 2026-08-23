@@ -1779,6 +1779,46 @@ class TestParagonTV(unittest.TestCase):
         tv = self.install_tv(SaturdayPreset='0')
         self.assertIn('no preset scheduled', tv.status(self.SATURDAY))
 
+    def test_the_report_names_which_of_the_four_things_went_wrong(self):
+        """"No time for it" is true and says nothing about why."""
+        import paragon_tv
+
+        # 1. Not there at all.
+        self.assertIn('not installed', paragon_tv.report('Alpha',
+                                                         self.SATURDAY))
+
+        # 2. There, but switched off.
+        tv = self.install_tv(EnablePresetSystem='false')
+        self.assertIn('OFF', tv.report('Alpha', self.SATURDAY))
+
+        # 3. On, but nothing saved for this preset at all.
+        tv = self.install_tv(AlphaPhase1Time='', AlphaPhase2Time='',
+                             AlphaPhase3Time='')
+        text = tv.report('Alpha', self.SATURDAY)
+        self.assertIn('None at all', text)
+        self.assertIn('press OK once', text)
+
+        # 4. On, with times.
+        tv = self.install_tv()
+        text = tv.report('Alpha', self.SATURDAY)
+        self.assertIn('04:00', text)
+        self.assertNotIn('None at all', text)
+
+    def test_the_report_lists_all_nine_phases_whether_set_or_not(self):
+        tv = self.install_tv()
+
+        text = tv.report('Alpha', self.SATURDAY)
+
+        for phase in range(1, 10):
+            self.assertIn('Phase %d' % phase, text)
+        self.assertIn('(none)', text)
+
+    def test_the_report_says_what_today_runs(self):
+        tv = self.install_tv()
+
+        self.assertIn('Today it runs: Alpha',
+                      tv.report('Alpha', self.SATURDAY))
+
     # -- a sequence following a phase ----------------------------------------
 
     def app(self, tv=None):

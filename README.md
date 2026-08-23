@@ -630,7 +630,17 @@ Phase 5 holds the lights back to 07:00 even though the television wakes at
 06:55; phases 6 and 7 go when it goes.
 
 A phase set to follow Paragon TV shows the time it resolves to **today**, so
-"waiting" and "waiting for nothing" are told apart without going to look. A
+"waiting" and "waiting for nothing" are told apart without going to look.
+
+When a phase says *"which has no time for it"*, **What Paragon TV says about
+&lt;rerack&gt;** in the rerack editor reports which of four things is actually the
+case: Paragon TV is not installed, its Rerack system is switched off, it holds
+no times for that preset, or it holds some and not others.
+
+If it holds none at all while Paragon TV's own settings clearly show times,
+open that settings page and press **OK** once. Kodi hands one add-on another's
+settings out of the saved file, and a setting that has never been saved is not
+in it — defaults shown on screen are not the same as values written down. A
 phase the television has no time for does not run — there is nothing to fall
 back to, and an invented hour is worse than not firing.
 

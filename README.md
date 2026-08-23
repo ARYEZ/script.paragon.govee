@@ -540,6 +540,27 @@ Paragon TV's own preset system is switched off. **What Paragon TV says about
 today** shows the whole of today's schedule so a phase can be checked before
 it is relied on.
 
+### How the phase times are worked out
+
+Paragon TV does not store its phase times. It holds one **anchor** per preset
+and a list of **offsets in minutes**, both hardcoded in its own source and
+deliberately not read from its settings, so a master and its satellites cannot
+drift apart. The time fields on its settings page are disabled copies.
+
+A master anchors at phase 1 and its eight offsets fill phases 2 to 9. A
+satellite anchors at phase 2 — it has no maintenance phase at all — and its
+seven fill 3 to 9.
+
+That leaves nothing to read, so Paragon Home holds **a copy of those tables**.
+A copy can go stale, so **What Paragon TV says about &lt;rerack&gt;** compares what
+it computes against Paragon TV's own disabled copies and reports any that
+disagree. That is the signal Paragon TV has changed its timings and this needs
+updating from it.
+
+In **Satellite Mode**, Paragon TV asks a master box over SSH which preset today
+is. There is nothing on this machine to read, so a rerack cannot follow the
+week — only the phase times, which are the same everywhere.
+
 **Paragon TV's settings are only ever read, never written.** It does not need
 to know this exists, and works unchanged whether or not it does.
 

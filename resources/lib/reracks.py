@@ -45,7 +45,7 @@ RERACK_STATE_FILE = 'rerack_phase_state.json'
 # how a rerack takes its times from the television's preset, so the order and
 # spelling are not ours to vary.
 PRESET_NAMES = ('Alpha', 'Omega', 'Delta', 'Epsilon', 'Gamma', 'Sigma',
-                'Omicron', 'Theta', 'Lambda')
+                'Omicron', 'Theta', 'Lambda', 'Zeta')
 
 PHASE_COUNT = 9
 

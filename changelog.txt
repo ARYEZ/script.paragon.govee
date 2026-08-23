@@ -1,3 +1,23 @@
+v2.20.0
+- Phase times now match Paragon TV, which does not store them. It holds one
+  anchor per preset and a list of offsets in minutes, hardcoded in its own
+  source and deliberately not read from its settings so that a master and its
+  satellites cannot drift. Paragon Home was reading settings fields that are
+  disabled copies, so every phase came back with no time at all.
+- A master anchors at phase 1 with eight offsets filling 2 to 9; a satellite
+  anchors at phase 2 with seven filling 3 to 9. Checked against a line Paragon
+  TV printed on the real box: Delta computes to exactly the times it logged.
+- Zeta is the tenth preset. Paragon TV grew one, and a day set to it has to
+  find a rerack of the same name or the two stop lining up.
+- Satellite Mode is understood: Paragon TV asks a master box over SSH which
+  preset today is, and there is nothing on this machine to read, so a rerack
+  cannot follow the week -- only the phase times, which are the same
+  everywhere. It says so rather than reading a weekly table Paragon TV is
+  ignoring.
+- Since those tables are a copy, the report compares what it computes against
+  Paragon TV's own disabled copies and names any that disagree. That is the
+  signal Paragon TV has moved and this needs updating from it.
+
 v2.19.2
 - The Paragon TV report now names the settings the installed Paragon TV
   actually declares, when it declares none of the ones Paragon Home looks for.

@@ -5,12 +5,12 @@ Creator: Aryez
 Year: 2026
 Part of: Paragon TV Project
 
-Reracks: ten ordered steps, run as one.
+Sequences: ten ordered steps, run as one.
 
-Named after the Paragon TV preset macro system of the same name, and shaped
-like it on purpose -- a fixed number of numbered slots rather than a list you
-grow, so a rerack has the same shape every time you open it and slot 4 is
-always slot 4. Empty slots are normal and cost nothing.
+A fixed number of numbered slots rather than a list you grow, so a sequence
+has the same shape every time you open it and slot 4 is always slot 4. Empty
+slots are normal and cost nothing. That shape is borrowed from the Paragon TV
+Rerack, whose phases work the same way.
 
 A step is three choices: what kind of thing, which one, and what to do to it.
 
@@ -22,17 +22,23 @@ Steps run in order, top to bottom. Each can hold a pause afterwards, which
 matters more than it sounds: a television told to switch on and change channel
 in the same breath will miss the second command, because it is still waking up.
 
-A rerack is deliberately not a scene. A scene describes a state -- how the
-lights should look -- and can be captured, mixed and cycled. A rerack
-describes a sequence of things to do, including things with no state to
-describe at all, like an infrared button press.
+A sequence is deliberately not a scene. A scene describes a state -- how the
+lights should look -- and can be captured, mixed and cycled. A sequence is an
+ordered list of things to do, including things with no state to describe at
+all, like an infrared button press.
 """
 
 import datetime
 import re
 import time as time_module
 
-RERACK_FILE = 'reracks.json'
+SEQUENCE_FILE = 'sequences.json'
+
+# What sequences were called before, and the file they were saved in. Read
+# once when there is no sequences.json, so a rename does not cost anyone the
+# ones they had already built.
+LEGACY_FILE = 'reracks.json'
+LEGACY_STATE_FILE = 'rerack_state.json'
 
 # Fixed, like the phases of the system this is named after. Ten is enough for
 # anything anyone has wanted, and a fixed count is what lets the editor show
@@ -56,7 +62,7 @@ TARGET_ALL = '*'
 
 MAX_PAUSE = 600
 
-RERACK_STATE_FILE = 'rerack_state.json'
+SEQUENCE_STATE_FILE = 'sequence_state.json'
 
 # Index 0 is Monday, to match datetime.weekday(). Nothing is gained by
 # picking a different origin from the standard library's.
@@ -65,9 +71,9 @@ DAYS = ('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday',
 WEEKDAYS = (0, 1, 2, 3, 4)
 WEEKEND = (5, 6)
 
-# How late a rerack may still run. Kodi is not always awake at the minute a
-# rerack is due -- it may be starting up, or mid-way through something -- and
-# a few minutes late is what was wanted. An hour late is not: a rerack that
+# How late a sequence may still run. Kodi is not always awake at the minute a
+# sequence is due -- it may be starting up, or mid-way through something -- and
+# a few minutes late is what was wanted. An hour late is not: a sequence that
 # lifts the lights at six should not do it at seven because the box was off.
 CATCH_UP_SECONDS = 300
 
@@ -129,9 +135,9 @@ def clean_days(raw):
     return sorted(days)
 
 
-def follows_tv(rerack):
-    """Whether this rerack hangs off a Paragon TV phase instead of a clock."""
-    return bool(rerack.get('phase'))
+def follows_tv(sequence):
+    """Whether this sequence hangs off a Paragon TV phase instead of a clock."""
+    return bool(sequence.get('phase'))
 
 
 def clean_phase(raw):
@@ -154,26 +160,26 @@ def describe_phase(phase):
     return 'phase %d (%s)' % (phase, labels[phase - 1])
 
 
-def scheduled(rerack):
-    """Whether this rerack runs itself, by either route.
+def scheduled(sequence):
+    """Whether this sequence runs itself, by either route.
 
     Its own time needs both halves -- a time with no days, or days with no
     time, is a schedule that can never come round. Following Paragon TV needs
     neither, because Paragon TV supplies both.
     """
-    if follows_tv(rerack):
+    if follows_tv(sequence):
         return True
-    return bool(rerack.get('time') and rerack.get('days'))
+    return bool(sequence.get('time') and sequence.get('days'))
 
 
-def describe_schedule(rerack):
+def describe_schedule(sequence):
     """The schedule in words, the way it would be said."""
-    if follows_tv(rerack):
-        return 'Paragon TV %s' % describe_phase(rerack['phase'])
-    if not scheduled(rerack):
+    if follows_tv(sequence):
+        return 'Paragon TV %s' % describe_phase(sequence['phase'])
+    if not scheduled(sequence):
         return 'only when you run it'
 
-    days = tuple(rerack['days'])
+    days = tuple(sequence['days'])
     if len(days) == 7:
         when = 'every day'
     elif days == WEEKDAYS:
@@ -182,11 +188,11 @@ def describe_schedule(rerack):
         when = 'weekends'
     else:
         when = ', '.join(DAYS[day][:3] for day in days)
-    return '%s at %s' % (when, rerack['time'])
+    return '%s at %s' % (when, sequence['time'])
 
 
-def stamp(rerack, now, at_time=None):
-    """The key that says this rerack has run today.
+def stamp(sequence, now, at_time=None):
+    """The key that says this sequence has run today.
 
     Includes the time as well as the date, so moving a schedule later in the
     same day lets it run again rather than being counted as already done. The
@@ -194,26 +200,26 @@ def stamp(rerack, now, at_time=None):
     that moved should re-arm for the same reason.
     """
     if at_time is None:
-        at_time = rerack.get('time') or ''
+        at_time = sequence.get('time') or ''
     return '%04d-%02d-%02d %s' % (now.year, now.month, now.day, at_time)
 
 
-def own_schedule(rerack):
-    """The (time, days) a rerack keeps for itself."""
-    return rerack.get('time') or '', list(rerack.get('days') or [])
+def own_schedule(sequence):
+    """The (time, days) a sequence keeps for itself."""
+    return sequence.get('time') or '', list(sequence.get('days') or [])
 
 
-def due(rerack, now, last='', schedule=None):
-    """Whether this rerack should run right now.
+def due(sequence, now, last='', schedule=None):
+    """Whether this sequence should run right now.
 
     Three separate questions, and all of them have to be yes: is today one of
     its days, is the time here or just past, and has it not already run.
 
-    `schedule` is a resolved (time, days) pair for a rerack whose schedule
+    `schedule` is a resolved (time, days) pair for a sequence whose schedule
     comes from elsewhere. Resolving it outside keeps this function free of
     any knowledge of where a time came from.
     """
-    at_time, days = own_schedule(rerack) if schedule is None else schedule
+    at_time, days = own_schedule(sequence) if schedule is None else schedule
     if not at_time or not days:
         return False
     if now.weekday() not in days:
@@ -224,7 +230,7 @@ def due(rerack, now, last='', schedule=None):
     late = (now - at).total_seconds()
     if late < 0 or late > CATCH_UP_SECONDS:
         return False
-    return last != stamp(rerack, now, at_time)
+    return last != stamp(sequence, now, at_time)
 
 
 def now():
@@ -237,8 +243,8 @@ def empty_step():
             'pause': 0}
 
 
-def make_rerack(name, steps=None, time=None, days=None, phase=None):
-    """A rerack with its full complement of slots, however few are filled."""
+def make_sequence(name, steps=None, time=None, days=None, phase=None):
+    """A sequence with its full complement of slots, however few are filled."""
     return normalise({'name': name, 'steps': list(steps or []),
                       'time': time, 'days': days, 'phase': phase})
 
@@ -299,7 +305,7 @@ def normalise_step(raw):
 
 
 def normalise(raw):
-    """Clamp one rerack, or None if it has no usable name.
+    """Clamp one sequence, or None if it has no usable name.
 
     Always exactly STEP_COUNT slots: a file written by an older version, or
     edited by hand, is padded or trimmed rather than being rejected.
@@ -328,30 +334,30 @@ def normalise_all(raw):
         return []
     cleaned = []
     for entry in raw:
-        rerack = normalise(entry)
-        if rerack is not None:
-            cleaned.append(rerack)
+        sequence = normalise(entry)
+        if sequence is not None:
+            cleaned.append(sequence)
     return cleaned
 
 
-def find(reracks, name):
-    """Look a rerack up by name, ignoring case and surrounding space."""
+def find(sequences, name):
+    """Look a sequence up by name, ignoring case and surrounding space."""
     wanted = (name or '').strip().lower()
-    for rerack in reracks or []:
-        if rerack.get('name', '').lower() == wanted:
-            return rerack
+    for sequence in sequences or []:
+        if sequence.get('name', '').lower() == wanted:
+            return sequence
     return None
 
 
-def filled_steps(rerack):
+def filled_steps(sequence):
     """The steps that actually do something, in order."""
-    return [step for step in rerack.get('steps') or []
+    return [step for step in sequence.get('steps') or []
             if step.get('kind') != KIND_NONE]
 
 
-def describe(rerack):
+def describe(sequence):
     """One line for a menu: how many steps, and what the first one does."""
-    steps = filled_steps(rerack)
+    steps = filled_steps(sequence)
     if not steps:
         return 'no steps yet'
     count = '%d step%s' % (len(steps), '' if len(steps) == 1 else 's')
@@ -388,7 +394,7 @@ def resolve_targets(step, devices):
     """Which devices a step acts on. Empty means the step cannot run.
 
     Matched on device id first and name second, so renaming a device does not
-    break a rerack that referred to it, and a rerack written by hand with a
+    break a sequence that referred to it, and a sequence written by hand with a
     friendly name still works.
     """
     target = step.get('target') or ''
@@ -405,10 +411,10 @@ def resolve_targets(step, devices):
     return matches
 
 
-def run(app, rerack, log_func=None, sleep_func=None, on_step=None):
-    """Run one rerack top to bottom. Returns (steps done, [failures]).
+def run(app, sequence, log_func=None, sleep_func=None, on_step=None):
+    """Run one sequence top to bottom. Returns (steps done, [failures]).
 
-    One step failing does not stop the rest. A rerack is a list of separate
+    One step failing does not stop the rest. A sequence is a list of separate
     intentions -- lights, plugs, a television -- and a plug that has been
     unplugged is no reason to leave the rest of the room untouched. Every
     failure is collected and reported together at the end.
@@ -420,13 +426,13 @@ def run(app, rerack, log_func=None, sleep_func=None, on_step=None):
     done = 0
     errors = []
 
-    steps = list(rerack.get('steps') or [])
+    steps = list(sequence.get('steps') or [])
     for index, step in enumerate(steps):
         if step.get('kind') == KIND_NONE:
             continue
         if on_step is not None and on_step(index, step) is False:
-            log('Rerack "%s" cancelled at step %d'
-                % (rerack.get('name'), index + 1))
+            log('Sequence "%s" cancelled at step %d'
+                % (sequence.get('name'), index + 1))
             break
 
         try:
@@ -434,19 +440,19 @@ def run(app, rerack, log_func=None, sleep_func=None, on_step=None):
             done += 1
         except ControlError as exc:
             errors.append('Step %d: %s' % (index + 1, exc))
-            log('Rerack "%s" step %d failed: %s'
-                % (rerack.get('name'), index + 1, exc))
+            log('Sequence "%s" step %d failed: %s'
+                % (sequence.get('name'), index + 1, exc))
         except Exception as exc:
             errors.append('Step %d: %s' % (index + 1, exc))
-            log('Rerack "%s" step %d raised: %s'
-                % (rerack.get('name'), index + 1, exc))
+            log('Sequence "%s" step %d raised: %s'
+                % (sequence.get('name'), index + 1, exc))
 
         pause = step.get('pause') or 0
         if pause:
             sleep(pause)
 
-    log('Rerack "%s": %d step(s) done, %d failed'
-        % (rerack.get('name'), done, len(errors)))
+    log('Sequence "%s": %d step(s) done, %d failed'
+        % (sequence.get('name'), done, len(errors)))
     return done, errors
 
 

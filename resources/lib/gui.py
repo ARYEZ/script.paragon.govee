@@ -18,7 +18,7 @@ import xbmcgui
 
 import addon_utils as utils
 import palette as palette_lib
-import reracks as rerack_lib
+import sequences as sequence_lib
 import scenes as scene_lib
 from devices import (CAP_BRIGHTNESS, CAP_COLOR, CAP_COLOR_TEMP,
                      CAP_COMMANDS, CAP_POWER, CAP_STATE,
@@ -171,7 +171,7 @@ class ControlPanel(object):
 
         rows.extend([
             ('Scenes...', self.scene_menu),
-            ('Reracks...', self.rerack_menu),
+            ('Sequences...', self.sequence_menu),
             ('Refresh devices', self.refresh_devices),
             # Stays at the top level rather than inside a driver: the time you
             # need it is when a driver found nothing and so has no menu.
@@ -1430,224 +1430,224 @@ class ControlPanel(object):
                          'A Tuya local key is exactly 16 characters.\n\n'
                          'You gave %d.' % len(value.strip()))
 
-    # -- reracks -----------------------------------------------------------
+    # -- sequences -----------------------------------------------------------
 
-    def rerack_menu(self):
-        """The saved reracks. Picking one runs it."""
+    def sequence_menu(self):
+        """The saved sequences. Picking one runs it."""
         while True:
-            reracks = self.app.reracks
+            sequences = self.app.sequences
             rows = []
-            for rerack in reracks:
-                summary = rerack_lib.describe(rerack)
-                if rerack_lib.scheduled(rerack):
+            for sequence in sequences:
+                summary = sequence_lib.describe(sequence)
+                if sequence_lib.scheduled(sequence):
                     summary = '%s  -  %s' % (
-                        rerack_lib.describe_schedule(rerack), summary)
-                rows.append(('%s  -  %s' % (rerack['name'], summary),
-                             lambda r=rerack: self.run_rerack(r)))
-            rows.append(('New rerack...', self.new_rerack))
-            if reracks:
-                rows.append(('Manage reracks...', self.manage_reracks))
+                        sequence_lib.describe_schedule(sequence), summary)
+                rows.append(('%s  -  %s' % (sequence['name'], summary),
+                             lambda r=sequence: self.run_sequence(r)))
+            rows.append(('New sequence...', self.new_sequence))
+            if sequences:
+                rows.append(('Manage sequences...', self.manage_sequences))
 
-            choice = _select('Reracks', [label for label, _h in rows])
+            choice = _select('Sequences', [label for label, _h in rows])
             if choice == BACK:
                 return
             rows[choice][1]()
 
-    def run_rerack(self, rerack):
-        """Run a rerack, showing progress and letting a long one be stopped.
+    def run_sequence(self, sequence):
+        """Run a sequence, showing progress and letting a long one be stopped.
 
-        A rerack can hold pauses that add up to minutes, so it runs behind a
+        A sequence can hold pauses that add up to minutes, so it runs behind a
         cancellable progress dialog rather than freezing the menu.
         """
-        steps = rerack_lib.filled_steps(rerack)
+        steps = sequence_lib.filled_steps(sequence)
         if not steps:
-            utils.force_notify('%s has no steps yet' % rerack['name'])
+            utils.force_notify('%s has no steps yet' % sequence['name'])
             return
 
         progress = xbmcgui.DialogProgress()
-        progress.create(utils.ADDON_NAME, 'Running %s...' % rerack['name'])
-        total = len(rerack.get('steps') or [])
+        progress.create(utils.ADDON_NAME, 'Running %s...' % sequence['name'])
+        total = len(sequence.get('steps') or [])
 
         def announce(index, step):
             if progress.iscanceled():
                 return False
             progress.update(int(100.0 * index / max(1, total)),
-                            'Running %s...' % rerack['name'],
-                            rerack_lib.describe_step(
+                            'Running %s...' % sequence['name'],
+                            sequence_lib.describe_step(
                                 step, self._target_name(step)))
             return True
 
         try:
-            self.app.run_rerack(rerack, on_step=announce)
+            self.app.run_sequence(sequence, on_step=announce)
         finally:
             progress.close()
 
     def _target_name(self, step):
         """The friendly name of a step's target, for showing it back."""
-        if step.get('kind') == rerack_lib.KIND_SCENE:
+        if step.get('kind') == sequence_lib.KIND_SCENE:
             return step.get('target')
-        if step.get('target') == rerack_lib.TARGET_ALL:
+        if step.get('target') == sequence_lib.TARGET_ALL:
             return None
-        found = rerack_lib.resolve_targets(step, self.app.devices)
+        found = sequence_lib.resolve_targets(step, self.app.devices)
         return found[0].name if found else None
 
-    def new_rerack(self):
-        name = _dialog().input('Name for the new rerack', '')
+    def new_sequence(self):
+        name = _dialog().input('Name for the new sequence', '')
         if not name or not name.strip():
             return
-        if self.app.rerack_by_name(name):
+        if self.app.sequence_by_name(name):
             _dialog().ok(utils.ADDON_NAME,
-                         'There is already a rerack called "%s".'
+                         'There is already a sequence called "%s".'
                          % name.strip())
             return
-        rerack = self.app.save_rerack(rerack_lib.make_rerack(name.strip()))
-        if rerack:
-            self.edit_rerack(rerack)
+        sequence = self.app.save_sequence(sequence_lib.make_sequence(name.strip()))
+        if sequence:
+            self.edit_sequence(sequence)
 
-    def manage_reracks(self):
+    def manage_sequences(self):
         while True:
-            reracks = self.app.reracks
-            if not reracks:
+            sequences = self.app.sequences
+            if not sequences:
                 return
-            rows = [(r['name'], lambda r=r: self.edit_rerack(r))
-                    for r in reracks]
-            choice = _select('Manage reracks', [label for label, _h in rows])
+            rows = [(r['name'], lambda r=r: self.edit_sequence(r))
+                    for r in sequences]
+            choice = _select('Manage sequences', [label for label, _h in rows])
             if choice == BACK:
                 return
             rows[choice][1]()
 
-    def edit_rerack(self, rerack):
+    def edit_sequence(self, sequence):
         """The ten slots, always all ten, numbered as they run."""
         while True:
             rows = []
-            for index, step in enumerate(rerack['steps']):
+            for index, step in enumerate(sequence['steps']):
                 rows.append(('%2d. %s'
                              % (index + 1,
-                                rerack_lib.describe_step(
+                                sequence_lib.describe_step(
                                     step, self._target_name(step))),
-                             lambda i=index: self.edit_step(rerack, i)))
-            rows.append(('Runs: %s' % rerack_lib.describe_schedule(rerack),
-                         lambda: self.schedule_rerack(rerack)))
-            rows.append(('Run it now', lambda: self.run_rerack(rerack)))
-            rows.append(('Rename', lambda: self._rename_rerack(rerack)))
-            rows.append(('Delete this rerack',
-                         lambda: self._delete_rerack(rerack)))
+                             lambda i=index: self.edit_step(sequence, i)))
+            rows.append(('Runs: %s' % sequence_lib.describe_schedule(sequence),
+                         lambda: self.schedule_sequence(sequence)))
+            rows.append(('Run it now', lambda: self.run_sequence(sequence)))
+            rows.append(('Rename', lambda: self._rename_sequence(sequence)))
+            rows.append(('Delete this sequence',
+                         lambda: self._delete_sequence(sequence)))
 
-            choice = _select(rerack['name'], [label for label, _h in rows])
+            choice = _select(sequence['name'], [label for label, _h in rows])
             if choice == BACK:
                 return
             if rows[choice][1]() is False:
                 return
 
-    def _rename_rerack(self, rerack):
-        name = _dialog().input('Rerack name', rerack['name'])
-        if not name or not name.strip() or name.strip() == rerack['name']:
+    def _rename_sequence(self, sequence):
+        name = _dialog().input('Sequence name', sequence['name'])
+        if not name or not name.strip() or name.strip() == sequence['name']:
             return
-        if self.app.rerack_by_name(name):
+        if self.app.sequence_by_name(name):
             _dialog().ok(utils.ADDON_NAME,
-                         'There is already a rerack called "%s".'
+                         'There is already a sequence called "%s".'
                          % name.strip())
             return
-        self.app.delete_rerack(rerack)
-        rerack['name'] = name.strip()
-        self.app.save_rerack(rerack)
+        self.app.delete_sequence(sequence)
+        sequence['name'] = name.strip()
+        self.app.save_sequence(sequence)
 
-    def _delete_rerack(self, rerack):
+    def _delete_sequence(self, sequence):
         if not _dialog().yesno(utils.ADDON_NAME,
-                               'Delete the rerack "%s"?' % rerack['name']):
+                               'Delete the sequence "%s"?' % sequence['name']):
             return
-        self.app.delete_rerack(rerack)
-        utils.notify('Deleted %s' % rerack['name'])
+        self.app.delete_sequence(sequence)
+        utils.notify('Deleted %s' % sequence['name'])
         return False
 
     # -- when it runs ------------------------------------------------------
 
-    def schedule_rerack(self, rerack):
+    def schedule_sequence(self, sequence):
         """Its own clock, or one of Paragon TV's phases. Not both."""
         import paragon_tv
 
         while True:
-            following = rerack_lib.follows_tv(rerack)
+            following = sequence_lib.follows_tv(sequence)
             rows = []
             if not following:
-                rows.append(('Time: %s' % (rerack['time'] or 'not set'),
-                             lambda: self._edit_rerack_time(rerack)))
-                rows.append(('Days: %s' % (self._days_label(rerack) or 'none'),
-                             lambda: self._edit_rerack_days(rerack)))
+                rows.append(('Time: %s' % (sequence['time'] or 'not set'),
+                             lambda: self._edit_sequence_time(sequence)))
+                rows.append(('Days: %s' % (self._days_label(sequence) or 'none'),
+                             lambda: self._edit_sequence_days(sequence)))
 
             if paragon_tv.installed():
                 rows.append(('Follow Paragon TV: %s'
-                             % (rerack_lib.describe_phase(rerack['phase'])
+                             % (sequence_lib.describe_phase(sequence['phase'])
                                 if following else 'no'),
-                             lambda: self._edit_rerack_phase(rerack)))
+                             lambda: self._edit_sequence_phase(sequence)))
                 if following:
                     rows.append(("What Paragon TV says about today",
                                  lambda: self._show_tv_status()))
 
-            if rerack_lib.scheduled(rerack):
+            if sequence_lib.scheduled(sequence):
                 rows.append(('Stop running it on a schedule',
-                             lambda: self._clear_schedule(rerack)))
+                             lambda: self._clear_schedule(sequence)))
 
-            choice = _select('%s - when it runs' % rerack['name'],
+            choice = _select('%s - when it runs' % sequence['name'],
                              [label for label, _h in rows])
             if choice == BACK:
-                self.app.save_rerack(rerack)
+                self.app.save_sequence(sequence)
                 return
             if rows[choice][1]() is False:
-                self.app.save_rerack(rerack)
+                self.app.save_sequence(sequence)
                 return
 
     @staticmethod
-    def _days_label(rerack):
-        return ', '.join(rerack_lib.DAYS[day][:3]
-                         for day in rerack.get('days') or [])
+    def _days_label(sequence):
+        return ', '.join(sequence_lib.DAYS[day][:3]
+                         for day in sequence.get('days') or [])
 
-    def _edit_rerack_time(self, rerack):
+    def _edit_sequence_time(self, sequence):
         value = _dialog().input(
-            'Time of day (18:00, or 6pm)', rerack['time'] or '')
+            'Time of day (18:00, or 6pm)', sequence['time'] or '')
         if value is None:
             return
         if not value.strip():
-            rerack['time'] = ''
+            sequence['time'] = ''
             return
-        parsed = rerack_lib.parse_time(value)
+        parsed = sequence_lib.parse_time(value)
         if not parsed:
             _dialog().ok(utils.ADDON_NAME,
                          'Could not read "%s" as a time.\n\n'
                          'Try 18:00, 6pm or 1800.' % value.strip())
             return
-        rerack['time'] = parsed
+        sequence['time'] = parsed
 
-    def _edit_rerack_days(self, rerack):
+    def _edit_sequence_days(self, sequence):
         """A toggled checklist, as the scene target picker is and for the
         same reason: Krypton's multiselect differs across skins."""
-        chosen = set(rerack.get('days') or [])
+        chosen = set(sequence.get('days') or [])
         while True:
             options = ['Every day', 'Weekdays', 'Weekends']
-            for index, name in enumerate(rerack_lib.DAYS):
+            for index, name in enumerate(sequence_lib.DAYS):
                 options.append('%s %s' % ('[x]' if index in chosen else '[ ]',
                                           name))
             options.append('Done')
 
             choice = _select('Which days', options)
             if choice == BACK or choice == len(options) - 1:
-                rerack['days'] = sorted(chosen)
+                sequence['days'] = sorted(chosen)
                 return
             if choice == 0:
                 chosen = set(range(7))
             elif choice == 1:
-                chosen = set(rerack_lib.WEEKDAYS)
+                chosen = set(sequence_lib.WEEKDAYS)
             elif choice == 2:
-                chosen = set(rerack_lib.WEEKEND)
+                chosen = set(sequence_lib.WEEKEND)
             else:
                 day = choice - 3
                 chosen.symmetric_difference_update([day])
 
-    def _edit_rerack_phase(self, rerack):
-        """Hang this rerack off one of Paragon TV's nine phases.
+    def _edit_sequence_phase(self, sequence):
+        """Hang this sequence off one of Paragon TV's nine phases.
 
         Following Paragon TV replaces its own time and days rather than
-        adding to them: two schedules on one rerack would be two answers to
+        adding to them: two schedules on one sequence would be two answers to
         one question.
         """
         import paragon_tv
@@ -1660,37 +1660,37 @@ class ControlPanel(object):
         if choice == BACK:
             return
         if choice == 0:
-            rerack['phase'] = 0
+            sequence['phase'] = 0
             return
 
-        rerack['phase'] = choice
-        rerack['time'] = ''
-        rerack['days'] = []
+        sequence['phase'] = choice
+        sequence['time'] = ''
+        sequence['days'] = []
 
     def _show_tv_status(self):
         """What Paragon TV's own schedule says, so a phase can be checked."""
         import paragon_tv
 
         _dialog().ok('%s - Paragon TV' % utils.ADDON_NAME,
-                     paragon_tv.status(rerack_lib.now()))
+                     paragon_tv.status(sequence_lib.now()))
 
-    def _clear_schedule(self, rerack):
-        rerack['time'] = ''
-        rerack['days'] = []
-        rerack['phase'] = 0
-        utils.notify('%s runs only when you run it' % rerack['name'])
+    def _clear_schedule(self, sequence):
+        sequence['time'] = ''
+        sequence['days'] = []
+        sequence['phase'] = 0
+        utils.notify('%s runs only when you run it' % sequence['name'])
         return False
 
     # -- one step ----------------------------------------------------------
 
-    def edit_step(self, rerack, index):
+    def edit_step(self, sequence, index):
         """Pick a step in the order you would say it: kind, target, action."""
         kinds = [('Scene', self._step_scene)]
         for driver_id in self._driver_ids(self.app.enabled_devices):
             kinds.append((self._driver_label(driver_id),
                           lambda d=driver_id: self._step_device(d)))
         kinds.append(('Pause after this step', self._step_pause))
-        kinds.append(('Clear this step', lambda: rerack_lib.empty_step()))
+        kinds.append(('Clear this step', lambda: sequence_lib.empty_step()))
 
         choice = _select('Step %d' % (index + 1),
                          [label for label, _h in kinds])
@@ -1701,14 +1701,14 @@ class ControlPanel(object):
         if step is None:
             return
         if step == 'pause':
-            self._ask_pause(rerack, index)
+            self._ask_pause(sequence, index)
             return
 
         # A step's pause belongs to the slot rather than to what is in it, so
         # replacing the action does not silently drop the gap after it.
-        step['pause'] = rerack['steps'][index].get('pause', 0)
-        rerack['steps'][index] = rerack_lib.normalise_step(step)
-        self.app.save_rerack(rerack)
+        step['pause'] = sequence['steps'][index].get('pause', 0)
+        sequence['steps'][index] = sequence_lib.normalise_step(step)
+        self.app.save_sequence(sequence)
 
     def _step_scene(self):
         scenes = self.app.scenes
@@ -1718,7 +1718,7 @@ class ControlPanel(object):
         choice = _select('Which scene', [s['name'] for s in scenes])
         if choice == BACK:
             return None
-        return {'kind': rerack_lib.KIND_SCENE,
+        return {'kind': sequence_lib.KIND_SCENE,
                 'target': scenes[choice]['name']}
 
     def _step_device(self, driver_id):
@@ -1740,15 +1740,15 @@ class ControlPanel(object):
 
         device = rows[choice][1]
         target = device.device_id if device is not None \
-            else rerack_lib.TARGET_ALL
+            else sequence_lib.TARGET_ALL
         sample = device if device is not None else devices[0]
         capabilities = self.app.controller.capabilities(sample)
 
         actions = []
         if CAP_POWER in capabilities:
-            actions.extend([('On', rerack_lib.ACTION_ON),
-                            ('Off', rerack_lib.ACTION_OFF),
-                            ('Toggle', rerack_lib.ACTION_TOGGLE)])
+            actions.extend([('On', sequence_lib.ACTION_ON),
+                            ('Off', sequence_lib.ACTION_OFF),
+                            ('Toggle', sequence_lib.ACTION_TOGGLE)])
         commands = []
         if device is not None and CAP_COMMANDS in capabilities:
             commands = self.app.controller.commands(device)
@@ -1764,22 +1764,22 @@ class ControlPanel(object):
             return None
 
         chosen = actions[pick][1]
-        kind = rerack_lib.KIND_COMMAND if chosen in commands \
-            else rerack_lib.KIND_POWER
+        kind = sequence_lib.KIND_COMMAND if chosen in commands \
+            else sequence_lib.KIND_POWER
         return {'kind': kind, 'driver': driver_id, 'target': target,
                 'action': chosen}
 
     def _step_pause(self):
         return 'pause'
 
-    def _ask_pause(self, rerack, index):
-        current = str(rerack['steps'][index].get('pause') or 0)
+    def _ask_pause(self, sequence, index):
+        current = str(sequence['steps'][index].get('pause') or 0)
         value = self._ask_number('Seconds to wait after this step', current)
         if value is None:
             return
-        rerack['steps'][index]['pause'] = max(0, min(rerack_lib.MAX_PAUSE,
+        sequence['steps'][index]['pause'] = max(0, min(sequence_lib.MAX_PAUSE,
                                                      value))
-        self.app.save_rerack(rerack)
+        self.app.save_sequence(sequence)
 
     # -- learned commands ---------------------------------------------------
 

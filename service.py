@@ -27,9 +27,9 @@ if _LIB_PATH not in sys.path:
 
 import addon_utils as utils  # noqa: E402 - needs the sys.path setup above
 
-# How often the clock is consulted for a scheduled rerack. The check is
+# How often the clock is consulted for a scheduled sequence. The check is
 # cheap; firing one writes a file, and this loop runs twice a second.
-RERACK_CHECK_SECONDS = 5
+SEQUENCE_CHECK_SECONDS = 5
 
 EVENT_PLAY = 'play'
 EVENT_PAUSE = 'pause'
@@ -98,7 +98,7 @@ class GoveeService(xbmc.Monitor):
         self._pending = None
         self._last_applied = None
         self._we_dimmed = False
-        self._last_rerack_check = 0.0
+        self._last_sequence_check = 0.0
         self.player = GoveePlayer().attach(self)
 
     # -- lifecycle ---------------------------------------------------------
@@ -221,23 +221,23 @@ class GoveeService(xbmc.Monitor):
 
     # -- main loop ---------------------------------------------------------
 
-    def _check_reracks(self, now=None):
+    def _check_sequences(self, now=None):
         """Run anything the clock says is due.
 
         Checked at most once every few seconds rather than on every tick: the
-        test itself is cheap, but a rerack that fires writes a file, and this
+        test itself is cheap, but a sequence that fires writes a file, and this
         loop runs twice a second.
 
-        A rerack can hold pauses, so its waits go through waitForAbort and
+        A sequence can hold pauses, so its waits go through waitForAbort and
         each step is gated on the service still being alive. Otherwise closing
-        Kodi during a five-minute rerack would wait for it to finish.
+        Kodi during a five-minute sequence would wait for it to finish.
         """
         moment = now or time.time()
-        if moment - self._last_rerack_check < RERACK_CHECK_SECONDS:
+        if moment - self._last_sequence_check < SEQUENCE_CHECK_SECONDS:
             return []
-        self._last_rerack_check = moment
+        self._last_sequence_check = moment
 
-        return self.app.run_due_reracks(
+        return self.app.run_due_sequences(
             sleep_func=self.waitForAbort,
             on_step=lambda index, step: not self.abortRequested())
 
@@ -267,12 +267,12 @@ class GoveeService(xbmc.Monitor):
             except Exception as exc:
                 utils.log('Cycle step failed: %s' % exc, xbmc.LOGERROR)
 
-            # Scheduled reracks are checked here for the same reason
+            # Scheduled sequences are checked here for the same reason
             # cycling is: this loop already exists and already stops cleanly.
             try:
-                self._check_reracks()
+                self._check_sequences()
             except Exception as exc:
-                utils.log('Rerack schedule check failed: %s' % exc,
+                utils.log('Sequence schedule check failed: %s' % exc,
                           xbmc.LOGERROR)
 
             event = self._pending

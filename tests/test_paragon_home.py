@@ -292,7 +292,7 @@ class RecordingController(object):
         self._record('temp', device, kelvin)
 
     def send_command(self, device, name):
-        # The Hub has this; leaving it off meant a rerack step that fires an
+        # The Hub has this; leaving it off meant a sequence step that fires an
         # infrared code failed against the stub for a reason the real code
         # would never have had.
         self._record('command', device, name)
@@ -405,7 +405,7 @@ class TestScenes(unittest.TestCase):
         self.assertEqual([c[0] for c in controller.calls], ['turn', 'temp'])
 
     def test_an_untargeted_scene_leaves_out_what_it_cannot_describe(self):
-        """The bug behind a rerack switching every plug in the house.
+        """The bug behind a sequence switching every plug in the house.
 
         A scene naming no targets meant "every enabled device", which was
         right when lights were all there was. Once plugs were listed too, a
@@ -524,19 +524,19 @@ class TestPlugsInScenes(unittest.TestCase):
                          ['turn', 'brightness'])
 
 
-class TestReracks(unittest.TestCase):
+class TestSequences(unittest.TestCase):
     """Ten ordered steps, run as one."""
 
     def setUp(self):
         clean_profile()
         xbmcaddon.reset()
         xbmcgui.reset()
-        for name in ('addon_utils', 'paragon_home', 'reracks', 'gui'):
+        for name in ('addon_utils', 'paragon_home', 'sequences', 'gui'):
             if name in sys.modules:
                 del sys.modules[name]
-        import reracks
+        import sequences
 
-        self.reracks = reracks
+        self.sequences = sequences
 
     def tearDown(self):
         clean_profile()
@@ -572,8 +572,8 @@ class TestReracks(unittest.TestCase):
         return app
 
     def example(self):
-        """The rerack from the request, written the way it was described."""
-        return self.reracks.make_rerack('Wind Down', [
+        """The sequence from the request, written the way it was described."""
+        return self.sequences.make_sequence('Wind Down', [
             {'kind': 'scene', 'target': 'Warshade'},
             {'kind': 'power', 'driver': 'tuya', 'target': 'WP9ABC#ALL',
              'action': 'on'},
@@ -583,26 +583,26 @@ class TestReracks(unittest.TestCase):
 
     # -- shape -------------------------------------------------------------
 
-    def test_a_rerack_always_has_ten_slots(self):
+    def test_a_sequence_always_has_ten_slots(self):
         """Named after the preset system, and fixed like it: slot 4 is slot 4."""
-        rerack = self.reracks.make_rerack('Wind Down')
+        sequence = self.sequences.make_sequence('Wind Down')
 
-        self.assertEqual(len(rerack['steps']), self.reracks.STEP_COUNT)
-        self.assertEqual(self.reracks.STEP_COUNT, 10)
-        self.assertTrue(all(s['kind'] == 'none' for s in rerack['steps']))
+        self.assertEqual(len(sequence['steps']), self.sequences.STEP_COUNT)
+        self.assertEqual(self.sequences.STEP_COUNT, 10)
+        self.assertTrue(all(s['kind'] == 'none' for s in sequence['steps']))
 
     def test_three_steps_leave_seven_empty_slots(self):
-        rerack = self.example()
+        sequence = self.example()
 
-        self.assertEqual(len(self.reracks.filled_steps(rerack)), 3)
-        self.assertEqual(len(rerack['steps']), 10)
+        self.assertEqual(len(self.sequences.filled_steps(sequence)), 3)
+        self.assertEqual(len(sequence['steps']), 10)
 
     def test_more_than_ten_steps_are_trimmed(self):
-        rerack = self.reracks.make_rerack(
+        sequence = self.sequences.make_sequence(
             'Too many',
             [{'kind': 'scene', 'target': 'Warshade'}] * 14)
 
-        self.assertEqual(len(rerack['steps']), 10)
+        self.assertEqual(len(sequence['steps']), 10)
 
     def test_a_half_filled_step_becomes_empty_rather_than_broken(self):
         """A slot that looks filled but cannot run is worse than a blank one."""
@@ -610,18 +610,18 @@ class TestReracks(unittest.TestCase):
                     {'kind': 'power', 'target': 'AA:BB', 'action': 'sideways'},
                     {'kind': 'command', 'target': 'EE:FF', 'action': ''},
                     {'kind': 'scene', 'target': '   '}):
-            self.assertEqual(self.reracks.normalise_step(raw)['kind'], 'none',
+            self.assertEqual(self.sequences.normalise_step(raw)['kind'], 'none',
                              'accepted %r' % (raw,))
 
-    def test_a_rerack_with_no_name_is_not_a_rerack(self):
-        self.assertIsNone(self.reracks.normalise({'name': '  '}))
+    def test_a_sequence_with_no_name_is_not_a_sequence(self):
+        self.assertIsNone(self.sequences.normalise({'name': '  '}))
 
     # -- running -----------------------------------------------------------
 
     def test_the_example_runs_top_to_bottom_in_order(self):
         app = self.app()
 
-        done, errors = self.reracks.run(app, self.example())
+        done, errors = self.sequences.run(app, self.example())
 
         self.assertEqual((done, errors), (3, []))
         self.assertEqual(
@@ -632,16 +632,16 @@ class TestReracks(unittest.TestCase):
              ('command', 'EE:FF')])      # 3. Broadlink, bedroom, TV power
 
     def test_a_scene_step_applies_the_scene_to_whatever_the_scene_says(self):
-        """A rerack step runs a scene; it does not redefine one.
+        """A sequence step runs a scene; it does not redefine one.
 
         The scene here names one bulb, so the plug beside it is untouched --
-        the rerack's own step 2 is what switches that.
+        the sequence's own step 2 is what switches that.
         """
         app = self.app()
-        rerack = self.reracks.make_rerack(
+        sequence = self.sequences.make_sequence(
             'Just the scene', [{'kind': 'scene', 'target': 'Warshade'}])
 
-        self.reracks.run(app, rerack)
+        self.sequences.run(app, sequence)
 
         self.assertEqual(set(call[1] for call in self.recorder.calls),
                          set(['AA:BB']))
@@ -671,12 +671,12 @@ class TestReracks(unittest.TestCase):
                                             mode=scene_lib.MODE_COLOR,
                                             color=[80, 0, 120])]
 
-        rerack = self.reracks.make_rerack('Wind Down', [
+        sequence = self.sequences.make_sequence('Wind Down', [
             {'kind': 'scene', 'target': 'Warshade'},
             {'kind': 'power', 'driver': 'kasa', 'target': '8006ABC2',
              'action': 'on'},
         ])
-        self.reracks.run(app, rerack)
+        self.sequences.run(app, sequence)
 
         switched = set(call[1] for call in self.recorder.calls)
         self.assertEqual(switched, set(['AA:BB', '8006ABC2']))
@@ -694,7 +694,7 @@ class TestReracks(unittest.TestCase):
         app._scenes = [scene_lib.make_scene('All Off',
                                             power=scene_lib.POWER_OFF)]
 
-        self.reracks.run(app, self.reracks.make_rerack(
+        self.sequences.run(app, self.sequences.make_sequence(
             'Goodnight', [{'kind': 'scene', 'target': 'All Off'}]))
 
         self.assertIn('8006ABC1',
@@ -705,7 +705,7 @@ class TestReracks(unittest.TestCase):
         app = self.app()
         self.recorder.fail_on = set(['WP9ABC#ALL'])
 
-        done, errors = self.reracks.run(app, self.example())
+        done, errors = self.sequences.run(app, self.example())
 
         self.assertEqual(done, 2)
         self.assertEqual(len(errors), 1)
@@ -715,23 +715,23 @@ class TestReracks(unittest.TestCase):
 
     def test_a_step_pointing_at_nothing_says_so_and_carries_on(self):
         app = self.app()
-        rerack = self.reracks.make_rerack('Gone', [
+        sequence = self.sequences.make_sequence('Gone', [
             {'kind': 'power', 'driver': 'tuya', 'target': 'NOT:HERE',
              'action': 'on'},
             {'kind': 'scene', 'target': 'Warshade'},
         ])
 
-        done, errors = self.reracks.run(app, rerack)
+        done, errors = self.sequences.run(app, sequence)
 
         self.assertEqual(done, 1)
         self.assertIn('Nothing matches', errors[0])
 
     def test_a_missing_scene_is_reported_rather_than_silently_skipped(self):
         app = self.app()
-        rerack = self.reracks.make_rerack(
+        sequence = self.sequences.make_sequence(
             'Ghost', [{'kind': 'scene', 'target': 'No Such Scene'}])
 
-        done, errors = self.reracks.run(app, rerack)
+        done, errors = self.sequences.run(app, sequence)
 
         self.assertEqual(done, 0)
         self.assertIn('No scene called', errors[0])
@@ -740,26 +740,26 @@ class TestReracks(unittest.TestCase):
         """A television told to wake and change channel at once misses one."""
         app = self.app()
         slept = []
-        rerack = self.reracks.make_rerack('Slow', [
+        sequence = self.sequences.make_sequence('Slow', [
             {'kind': 'command', 'driver': 'broadlink', 'target': 'EE:FF',
              'action': 'TV power', 'pause': 4},
             {'kind': 'command', 'driver': 'broadlink', 'target': 'EE:FF',
              'action': 'Volume up'},
         ])
 
-        self.reracks.run(app, rerack, sleep_func=slept.append)
+        self.sequences.run(app, sequence, sleep_func=slept.append)
 
         self.assertEqual(slept, [4])
         self.assertEqual(len(self.recorder.calls), 2)
 
     def test_empty_slots_cost_nothing_and_are_skipped(self):
         app = self.app()
-        rerack = self.reracks.make_rerack('Sparse')
-        rerack['steps'][7] = {'kind': 'scene', 'target': 'Warshade',
+        sequence = self.sequences.make_sequence('Sparse')
+        sequence['steps'][7] = {'kind': 'scene', 'target': 'Warshade',
                               'pause': 0}
         slept = []
 
-        done, errors = self.reracks.run(app, rerack, sleep_func=slept.append)
+        done, errors = self.sequences.run(app, sequence, sleep_func=slept.append)
 
         self.assertEqual((done, errors), (1, []))
         self.assertEqual(slept, [])
@@ -768,32 +768,32 @@ class TestReracks(unittest.TestCase):
         app = self.app()
         app._devices.append(Device('WP9ABC#1', name='Outlet 1', driver='tuya',
                                    lan=True, native_id='wp9abc'))
-        rerack = self.reracks.make_rerack('Plugs off', [
+        sequence = self.sequences.make_sequence('Plugs off', [
             {'kind': 'power', 'driver': 'tuya',
-             'target': self.reracks.TARGET_ALL, 'action': 'off'}])
+             'target': self.sequences.TARGET_ALL, 'action': 'off'}])
 
-        self.reracks.run(app, rerack)
+        self.sequences.run(app, sequence)
 
         self.assertEqual([call[:2] for call in self.recorder.calls],
                          [('turn', 'WP9ABC#ALL'), ('turn', 'WP9ABC#1')])
 
     def test_a_renamed_device_is_still_found_by_id(self):
-        """Reracks refer to ids, so renaming a device does not break one."""
+        """Sequences refer to ids, so renaming a device does not break one."""
         app = self.app()
-        rerack = self.example()
+        sequence = self.example()
         app._devices[1].name = 'Something Else Entirely'
 
-        done, errors = self.reracks.run(app, rerack)
+        done, errors = self.sequences.run(app, sequence)
 
         self.assertEqual((done, errors), (3, []))
 
     def test_a_step_written_by_hand_can_name_a_device(self):
         app = self.app()
-        rerack = self.reracks.make_rerack('By name', [
+        sequence = self.sequences.make_sequence('By name', [
             {'kind': 'power', 'target': 'Office Plug All outlets',
              'action': 'on'}])
 
-        done, errors = self.reracks.run(app, rerack)
+        done, errors = self.sequences.run(app, sequence)
 
         self.assertEqual((done, errors), (1, []))
 
@@ -805,7 +805,7 @@ class TestReracks(unittest.TestCase):
             seen.append(index)
             return len(seen) <= 1
 
-        done, _errors = self.reracks.run(app, self.example(),
+        done, _errors = self.sequences.run(app, self.example(),
                                          on_step=stop_after_first)
 
         self.assertEqual(done, 1)
@@ -815,8 +815,8 @@ class TestReracks(unittest.TestCase):
     SATURDAY_6PM = datetime.datetime(2026, 8, 22, 18, 0)   # a Saturday
 
     def ignition(self):
-        """The rerack from the request: Saturday nights at six."""
-        return self.reracks.make_rerack('Ignition', [
+        """The sequence from the request: Saturday nights at six."""
+        return self.sequences.make_sequence('Ignition', [
             {'kind': 'scene', 'target': 'Warshade'}], time='6pm', days=[5])
 
     def test_a_time_is_read_however_it_is_typed(self):
@@ -825,94 +825,94 @@ class TestReracks(unittest.TestCase):
                                ('6 PM', '18:00'), ('6:30pm', '18:30'),
                                ('1800', '18:00'), ('0:05', '00:05'),
                                ('12am', '00:00'), ('12pm', '12:00')):
-            self.assertEqual(self.reracks.parse_time(text), expected,
+            self.assertEqual(self.sequences.parse_time(text), expected,
                              'could not read %r' % text)
 
     def test_something_that_is_not_a_time_is_refused(self):
         for text in ('24:00', '18:60', 'banana', '', None, '99'):
-            self.assertEqual(self.reracks.parse_time(text), '',
+            self.assertEqual(self.sequences.parse_time(text), '',
                              'accepted %r as a time' % (text,))
 
     def test_a_schedule_needs_both_a_time_and_days(self):
         """Either alone would be a schedule that can never come round."""
-        self.assertFalse(self.reracks.scheduled(
-            self.reracks.make_rerack('A', time='6pm')))
-        self.assertFalse(self.reracks.scheduled(
-            self.reracks.make_rerack('B', days=[5])))
-        self.assertTrue(self.reracks.scheduled(self.ignition()))
+        self.assertFalse(self.sequences.scheduled(
+            self.sequences.make_sequence('A', time='6pm')))
+        self.assertFalse(self.sequences.scheduled(
+            self.sequences.make_sequence('B', days=[5])))
+        self.assertTrue(self.sequences.scheduled(self.ignition()))
 
     def test_it_is_due_at_its_time_on_its_day(self):
-        self.assertTrue(self.reracks.due(self.ignition(), self.SATURDAY_6PM))
+        self.assertTrue(self.sequences.due(self.ignition(), self.SATURDAY_6PM))
 
     def test_it_is_not_due_before_its_time(self):
-        self.assertFalse(self.reracks.due(
+        self.assertFalse(self.sequences.due(
             self.ignition(), self.SATURDAY_6PM - datetime.timedelta(minutes=1)))
 
     def test_it_is_not_due_on_another_day(self):
         for offset in (1, 2, 3, 4, 5, 6):
             self.assertFalse(
-                self.reracks.due(self.ignition(),
+                self.sequences.due(self.ignition(),
                                  self.SATURDAY_6PM
                                  + datetime.timedelta(days=offset)),
                 'fired %d day(s) late' % offset)
 
     def test_a_few_minutes_late_still_counts(self):
         """Kodi is not always awake at the exact minute."""
-        self.assertTrue(self.reracks.due(
+        self.assertTrue(self.sequences.due(
             self.ignition(), self.SATURDAY_6PM + datetime.timedelta(minutes=4)))
 
     def test_an_hour_late_does_not(self):
-        """A rerack that lifts the lights at six should not do it at seven."""
-        self.assertFalse(self.reracks.due(
+        """A sequence that lifts the lights at six should not do it at seven."""
+        self.assertFalse(self.sequences.due(
             self.ignition(), self.SATURDAY_6PM + datetime.timedelta(hours=1)))
 
     def test_it_does_not_run_twice_in_the_same_day(self):
-        rerack = self.ignition()
-        already = self.reracks.stamp(rerack, self.SATURDAY_6PM)
+        sequence = self.ignition()
+        already = self.sequences.stamp(sequence, self.SATURDAY_6PM)
 
-        self.assertFalse(self.reracks.due(rerack, self.SATURDAY_6PM, already))
+        self.assertFalse(self.sequences.due(sequence, self.SATURDAY_6PM, already))
 
     def test_moving_the_time_later_the_same_day_lets_it_run_again(self):
         """The stamp holds the time as well as the date, on purpose."""
-        rerack = self.ignition()
-        already = self.reracks.stamp(rerack, self.SATURDAY_6PM)
-        rerack['time'] = '20:00'
+        sequence = self.ignition()
+        already = self.sequences.stamp(sequence, self.SATURDAY_6PM)
+        sequence['time'] = '20:00'
 
-        self.assertTrue(self.reracks.due(
-            rerack, self.SATURDAY_6PM.replace(hour=20), already))
+        self.assertTrue(self.sequences.due(
+            sequence, self.SATURDAY_6PM.replace(hour=20), already))
 
     def test_next_week_it_is_due_again(self):
-        rerack = self.ignition()
-        already = self.reracks.stamp(rerack, self.SATURDAY_6PM)
+        sequence = self.ignition()
+        already = self.sequences.stamp(sequence, self.SATURDAY_6PM)
 
-        self.assertTrue(self.reracks.due(
-            rerack, self.SATURDAY_6PM + datetime.timedelta(days=7), already))
+        self.assertTrue(self.sequences.due(
+            sequence, self.SATURDAY_6PM + datetime.timedelta(days=7), already))
 
     def test_the_schedule_reads_the_way_it_would_be_said(self):
-        self.assertEqual(self.reracks.describe_schedule(self.ignition()),
+        self.assertEqual(self.sequences.describe_schedule(self.ignition()),
                          'Sat at 18:00')
-        self.assertEqual(self.reracks.describe_schedule(
-            self.reracks.make_rerack('A', time='07:00',
+        self.assertEqual(self.sequences.describe_schedule(
+            self.sequences.make_sequence('A', time='07:00',
                                      days=[0, 1, 2, 3, 4])),
             'weekdays at 07:00')
-        self.assertEqual(self.reracks.describe_schedule(
-            self.reracks.make_rerack('B', time='09:00', days=[5, 6])),
+        self.assertEqual(self.sequences.describe_schedule(
+            self.sequences.make_sequence('B', time='09:00', days=[5, 6])),
             'weekends at 09:00')
-        self.assertEqual(self.reracks.describe_schedule(
-            self.reracks.make_rerack('C', time='23:00', days=list(range(7)))),
+        self.assertEqual(self.sequences.describe_schedule(
+            self.sequences.make_sequence('C', time='23:00', days=list(range(7)))),
             'every day at 23:00')
         self.assertEqual(
-            self.reracks.describe_schedule(self.reracks.make_rerack('D')),
+            self.sequences.describe_schedule(self.sequences.make_sequence('D')),
             'only when you run it')
 
     # -- firing ------------------------------------------------------------
 
-    def test_a_due_rerack_runs_and_is_not_run_again(self):
+    def test_a_due_sequence_runs_and_is_not_run_again(self):
         app = self.app()
-        app._reracks = [self.ignition()]
+        app._sequences = [self.ignition()]
 
-        first = app.run_due_reracks(now=self.SATURDAY_6PM)
-        second = app.run_due_reracks(
+        first = app.run_due_sequences(now=self.SATURDAY_6PM)
+        second = app.run_due_sequences(
             now=self.SATURDAY_6PM + datetime.timedelta(minutes=2))
 
         self.assertEqual(first, ['Ignition'])
@@ -921,148 +921,190 @@ class TestReracks(unittest.TestCase):
     def test_a_restart_does_not_re_run_what_already_ran(self):
         """The record is on disk, so it survives Kodi closing."""
         app = self.app()
-        app._reracks = [self.ignition()]
-        app.run_due_reracks(now=self.SATURDAY_6PM)
+        app._sequences = [self.ignition()]
+        app.run_due_sequences(now=self.SATURDAY_6PM)
 
         from paragon_home import ParagonHome
         again = ParagonHome()
         again.controller = self.recorder
-        again._reracks = [self.ignition()]
+        again._sequences = [self.ignition()]
 
         self.assertEqual(
-            again.run_due_reracks(
+            again.run_due_sequences(
                 now=self.SATURDAY_6PM + datetime.timedelta(minutes=1)),
             [])
 
     def test_it_is_marked_as_run_before_it_runs(self):
-        """A rerack that fails half way must not retry on every tick."""
+        """A sequence that fails half way must not retry on every tick."""
         app = self.app()
-        rerack = self.ignition()
-        rerack['steps'][1] = {'kind': 'scene', 'target': 'No Such Scene',
+        sequence = self.ignition()
+        sequence['steps'][1] = {'kind': 'scene', 'target': 'No Such Scene',
                               'pause': 0}
-        app._reracks = [rerack]
+        app._sequences = [sequence]
 
-        app.run_due_reracks(now=self.SATURDAY_6PM)
+        app.run_due_sequences(now=self.SATURDAY_6PM)
 
         self.assertEqual(
-            app.run_due_reracks(
+            app.run_due_sequences(
                 now=self.SATURDAY_6PM + datetime.timedelta(minutes=1)),
             [])
 
-    def test_an_unscheduled_rerack_never_fires_itself(self):
+    def test_an_unscheduled_sequence_never_fires_itself(self):
         app = self.app()
-        app._reracks = [self.reracks.make_rerack('Manual only', [
+        app._sequences = [self.sequences.make_sequence('Manual only', [
             {'kind': 'scene', 'target': 'Warshade'}])]
 
-        self.assertEqual(app.run_due_reracks(now=self.SATURDAY_6PM), [])
+        self.assertEqual(app.run_due_sequences(now=self.SATURDAY_6PM), [])
 
-    def test_two_reracks_due_at_once_both_run(self):
+    def test_two_sequences_due_at_once_both_run(self):
         app = self.app()
         other = self.ignition()
         other['name'] = 'Also Ignition'
-        app._reracks = [self.ignition(), other]
+        app._sequences = [self.ignition(), other]
 
-        self.assertEqual(sorted(app.run_due_reracks(now=self.SATURDAY_6PM)),
+        self.assertEqual(sorted(app.run_due_sequences(now=self.SATURDAY_6PM)),
                          ['Also Ignition', 'Ignition'])
 
-    def test_deleting_a_rerack_forgets_when_it_last_ran(self):
+    def test_deleting_a_sequence_forgets_when_it_last_ran(self):
         """Otherwise a new one of the same name inherits a day it never had."""
         app = self.app()
-        app.save_rerack(self.ignition())
-        app.run_due_reracks(now=self.SATURDAY_6PM)
-        app.delete_rerack({'name': 'Ignition'})
+        app.save_sequence(self.ignition())
+        app.run_due_sequences(now=self.SATURDAY_6PM)
+        app.delete_sequence({'name': 'Ignition'})
 
-        app.save_rerack(self.ignition())
-        self.assertEqual(app.run_due_reracks(now=self.SATURDAY_6PM),
+        app.save_sequence(self.ignition())
+        self.assertEqual(app.run_due_sequences(now=self.SATURDAY_6PM),
                          ['Ignition'])
 
     def test_a_schedule_survives_a_restart(self):
         app = self.app()
-        app.save_rerack(self.ignition())
+        app.save_sequence(self.ignition())
 
         from paragon_home import ParagonHome
-        saved = ParagonHome().rerack_by_name('Ignition')
+        saved = ParagonHome().sequence_by_name('Ignition')
 
         self.assertEqual(saved['time'], '18:00')
         self.assertEqual(saved['days'], [5])
 
     # -- persistence -------------------------------------------------------
 
-    def test_a_rerack_survives_a_restart(self):
+    def test_sequences_saved_as_reracks_are_carried_over(self):
+        """These were called reracks until v2.14, and were already in use."""
+        import addon_utils as utils
+        import sequences
+
+        utils.write_json('reracks.json', [
+            sequences.make_sequence('Ignition',
+                                    [{'kind': 'scene', 'target': 'Warshade'}],
+                                    time='6pm', days=[5])])
+
         app = self.app()
-        app.save_rerack(self.example())
+        carried = app.sequence_by_name('Ignition')
+
+        self.assertIsNotNone(carried)
+        self.assertEqual(carried['time'], '18:00')
+        self.assertEqual(len(carried['steps']), 10)
+        # Written out under the new name, so the old file is read only once.
+        self.assertIsNotNone(utils.read_json('sequences.json', default=None))
+
+    def test_when_it_last_ran_is_carried_over_too(self):
+        """Otherwise the rename would re-run everything that ran today."""
+        import addon_utils as utils
+        import sequences
+
+        utils.write_json('reracks.json', [
+            sequences.make_sequence('Ignition',
+                                    [{'kind': 'scene', 'target': 'Warshade'}],
+                                    time='6pm', days=[5])])
+        utils.write_json('rerack_state.json',
+                         {'Ignition': '2026-08-22 18:00'})
+
+        app = self.app()
+
+        self.assertEqual(
+            app.run_due_sequences(now=datetime.datetime(2026, 8, 22, 18, 0)),
+            [])
+
+    def test_a_new_install_does_not_look_for_the_old_file(self):
+        app = self.app()
+
+        self.assertEqual(app.sequences, [])
+
+    def test_a_sequence_survives_a_restart(self):
+        app = self.app()
+        app.save_sequence(self.example())
 
         from paragon_home import ParagonHome
         again = ParagonHome()
 
-        saved = again.rerack_by_name('Wind Down')
+        saved = again.sequence_by_name('Wind Down')
         self.assertIsNotNone(saved)
         self.assertEqual(len(saved['steps']), 10)
         self.assertEqual(saved['steps'][0]['target'], 'Warshade')
 
     def test_saving_the_same_name_replaces_rather_than_duplicates(self):
         app = self.app()
-        app.save_rerack(self.example())
-        app.save_rerack(self.reracks.make_rerack(
+        app.save_sequence(self.example())
+        app.save_sequence(self.sequences.make_sequence(
             'Wind Down', [{'kind': 'scene', 'target': 'Warshade'}]))
 
-        self.assertEqual(len(app.reracks), 1)
-        self.assertEqual(len(self.reracks.filled_steps(app.reracks[0])), 1)
+        self.assertEqual(len(app.sequences), 1)
+        self.assertEqual(len(self.sequences.filled_steps(app.sequences[0])), 1)
 
-    def test_a_rerack_is_found_however_its_name_is_typed(self):
+    def test_a_sequence_is_found_however_its_name_is_typed(self):
         app = self.app()
-        app.save_rerack(self.example())
+        app.save_sequence(self.example())
 
-        self.assertIsNotNone(app.rerack_by_name('  wind DOWN '))
+        self.assertIsNotNone(app.sequence_by_name('  wind DOWN '))
 
     def test_deleting_one_leaves_the_others(self):
         app = self.app()
-        app.save_rerack(self.example())
-        app.save_rerack(self.reracks.make_rerack('Other'))
+        app.save_sequence(self.example())
+        app.save_sequence(self.sequences.make_sequence('Other'))
 
-        self.assertTrue(app.delete_rerack({'name': 'Other'}))
-        self.assertEqual([r['name'] for r in app.reracks], ['Wind Down'])
+        self.assertTrue(app.delete_sequence({'name': 'Other'}))
+        self.assertEqual([r['name'] for r in app.sequences], ['Wind Down'])
 
-    def test_a_fresh_install_has_no_reracks_rather_than_invented_ones(self):
-        """A starter rerack would be ten slots pointing at nobody's devices."""
-        self.assertEqual(self.app().reracks, [])
+    def test_a_fresh_install_has_no_sequences_rather_than_invented_ones(self):
+        """A starter sequence would be ten slots pointing at nobody's devices."""
+        self.assertEqual(self.app().sequences, [])
 
     def test_run_by_name_reports_a_name_that_is_not_there(self):
         app = self.app()
 
-        self.assertFalse(app.run_rerack_by_name('Nothing', announce=False))
+        self.assertFalse(app.run_sequence_by_name('Nothing', announce=False))
 
     # -- how it reads ------------------------------------------------------
 
     def test_the_summary_keeps_the_names_as_they_were_typed(self):
-        self.assertEqual(self.reracks.describe(self.example()),
+        self.assertEqual(self.sequences.describe(self.example()),
                          '3 steps, first: Scene: Warshade')
 
     def test_a_step_reads_back_in_the_order_it_was_chosen(self):
-        rerack = self.example()
+        sequence = self.example()
 
         self.assertEqual(
-            [self.reracks.describe_step(s) for s in rerack['steps'][:3]],
+            [self.sequences.describe_step(s) for s in sequence['steps'][:3]],
             ['Scene: Warshade', 'WP9ABC#ALL: On', 'EE:FF: TV power'])
 
     def test_a_pause_is_shown_on_the_step_it_follows(self):
-        step = self.reracks.normalise_step(
+        step = self.sequences.normalise_step(
             {'kind': 'scene', 'target': 'Warshade', 'pause': 30})
 
-        self.assertEqual(self.reracks.describe_step(step),
+        self.assertEqual(self.sequences.describe_step(step),
                          'Scene: Warshade  (+30s)')
 
     def test_an_all_target_reads_as_all_of_them(self):
-        step = self.reracks.normalise_step(
+        step = self.sequences.normalise_step(
             {'kind': 'power', 'driver': 'tuya',
-             'target': self.reracks.TARGET_ALL, 'action': 'off'})
+             'target': self.sequences.TARGET_ALL, 'action': 'off'})
 
-        self.assertEqual(self.reracks.describe_step(step),
+        self.assertEqual(self.sequences.describe_step(step),
                          'all tuya devices: Off')
 
 
 class TestParagonTV(unittest.TestCase):
-    """Reading Paragon TV's own Rerack schedule, exactly as it reads it."""
+    """Reading Paragon TV's own Sequence schedule, exactly as it reads it."""
 
     SATURDAY = datetime.datetime(2026, 8, 22, 18, 0)
     THURSDAY = datetime.datetime(2026, 8, 20, 18, 0)
@@ -1070,7 +1112,7 @@ class TestParagonTV(unittest.TestCase):
     def setUp(self):
         clean_profile()
         xbmcaddon.reset()
-        for name in ('addon_utils', 'paragon_home', 'paragon_tv', 'reracks'):
+        for name in ('addon_utils', 'paragon_home', 'paragon_tv', 'sequences'):
             if name in sys.modules:
                 del sys.modules[name]
 
@@ -1156,7 +1198,7 @@ class TestParagonTV(unittest.TestCase):
         tv = self.install_tv(SaturdayPreset='0')
         self.assertIn('no preset scheduled', tv.status(self.SATURDAY))
 
-    # -- a rerack following a phase ----------------------------------------
+    # -- a sequence following a phase ----------------------------------------
 
     def app(self, tv=None):
         from paragon_home import ParagonHome
@@ -1171,110 +1213,110 @@ class TestParagonTV(unittest.TestCase):
         return app
 
     def following(self, phase):
-        import reracks
+        import sequences
 
-        return reracks.make_rerack(
+        return sequences.make_sequence(
             'Curtain Up', [{'kind': 'scene', 'target': 'Warshade'}],
             phase=phase)
 
-    def test_a_rerack_can_hang_off_a_phase_instead_of_a_clock(self):
+    def test_a_sequence_can_hang_off_a_phase_instead_of_a_clock(self):
         self.install_tv()
         app = self.app()
-        app._reracks = [self.following(2)]
+        app._sequences = [self.following(2)]
 
         # Alpha's phase 2 is 07:00, and today is a Saturday, which is Alpha.
         at_seven = self.SATURDAY.replace(hour=7, minute=0)
 
-        self.assertEqual(app.run_due_reracks(now=at_seven), ['Curtain Up'])
+        self.assertEqual(app.run_due_sequences(now=at_seven), ['Curtain Up'])
 
     def test_it_does_not_run_at_another_phases_time(self):
         self.install_tv()
         app = self.app()
-        app._reracks = [self.following(2)]
+        app._sequences = [self.following(2)]
 
         self.assertEqual(
-            app.run_due_reracks(now=self.SATURDAY.replace(hour=23, minute=30)),
+            app.run_due_sequences(now=self.SATURDAY.replace(hour=23, minute=30)),
             [])
 
     def test_it_follows_today_preset_rather_than_a_fixed_time(self):
-        """The same rerack runs at a different hour on a different day."""
+        """The same sequence runs at a different hour on a different day."""
         self.install_tv()
         app = self.app()
-        app._reracks = [self.following(2)]
+        app._sequences = [self.following(2)]
 
         # Thursday is Sigma, whose phase 2 is 08:00 rather than 07:00.
         self.assertEqual(
-            app.run_due_reracks(now=self.THURSDAY.replace(hour=7)), [])
+            app.run_due_sequences(now=self.THURSDAY.replace(hour=7)), [])
         self.assertEqual(
-            app.run_due_reracks(now=self.THURSDAY.replace(hour=8)),
+            app.run_due_sequences(now=self.THURSDAY.replace(hour=8)),
             ['Curtain Up'])
 
     def test_it_does_not_run_on_a_day_with_no_preset(self):
         self.install_tv(SaturdayPreset='0')
         app = self.app()
-        app._reracks = [self.following(2)]
+        app._sequences = [self.following(2)]
 
         self.assertEqual(
-            app.run_due_reracks(now=self.SATURDAY.replace(hour=7)), [])
+            app.run_due_sequences(now=self.SATURDAY.replace(hour=7)), [])
 
     def test_it_does_not_run_when_paragon_tv_is_switched_off(self):
         """Paragon TV's own master switch governs this too."""
         self.install_tv(EnablePresetSystem='false')
         app = self.app()
-        app._reracks = [self.following(2)]
+        app._sequences = [self.following(2)]
 
         self.assertEqual(
-            app.run_due_reracks(now=self.SATURDAY.replace(hour=7)), [])
+            app.run_due_sequences(now=self.SATURDAY.replace(hour=7)), [])
 
     def test_it_does_nothing_at_all_without_paragon_tv(self):
         app = self.app()
-        app._reracks = [self.following(2)]
+        app._sequences = [self.following(2)]
 
         self.assertEqual(
-            app.run_due_reracks(now=self.SATURDAY.replace(hour=7)), [])
+            app.run_due_sequences(now=self.SATURDAY.replace(hour=7)), [])
 
     def test_a_phase_a_satellite_preset_lacks_simply_never_comes_round(self):
         self.install_tv()
         app = self.app()
-        app._reracks = [self.following(1)]      # maintenance
+        app._sequences = [self.following(1)]      # maintenance
 
         # Thursday is Sigma, which has no phase 1.
         self.assertEqual(
-            app.run_due_reracks(now=self.THURSDAY.replace(hour=4)), [])
+            app.run_due_sequences(now=self.THURSDAY.replace(hour=4)), [])
         # Saturday is Alpha, which does.
         self.assertEqual(
-            app.run_due_reracks(now=self.SATURDAY.replace(hour=4)),
+            app.run_due_sequences(now=self.SATURDAY.replace(hour=4)),
             ['Curtain Up'])
 
     def test_it_still_runs_only_once_a_day(self):
         self.install_tv()
         app = self.app()
-        app._reracks = [self.following(2)]
+        app._sequences = [self.following(2)]
         at_seven = self.SATURDAY.replace(hour=7)
 
-        app.run_due_reracks(now=at_seven)
+        app.run_due_sequences(now=at_seven)
 
         self.assertEqual(
-            app.run_due_reracks(now=at_seven + datetime.timedelta(minutes=2)),
+            app.run_due_sequences(now=at_seven + datetime.timedelta(minutes=2)),
             [])
 
-    def test_moving_a_phase_time_re_arms_the_rerack(self):
+    def test_moving_a_phase_time_re_arms_the_sequence(self):
         """The record holds the time, so a phase that moved counts as new."""
         tv = self.install_tv()
         app = self.app()
-        app._reracks = [self.following(2)]
-        app.run_due_reracks(now=self.SATURDAY.replace(hour=7))
+        app._sequences = [self.following(2)]
+        app.run_due_sequences(now=self.SATURDAY.replace(hour=7))
 
         xbmcaddon.FOREIGN['script.paragontv']['AlphaPhase2Time'] = '09:00'
 
         self.assertEqual(
-            app.run_due_reracks(now=self.SATURDAY.replace(hour=9)),
+            app.run_due_sequences(now=self.SATURDAY.replace(hour=9)),
             ['Curtain Up'])
 
     def test_following_a_phase_reads_as_such(self):
-        import reracks
+        import sequences
 
-        self.assertEqual(reracks.describe_schedule(self.following(3)),
+        self.assertEqual(sequences.describe_schedule(self.following(3)),
                          'Paragon TV phase 3 (shut down)')
 
     def test_paragon_tv_settings_are_never_written_to(self):
@@ -1282,9 +1324,9 @@ class TestParagonTV(unittest.TestCase):
         tv = self.install_tv()
         before = dict(xbmcaddon.FOREIGN['script.paragontv'])
         app = self.app()
-        app._reracks = [self.following(2)]
+        app._sequences = [self.following(2)]
 
-        app.run_due_reracks(now=self.SATURDAY.replace(hour=7))
+        app.run_due_sequences(now=self.SATURDAY.replace(hour=7))
 
         self.assertEqual(xbmcaddon.FOREIGN['script.paragontv'], before)
 
@@ -6704,7 +6746,7 @@ class TestControlPanel(unittest.TestCase):
         self.assertIn('Test connection', labels)
         self.assertNotIn('Identify (flash this light)', labels)
 
-    def _rerack_app(self):
+    def _sequence_app(self):
         by_driver = {'govee': ['power', 'brightness', 'color', 'color_temp',
                                'state'],
                      'tuya': ['power', 'state'],
@@ -6722,50 +6764,50 @@ class TestControlPanel(unittest.TestCase):
         self.app._scenes = [scene_lib.make_scene('Warshade',
                                                  targets=['AA:BB'])]
 
-    def test_the_main_menu_offers_reracks(self):
-        _row, labels = menu_row(self.panel().main_menu, 'Reracks')
+    def test_the_main_menu_offers_sequences(self):
+        _row, labels = menu_row(self.panel().main_menu, 'Sequences')
 
-        self.assertIn('Reracks...', labels)
+        self.assertIn('Sequences...', labels)
 
-    def test_a_rerack_is_built_through_three_choices_per_step(self):
+    def test_a_sequence_is_built_through_three_choices_per_step(self):
         """Driver, then which one, then what it does -- as spoken aloud."""
-        import reracks as rerack_lib
+        import sequences as sequence_lib
 
-        self._rerack_app()
-        self.app._reracks = [rerack_lib.make_rerack('Wind Down')]
+        self._sequence_app()
+        self.app._sequences = [sequence_lib.make_sequence('Wind Down')]
         panel = self.panel()
 
         # Step 1 -- Scene, Warshade.
-        kinds = menu_row(lambda: panel.edit_step(self.app.reracks[0], 0),
+        kinds = menu_row(lambda: panel.edit_step(self.app.sequences[0], 0),
                          'Scene')[1]
         xbmcgui.SELECT_QUEUE.extend([kinds.index('Scene'), 0])
-        panel.edit_step(self.app.reracks[0], 0)
+        panel.edit_step(self.app.sequences[0], 0)
 
         # Step 2 -- Tuya, the plug, On.
         xbmcgui.reset()
         xbmcgui.SELECT_QUEUE.extend([kinds.index('Tuya'), 1, 0])
-        panel.edit_step(self.app.reracks[0], 1)
+        panel.edit_step(self.app.sequences[0], 1)
 
         # Step 3 -- Broadlink, the blaster, TV power.
         xbmcgui.reset()
         xbmcgui.SELECT_QUEUE.extend([kinds.index('Broadlink'), 1, 0])
-        panel.edit_step(self.app.reracks[0], 2)
+        panel.edit_step(self.app.sequences[0], 2)
 
-        steps = self.app.reracks[0]['steps']
+        steps = self.app.sequences[0]['steps']
         self.assertEqual(
-            [rerack_lib.describe_step(s) for s in steps[:3]],
+            [sequence_lib.describe_step(s) for s in steps[:3]],
             ['Scene: Warshade', 'WP9ABC#ALL: On', 'EE:FF: TV power'])
         self.assertEqual(steps[2]['kind'], 'command')
 
     def test_the_editor_shows_all_ten_slots_including_the_empty_ones(self):
-        import reracks as rerack_lib
+        import sequences as sequence_lib
 
-        self._rerack_app()
-        rerack = rerack_lib.make_rerack('Wind Down', [
+        self._sequence_app()
+        sequence = sequence_lib.make_sequence('Wind Down', [
             {'kind': 'scene', 'target': 'Warshade'}])
-        self.app._reracks = [rerack]
+        self.app._sequences = [sequence]
 
-        _row, labels = menu_row(lambda: self.panel().edit_rerack(rerack),
+        _row, labels = menu_row(lambda: self.panel().edit_sequence(sequence),
                                 ' 1.')
 
         slots = [l for l in labels if l[:3].strip().rstrip('.').isdigit()]
@@ -6774,52 +6816,52 @@ class TestControlPanel(unittest.TestCase):
         self.assertIn('Empty', slots[1])
 
     def test_clearing_a_step_empties_that_slot_and_no_other(self):
-        import reracks as rerack_lib
+        import sequences as sequence_lib
 
-        self._rerack_app()
-        rerack = rerack_lib.make_rerack('Wind Down', [
+        self._sequence_app()
+        sequence = sequence_lib.make_sequence('Wind Down', [
             {'kind': 'scene', 'target': 'Warshade'},
             {'kind': 'power', 'driver': 'tuya', 'target': 'WP9ABC#ALL',
              'action': 'on'}])
-        self.app._reracks = [rerack]
+        self.app._sequences = [sequence]
         panel = self.panel()
 
-        kinds = menu_row(lambda: panel.edit_step(rerack, 0), 'Scene')[1]
+        kinds = menu_row(lambda: panel.edit_step(sequence, 0), 'Scene')[1]
         xbmcgui.SELECT_QUEUE.extend([kinds.index('Clear this step')])
-        panel.edit_step(rerack, 0)
+        panel.edit_step(sequence, 0)
 
-        self.assertEqual(rerack['steps'][0]['kind'], 'none')
-        self.assertEqual(rerack['steps'][1]['action'], 'on')
+        self.assertEqual(sequence['steps'][0]['kind'], 'none')
+        self.assertEqual(sequence['steps'][1]['action'], 'on')
 
     def test_a_pause_survives_the_step_being_changed(self):
         """The gap belongs to the slot, not to what happens to be in it."""
-        import reracks as rerack_lib
+        import sequences as sequence_lib
 
-        self._rerack_app()
-        rerack = rerack_lib.make_rerack('Wind Down', [
+        self._sequence_app()
+        sequence = sequence_lib.make_sequence('Wind Down', [
             {'kind': 'scene', 'target': 'Warshade', 'pause': 12}])
-        self.app._reracks = [rerack]
+        self.app._sequences = [sequence]
         panel = self.panel()
 
-        kinds = menu_row(lambda: panel.edit_step(rerack, 0), 'Scene')[1]
+        kinds = menu_row(lambda: panel.edit_step(sequence, 0), 'Scene')[1]
         xbmcgui.SELECT_QUEUE.extend([kinds.index('Tuya'), 1, 1])
-        panel.edit_step(rerack, 0)
+        panel.edit_step(sequence, 0)
 
-        self.assertEqual(rerack['steps'][0]['action'], 'off')
-        self.assertEqual(rerack['steps'][0]['pause'], 12)
+        self.assertEqual(sequence['steps'][0]['action'], 'off')
+        self.assertEqual(sequence['steps'][0]['pause'], 12)
 
-    def test_a_new_rerack_will_not_take_a_name_already_used(self):
-        import reracks as rerack_lib
+    def test_a_new_sequence_will_not_take_a_name_already_used(self):
+        import sequences as sequence_lib
 
-        self._rerack_app()
-        self.app._reracks = [rerack_lib.make_rerack('Wind Down')]
+        self._sequence_app()
+        self.app._sequences = [sequence_lib.make_sequence('Wind Down')]
 
         xbmcgui.INPUT_QUEUE.append('wind down')
         xbmcgui.SELECT_QUEUE.extend([-1])
-        self.panel().new_rerack()
+        self.panel().new_sequence()
 
-        self.assertEqual(len(self.app.reracks), 1)
-        self.assertIn('already a rerack', xbmcgui.OK_DIALOGS[-1][1])
+        self.assertEqual(len(self.app.sequences), 1)
+        self.assertIn('already a sequence', xbmcgui.OK_DIALOGS[-1][1])
 
     def test_the_scene_editor_says_which_all_it_means(self):
         """"All lights" was the old wording and stopped being true."""

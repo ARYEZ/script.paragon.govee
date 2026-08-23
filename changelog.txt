@@ -1,3 +1,14 @@
+v2.14.0
+- Reracks are now called sequences. The name is wanted for the layer above:
+  a rerack becomes a named preset holding nine phases, each of which can point
+  at a sequence, so one sequence can be used at several points in a day.
+- Sequences you had already built are carried over automatically, along with
+  the record of when each last ran -- otherwise the rename would have re-run
+  everything that had already gone today.
+- RunScript(script.paragon.govee,action=rerack,...) still works. It is what
+  this was called until now, and a keymap holding one should not stop working
+  over a rename.
+
 v2.13.0
 - A rerack can now follow Paragon TV. Paragon TV has a Rerack of its own -- a
   nine-phase preset macro system with one preset per day -- and a rerack here

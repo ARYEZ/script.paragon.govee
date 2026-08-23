@@ -17,7 +17,7 @@ import time
 
 import addon_utils as utils
 import palette as palette_lib
-import reracks as rerack_lib
+import sequences as sequence_lib
 import scenes as scene_lib
 from devices import (DEVICE_CACHE, Device, TRANSPORT_AUTO, TRANSPORT_CLOUD,
                      TRANSPORT_LAN, build_hub)
@@ -49,8 +49,8 @@ class ParagonHome(object):
         self.controller = build_hub(settings)
         self._devices = None
         self._scenes = None
-        self._reracks = None
-        self._rerack_state = None
+        self._sequences = None
+        self._sequence_state = None
         self._palette = None
         # How many known lights failed to answer the last refresh, so the
         # control panel can say so rather than silently showing a short list.
@@ -557,95 +557,110 @@ class ParagonHome(object):
             return False
         return self.apply_scene(scene, announce=announce)
 
-    # -- reracks -----------------------------------------------------------
+    # -- sequences -----------------------------------------------------------
 
     @property
-    def reracks(self):
-        """The saved reracks. Empty on a fresh install rather than seeded.
+    def sequences(self):
+        """The saved sequences. Empty on a fresh install rather than seeded.
 
-        Unlike scenes, there is no sensible starter set: a rerack refers to
+        Unlike scenes, there is no sensible starter set: a sequence refers to
         this house's own devices by name, and an invented one would be ten
         slots pointing at nothing.
         """
-        if self._reracks is None:
-            raw = utils.read_json(rerack_lib.RERACK_FILE, default=None)
-            self._reracks = rerack_lib.normalise_all(raw or [])
-        return self._reracks
+        if self._sequences is None:
+            raw = utils.read_json(sequence_lib.SEQUENCE_FILE, default=None)
+            if raw is None:
+                # These were called reracks until v2.14. Read the old file
+                # once and write the new one, so the rename costs nobody the
+                # sequences they had already built.
+                raw = utils.read_json(sequence_lib.LEGACY_FILE, default=None)
+                if raw:
+                    utils.log('Carrying %d sequence(s) over from %s'
+                              % (len(raw), sequence_lib.LEGACY_FILE))
+                    self._sequences = sequence_lib.normalise_all(raw)
+                    self.save_sequences()
+                    return self._sequences
+            self._sequences = sequence_lib.normalise_all(raw or [])
+        return self._sequences
 
-    def save_reracks(self):
-        utils.write_json(rerack_lib.RERACK_FILE, self.reracks)
+    def save_sequences(self):
+        utils.write_json(sequence_lib.SEQUENCE_FILE, self.sequences)
 
-    def rerack_by_name(self, name):
-        return rerack_lib.find(self.reracks, name)
+    def sequence_by_name(self, name):
+        return sequence_lib.find(self.sequences, name)
 
-    def save_rerack(self, rerack):
-        """Add or replace a rerack by name. Returns the cleaned rerack."""
-        cleaned = rerack_lib.normalise(rerack)
+    def save_sequence(self, sequence):
+        """Add or replace a sequence by name. Returns the cleaned sequence."""
+        cleaned = sequence_lib.normalise(sequence)
         if cleaned is None:
             return None
-        existing = rerack_lib.find(self.reracks, cleaned['name'])
+        existing = sequence_lib.find(self.sequences, cleaned['name'])
         if existing is not None:
-            self._reracks[self._reracks.index(existing)] = cleaned
+            self._sequences[self._sequences.index(existing)] = cleaned
         else:
-            self._reracks.append(cleaned)
-        self.save_reracks()
+            self._sequences.append(cleaned)
+        self.save_sequences()
         return cleaned
 
-    def delete_rerack(self, rerack):
-        existing = rerack_lib.find(self.reracks, rerack.get('name'))
+    def delete_sequence(self, sequence):
+        existing = sequence_lib.find(self.sequences, sequence.get('name'))
         if existing is None:
             return False
-        self._reracks.remove(existing)
-        self.save_reracks()
-        if self.rerack_state.pop(existing['name'], None) is not None:
-            # Otherwise a new rerack given the same name would inherit a
+        self._sequences.remove(existing)
+        self.save_sequences()
+        if self.sequence_state.pop(existing['name'], None) is not None:
+            # Otherwise a new sequence given the same name would inherit a
             # "already ran today" it never earned.
-            self.save_rerack_state()
+            self.save_sequence_state()
         return True
 
-    def run_rerack(self, rerack, announce=True, sleep_func=None,
+    def run_sequence(self, sequence, announce=True, sleep_func=None,
                    on_step=None):
-        """Run a rerack and report the outcome. Returns True if any step ran."""
-        done, errors = rerack_lib.run(self, rerack, log_func=utils.log,
+        """Run a sequence and report the outcome. Returns True if any step ran."""
+        done, errors = sequence_lib.run(self, sequence, log_func=utils.log,
                                       sleep_func=sleep_func, on_step=on_step)
         if announce:
             if done and not errors:
                 utils.notify('%s: %d step(s) done'
-                             % (rerack.get('name'), done))
+                             % (sequence.get('name'), done))
             elif done:
                 utils.force_notify('%s: %d done, %d failed'
-                                   % (rerack.get('name'), done, len(errors)))
+                                   % (sequence.get('name'), done, len(errors)))
             elif errors:
                 utils.force_notify(errors[0])
             else:
                 utils.force_notify('%s has no steps yet'
-                                   % rerack.get('name'))
+                                   % sequence.get('name'))
         return done > 0
 
-    # -- scheduled reracks -------------------------------------------------
+    # -- scheduled sequences -------------------------------------------------
 
     @property
-    def rerack_state(self):
-        """When each rerack last ran, so a restart does not re-run it."""
-        if self._rerack_state is None:
-            raw = utils.read_json(rerack_lib.RERACK_STATE_FILE, default={})
-            self._rerack_state = raw if isinstance(raw, dict) else {}
-        return self._rerack_state
+    def sequence_state(self):
+        """When each sequence last ran, so a restart does not re-run it."""
+        if self._sequence_state is None:
+            raw = utils.read_json(sequence_lib.SEQUENCE_STATE_FILE,
+                                  default=None)
+            if raw is None:
+                raw = utils.read_json(sequence_lib.LEGACY_STATE_FILE,
+                                      default={})
+            self._sequence_state = raw if isinstance(raw, dict) else {}
+        return self._sequence_state
 
-    def save_rerack_state(self):
-        utils.write_json(rerack_lib.RERACK_STATE_FILE, self.rerack_state)
+    def save_sequence_state(self):
+        utils.write_json(sequence_lib.SEQUENCE_STATE_FILE, self.sequence_state)
 
-    def resolved_schedule(self, rerack, now):
-        """The (time, days) a rerack really runs on.
+    def resolved_schedule(self, sequence, now):
+        """The (time, days) a sequence really runs on.
 
-        A rerack following Paragon TV has no time or days of its own: Paragon
+        A sequence following Paragon TV has no time or days of its own: Paragon
         TV's weekly table decides whether today has a preset at all, and that
         preset decides when the phase falls. Resolving it here rather than
-        inside the rerack engine keeps that engine free of any knowledge of
+        inside the sequence engine keeps that engine free of any knowledge of
         another add-on.
         """
-        if not rerack_lib.follows_tv(rerack):
-            return rerack_lib.own_schedule(rerack)
+        if not sequence_lib.follows_tv(sequence):
+            return sequence_lib.own_schedule(sequence)
 
         import paragon_tv
 
@@ -654,53 +669,53 @@ class ParagonHome(object):
         preset = paragon_tv.todays_preset(now)
         if not preset:
             return '', []
-        at_time = paragon_tv.phase_time(preset, rerack['phase'])
+        at_time = paragon_tv.phase_time(preset, sequence['phase'])
         if not at_time:
             return '', []
         return at_time, [now.weekday()]
 
-    def due_reracks(self, now=None):
-        """The reracks whose time has come and that have not run yet today."""
-        moment = now or rerack_lib.now()
-        state = self.rerack_state
+    def due_sequences(self, now=None):
+        """The sequences whose time has come and that have not run yet today."""
+        moment = now or sequence_lib.now()
+        state = self.sequence_state
         due = []
-        for rerack in self.reracks:
-            schedule = self.resolved_schedule(rerack, moment)
-            if rerack_lib.due(rerack, moment, state.get(rerack['name'], ''),
+        for sequence in self.sequences:
+            schedule = self.resolved_schedule(sequence, moment)
+            if sequence_lib.due(sequence, moment, state.get(sequence['name'], ''),
                               schedule=schedule):
-                due.append((rerack, schedule[0]))
+                due.append((sequence, schedule[0]))
         return due
 
-    def run_due_reracks(self, now=None, sleep_func=None, on_step=None):
-        """Run whatever is due. Returns the names of the reracks that ran.
+    def run_due_sequences(self, now=None, sleep_func=None, on_step=None):
+        """Run whatever is due. Returns the names of the sequences that ran.
 
-        Each is marked as run *before* it runs, not after. A rerack can hold
+        Each is marked as run *before* it runs, not after. A sequence can hold
         pauses adding up to minutes, and if something went wrong half way
         through, marking it afterwards would leave it due on the next tick and
-        every tick after that -- a failing rerack retrying in a loop is worse
+        every tick after that -- a failing sequence retrying in a loop is worse
         than one that failed once.
         """
-        moment = now or rerack_lib.now()
+        moment = now or sequence_lib.now()
         ran = []
-        for rerack, at_time in self.due_reracks(moment):
-            self.rerack_state[rerack['name']] = rerack_lib.stamp(
-                rerack, moment, at_time)
-            self.save_rerack_state()
-            utils.log('Rerack "%s" is due (%s)'
-                      % (rerack['name'], rerack_lib.describe_schedule(rerack)))
-            self.run_rerack(rerack, announce=True, sleep_func=sleep_func,
+        for sequence, at_time in self.due_sequences(moment):
+            self.sequence_state[sequence['name']] = sequence_lib.stamp(
+                sequence, moment, at_time)
+            self.save_sequence_state()
+            utils.log('Sequence "%s" is due (%s)'
+                      % (sequence['name'], sequence_lib.describe_schedule(sequence)))
+            self.run_sequence(sequence, announce=True, sleep_func=sleep_func,
                             on_step=on_step)
-            ran.append(rerack['name'])
+            ran.append(sequence['name'])
         return ran
 
-    def run_rerack_by_name(self, name, announce=True):
-        rerack = self.rerack_by_name(name)
-        if rerack is None:
-            utils.log('No rerack named "%s"' % name)
+    def run_sequence_by_name(self, name, announce=True):
+        sequence = self.sequence_by_name(name)
+        if sequence is None:
+            utils.log('No sequence named "%s"' % name)
             if announce:
-                utils.force_notify('No rerack named "%s"' % name)
+                utils.force_notify('No sequence named "%s"' % name)
             return False
-        return self.run_rerack(rerack, announce=announce)
+        return self.run_sequence(sequence, announce=announce)
 
     # -- bulk actions ------------------------------------------------------
 

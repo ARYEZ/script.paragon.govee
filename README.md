@@ -399,11 +399,11 @@ Example `keymaps/govee.xml` in your Kodi userdata:
 
 ---
 
-## Reracks
+## Sequences
 
-A **rerack** is ten ordered steps run as one. Named after the Paragon TV
+A **sequence** is ten ordered steps run as one. Named after the Paragon TV
 preset macro system, and shaped like it on purpose: a fixed number of numbered
-slots rather than a list you grow, so a rerack has the same shape every time
+slots rather than a list you grow, so a sequence has the same shape every time
 you open it and slot 4 is always slot 4. Empty slots are normal.
 
 A step is three choices, in the order you would say them aloud — what kind of
@@ -427,11 +427,11 @@ same breath will miss the second command, because it is still waking up.
 unplugged is no reason to leave the rest of the room untouched — every failure
 is collected and reported together at the end.
 
-Reracks live under **Reracks...** on the first screen, and each one is also a
+Sequences live under **Sequences...** on the first screen, and each one is also a
 `RunScript()` target:
 
 ```
-RunScript(script.paragon.govee,action=rerack,name=Wind Down)
+RunScript(script.paragon.govee,action=sequence,name=Wind Down)
 ```
 
 ### Commands a scene sends
@@ -452,7 +452,7 @@ that have a colour, so it reaches the bulbs and leaves the plugs alone. A
 scene that only says "off" reaches everything, because off is something a plug
 can be.
 
-This matters most inside a rerack. Before it was true, a rerack whose first
+This matters most inside a sequence. Before it was true, a sequence whose first
 step applied a colour scene switched every plug in the house as a side effect
 of the power setting that came with the colour — and any plug step beside it
 appeared to be switching far more than it had been asked to.
@@ -462,7 +462,7 @@ list. Named targets are honoured exactly.
 
 ### Running one on a schedule
 
-**Runs:** in the rerack editor gives it a time and the days it applies to:
+**Runs:** in the sequence editor gives it a time and the days it applies to:
 
 ```
 Ignition - when it runs
@@ -484,9 +484,9 @@ rules govern when:
 
 * **Once per day.** Recorded on disk, so restarting Kodi does not re-run it.
 * **A few minutes late still counts.** Kodi is not always awake at the exact
-  minute — it may be starting up. An hour late does not: a rerack that lifts
+  minute — it may be starting up. An hour late does not: a sequence that lifts
   the lights at six should not do it at seven because the box was off.
-* **Marked as run before it runs.** A rerack that fails half way must not
+* **Marked as run before it runs.** A sequence that fails half way must not
   retry on the next tick and every tick after that.
 
 Moving a schedule later in the same day lets it run again — the record holds
@@ -495,7 +495,7 @@ the time as well as the date.
 ### Following Paragon TV
 
 Paragon TV has a Rerack of its own — a nine-phase preset macro system, one
-preset per day, each phase pinned to a time. A rerack here can hang off one of
+preset per day, each phase pinned to a time. A sequence here can hang off one of
 those phases instead of keeping its own clock:
 
 ```
@@ -506,12 +506,12 @@ Curtain Up - when it runs
 ```
 
 It then runs whenever that phase falls **for whichever preset today is**. The
-same rerack runs at 07:00 on an Alpha day and 08:00 on a Sigma day, because
+same sequence runs at 07:00 on an Alpha day and 08:00 on a Sigma day, because
 Paragon TV's own weekly table decides. So the lights can come up when the
 channel does, and the room can go dark when the box shuts down.
 
-Following a phase replaces the rerack's own time and days rather than adding
-to them — two schedules on one rerack would be two answers to one question.
+Following a phase replaces the sequence's own time and days rather than adding
+to them — two schedules on one sequence would be two answers to one question.
 
 Nothing runs on a day Paragon TV has no preset for, on a phase a preset does
 not carry (the satellite presets have no maintenance phase at all), or while
@@ -522,16 +522,16 @@ it is relied on.
 **Paragon TV's settings are only ever read, never written.** It does not need
 to know this exists, and works unchanged whether or not it does.
 
-### A rerack is not a scene
+### A sequence is not a scene
 
 A **scene** describes a state — how the lights should look. It can be
-captured, mixed and cycled, and a rerack step can apply one.
+captured, mixed and cycled, and a sequence step can apply one.
 
-A **rerack** describes a sequence of things to do, including things with no
+A **sequence** describes a sequence of things to do, including things with no
 state to describe at all, like an infrared button press. Steps refer to
-devices by id, so renaming a device does not break a rerack that used it.
+devices by id, so renaming a device does not break a sequence that used it.
 
-There is no starter set. A rerack refers to this house's own devices, and an
+There is no starter set. A sequence refers to this house's own devices, and an
 invented one would be ten slots pointing at nothing.
 
 ---

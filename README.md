@@ -819,6 +819,11 @@ fails on the device. Those are guarded by invariants that *are* checkable on
 both, such as every URL and header in an HTTP request being the interpreter's
 own `str` type, rather than by reproducing the failure.
 
+`tools/roborock_probe.py` is a Python 3 script for working out which
+protocol a robot vacuum speaks before any driver is written for it. It asks
+the network on three ports and reports what answers; it sends no commands and
+needs no account. See the comment at the top of the file.
+
 `check_py2.py` exists because Krypton runs Python 2.7 and a 2.7 interpreter is
 no longer easy to come by — it walks the AST of every shipped file and fails on
 anything 2.7 cannot parse (f-strings, annotations, `yield from`, Python-3-only

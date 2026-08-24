@@ -2391,6 +2391,64 @@ class TestCycling(unittest.TestCase):
         for key in before:
             self.assertNotEqual(before[key], after[key])
 
+    def test_powering_off_stops_the_cycle(self):
+        app, _recorder, _lib = self.build()
+        app.apply_scene(app.scene_by_name('Party'))
+        self.assertIsNotNone(app.read_cycle())
+
+        app.power_all(False)
+
+        self.assertIsNone(app.read_cycle())
+
+    def test_powering_on_stops_the_cycle_too(self):
+        app, _recorder, _lib = self.build()
+        app.apply_scene(app.scene_by_name('Party'))
+
+        app.power_all(True)
+
+        self.assertIsNone(app.read_cycle())
+
+    def test_setting_brightness_by_hand_stops_the_cycle(self):
+        app, _recorder, _lib = self.build()
+        app.apply_scene(app.scene_by_name('Party'))
+
+        app.brightness_all(20)
+
+        self.assertIsNone(app.read_cycle())
+
+    def test_setting_a_colour_by_hand_stops_the_cycle(self):
+        app, _recorder, _lib = self.build()
+        app.apply_scene(app.scene_by_name('Party'))
+
+        app.color_all([10, 20, 30])
+
+        self.assertIsNone(app.read_cycle())
+
+    def test_a_power_step_in_a_sequence_stops_the_cycle(self):
+        """The reported case: a shutdown sequence run from Paragon TV."""
+        import sequences as sequence_lib
+
+        app, _recorder, _lib = self.build()
+        app.apply_scene(app.scene_by_name('Party'))
+        self.assertIsNotNone(app.read_cycle())
+
+        sequence = sequence_lib.make_sequence('Shutdown', steps=[
+            {'kind': sequence_lib.KIND_POWER, 'driver': 'govee',
+             'target': sequence_lib.TARGET_ALL,
+             'action': sequence_lib.ACTION_OFF}])
+        app.run_sequence(sequence, announce=False)
+
+        self.assertIsNone(app.read_cycle())
+
+    def test_a_cycle_step_does_not_stop_its_own_cycle(self):
+        """cycle_step goes to the scene engine directly, not through _each."""
+        app, _recorder, _lib = self.build()
+        app.apply_scene(app.scene_by_name('Party'))
+
+        self.assertTrue(app.cycle_step(now=1000.0))
+
+        self.assertIsNotNone(app.read_cycle())
+
     def test_applying_a_cycling_scene_starts_the_cycle(self):
         app, _recorder, _lib = self.build()
 

@@ -1,3 +1,13 @@
+v2.21.1
+- Any bulk change now stops a running colour cycle, not just applying a scene.
+  Switching the lights off, on, or setting a brightness or colour by hand all
+  replace a cycle, so leaving it running would step again within the interval
+  and undo what was just asked for.
+- This is what a shutdown sequence hit. A sequence step that cuts the power
+  went straight to the drivers, so the cycle kept ticking with the lights off:
+  traffic to every light all night, and the cycle back the moment anything
+  switched them on again. A step that applies a scene was never affected.
+
 v2.21.0
 - A scene can now carry a second brightness that applies only to lightbars.
   A lightbar throws far more light than a bulb at the same percentage, so a

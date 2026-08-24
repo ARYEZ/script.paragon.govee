@@ -885,8 +885,20 @@ class ParagonHome(object):
         Every target here gets the same instruction, so a driver is allowed to
         fold several of them into one command -- a multi-outlet plug switches
         the whole box in a single packet rather than once per outlet.
+
+        Any bulk action stops a running cycle, for the same reason applying a
+        scene does: the cycle is a standing instruction about how the lights
+        should look, and switching them off or dimming them by hand replaces
+        it. Left running it would step again within the interval and undo what
+        was just asked for -- or, with the lights off, keep talking to them all
+        night and bring the cycle back the moment something switched them on.
+
+        A cycle step does not come through here; it calls the scene engine
+        directly, so this cannot stop the cycle it is driving.
         """
         from devices import ControlError
+
+        self.stop_cycle()
 
         done = 0
         errors = []

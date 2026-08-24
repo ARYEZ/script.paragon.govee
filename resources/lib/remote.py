@@ -1065,6 +1065,9 @@ PAGE = """<!DOCTYPE html>
   --muted: #9a94a8; --accent: #8b5cf6; --good: #34d399; --bad: #fb7185;
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+/* An explicit display beats the hidden attribute, and .badge has one -- so a
+   box that is not a satellite showed an empty chip where the badge would be. */
+[hidden] { display: none !important; }
 body {
   margin: 0; padding: 16px 16px 40px; background: var(--bg); color: var(--text);
   font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;

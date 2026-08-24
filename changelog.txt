@@ -1,3 +1,31 @@
+v2.25.0
+- A web remote, for the phone in your pocket. Under Settings -> Remote, switch
+  it on and the background service serves one page and a JSON API on your LAN:
+  scenes, sequences, and every light and plug this box knows about.
+- It wants a PIN. One is made for you the first time it starts, and the server
+  refuses to run without one -- switching the remote on is never quietly the
+  same thing as opening the lights to whatever else is on the wi-fi. Five wrong
+  answers from an address and it stops listening to that address for a minute,
+  then two, then four.
+- Settings -> Remote -> Show the address and PIN puts both on the television,
+  because typing an address into a phone is the whole friction of this.
+- Scripts and keymaps skip the PIN: an API token in remote.json goes in a
+  header instead. The page never needs it.
+- The verbs are the ones RunScript already answers to, so there is one set of
+  actions to know rather than two.
+- Nothing the phone asks for runs on the web server's own thread. Requests
+  queue and the service loop performs them, which is the same arrangement
+  playback already used and keeps one thread in the scene engine. The queue is
+  drained inside a sequence's pauses too, so an hour-long pause no longer
+  means an hour of a remote that does not answer.
+- A phone still cannot start a second sequence inside the first one's pause.
+  That was already the rule for the schedule; it is now the rule for both.
+- Off by default on every box, and it can be switched on anywhere. The master
+  is the one to serve it: a satellite's copy of your scenes can be a quarter
+  of an hour old, so a satellite serving the remote says so on the page.
+- Sequences can be switched off for the remote on their own, for a phone that
+  lives in a pocket.
+
 v2.24.0
 - Satellite mode, for a house with more than one Kodi box. Under Settings ->
   Satellite, name the master's address and this box follows it.

@@ -31,6 +31,16 @@ def getCondVisibility(condition):
     return bool(COND_VISIBILITY.get(condition, False))
 
 
+# What Kodi reports as this box's address. A test that wants to see the web
+# remote's address line can set it; the default is the answer a box with no
+# network would give.
+IP_ADDRESS = '192.168.1.50'
+
+
+def getIPAddress():
+    return IP_ADDRESS
+
+
 def sleep(millis):
     import time
     time.sleep(millis / 1000.0)

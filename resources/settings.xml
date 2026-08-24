@@ -90,6 +90,23 @@ the add-on ships a single locale.
                  option="close" enable="eq(-4,true)"/>
     </category>
 
+    <category label="Remote">
+        <setting id="remote_enabled" type="bool"
+                 label="Serve the web remote on this box"
+                 default="false"/>
+        <setting id="remote_port" type="number" label="Port" default="8778"
+                 enable="eq(-1,true)"/>
+        <setting id="remote_pin" type="text" label="PIN" default=""
+                 enable="eq(-2,true)"/>
+        <setting id="remote_allow_sequences" type="bool"
+                 label="Allow sequences from the remote" default="true"
+                 enable="eq(-3,true)"/>
+        <setting type="lsep" label="A phone on your network can run the scenes, sequences and lights this box knows. A PIN is made for you the first time it starts."/>
+        <setting type="action" label="Show the address and PIN"
+                 action="RunScript(script.paragon.home,action=remote)"
+                 option="close" enable="eq(-5,true)"/>
+    </category>
+
     <category label="Advanced">
         <setting id="bind_address" type="ipaddress"
                  label="Network address to send from (blank = automatic)"

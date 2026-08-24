@@ -19,6 +19,7 @@ button, a keymap or a favourite:
     RunScript(script.paragon.home,action=color,value=Paragon Purple)
     RunScript(script.paragon.home,action=temp,value=2700)
     RunScript(script.paragon.home,action=off,target=Living Room Strip)
+    RunScript(script.paragon.home,action=remote)
 
 `target` accepts a device name or a Govee device id; leave it out to act on
 every enabled light.
@@ -56,33 +57,12 @@ def parse_args(argv):
 
 
 def resolve_targets(app, target):
-    """Resolve a `target` argument to a device list, or None for 'all'."""
-    if not target or target.lower() == 'all':
-        return None
-    wanted = target.strip().lower()
-    matches = [d for d in app.enabled_devices
-               if d.name.lower() == wanted or d.device_id.lower() == wanted]
-    return matches or []
+    """Resolve a `target` argument to a device list, or None for 'all'.
 
-
-def _parse_int(value, low, high):
-    try:
-        number = int(float(value))
-    except (TypeError, ValueError):
-        return None
-    return max(low, min(high, number))
-
-
-def _parse_hex(value):
-    """Parse a hex colour for action=color. Returns (r, g, b) or None.
-
-    Shares the add-on's colour parser so a RunScript() binding accepts the
-    same 8-digit codes the Govee app produces as the control panel does.
+    The rule itself lives on the session, so a keymap and the web remote
+    cannot drift apart about what a name means.
     """
-    import scenes as scene_lib
-
-    rgb, _note = scene_lib.parse_hex_color(value)
-    return rgb
+    return app.resolve_targets(target)
 
 
 def run_action(app, params, utils):
@@ -112,28 +92,23 @@ def run_action(app, params, utils):
     elif action == 'toggle':
         report(app.toggle_all(targets), 'Lights toggled')
     elif action == 'brightness':
-        value = _parse_int(params.get('value'), 1, 100)
+        value = utils.clamp_int(params.get('value'), 1, 100)
         if value is None:
             utils.force_notify('brightness needs value=1-100')
         else:
             report(app.brightness_all(value, targets), 'Brightness %d%%' % value)
     elif action == 'color':
-        value = params.get('value')
-        rgb = _parse_hex(value)
-        if rgb is None:
-            # Fall back to a saved colour name, so a colour added to the
-            # speed dial can be bound to a remote button by name rather than
-            # having its hex copied into the keymap.
-            entry = app.color_by_name(value)
-            if entry:
-                rgb = tuple(entry['color'])
+        # A hex code or the name of a saved colour: a colour added to the
+        # speed dial can be bound to a remote button by name rather than
+        # having its hex copied into the keymap.
+        rgb = app.resolve_color(params.get('value'))
         if rgb is None:
             utils.force_notify('color needs value=RRGGBB, AARRGGBB, or the '
                                'name of a saved colour')
         else:
             report(app.color_all(rgb, targets), 'Colour set')
     elif action == 'temp':
-        value = _parse_int(params.get('value'), 1500, 12000)
+        value = utils.clamp_int(params.get('value'), 1500, 12000)
         if value is None:
             utils.force_notify('temp needs value in Kelvin')
         else:
@@ -181,6 +156,13 @@ def run_action(app, params, utils):
         setting_id = params.get('setting')
         if setting_id:
             gui.pick_scene_for_setting(app, setting_id)
+    elif action == 'remote':
+        # The "show the address and PIN" button in the settings. Typing an
+        # address into a phone is the whole friction of the web remote, so it
+        # gets a dialog rather than a line in the log.
+        import remote as remote_lib
+        xbmcgui.Dialog().ok('%s - web remote' % utils.ADDON_NAME,
+                            remote_lib.describe())
     elif action == 'sync':
         # The "copy from the master now" button in the settings.
         import gui

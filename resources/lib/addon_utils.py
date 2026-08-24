@@ -211,6 +211,23 @@ def force_notify(message, heading=None, millis=4000, icon=None):
         log('Notification failed: %s' % exc, xbmc.LOGERROR)
 
 
+def clamp_int(value, low, high):
+    """Read `value` as a whole number inside [low, high], or None.
+
+    Every way into this add-on hands over its numbers as text -- a RunScript
+    argument, a JSON field from the web remote, a settings string -- and all
+    of them want the same answer to "is 20.0 a brightness, and is 900 one".
+    Accepts a float spelling because "20.0" out of a JSON encoder is the same
+    intent as "20", and clamps rather than rejects because a value out of
+    range is a caller being loose, not a caller being wrong.
+    """
+    try:
+        number = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return max(low, min(high, number))
+
+
 # ---------------------------------------------------------------------------
 # Small JSON store used for the device cache and the scene list
 # ---------------------------------------------------------------------------

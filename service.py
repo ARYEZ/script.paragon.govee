@@ -115,6 +115,14 @@ class GoveeService(xbmc.Monitor):
         self._blocked_for = 0.0
         self._last_satellite_check = 0.0
         self._last_satellite_sync = 0.0
+        # The web remote, when it is switched on. Started from the loop rather
+        # than from __init__ so a port already in use cannot stop the service
+        # coming up at all.
+        self._remote = None
+        self._remote_stale = True
+        # What the remote was last built from, so an unrelated settings change
+        # does not rebuild it. See _apply_remote_settings.
+        self._remote_signature = None
         self.player = GoveePlayer().attach(self)
 
     # -- lifecycle ---------------------------------------------------------
@@ -130,6 +138,81 @@ class GoveeService(xbmc.Monitor):
     def onSettingsChanged(self):
         utils.debug('Settings changed, rebuilding')
         self._app = None
+        # Only a note that the remote needs looking at. This runs on Kodi's
+        # thread, and starting or stopping a server from here would be doing
+        # it behind the back of the loop that is using it.
+        self._remote_stale = True
+
+    # -- the web remote ----------------------------------------------------
+
+    def _apply_remote_settings(self):
+        """Bring the remote into line with the settings. Loop thread only.
+
+        Called at start-up and whenever the settings change, which is also how
+        a new port or a new PIN takes effect: the server is stopped and a new
+        one started, because a listening socket cannot change its port and a
+        changed PIN should not leave old sessions signed in.
+
+        Which is exactly why it checks first. Kodi fires onSettingsChanged for
+        any setting at all, and rebuilding the server because the logging level
+        moved would sign every phone in the house out for nothing.
+        """
+        self._remote_stale = False
+
+        import remote as remote_lib
+
+        enabled = utils.get_bool('remote_enabled', False)
+        port = utils.get_int('remote_port', remote_lib.DEFAULT_PORT)
+        pin = (utils.get_setting('remote_pin', '') or '').strip()
+        allow = utils.get_bool('remote_allow_sequences', True)
+
+        signature = (enabled, port, pin)
+        if self._remote is not None and signature == self._remote_signature:
+            # Whether sequences are allowed is the one thing that can change
+            # under a running server: nothing about the socket depends on it.
+            self._remote.allow_sequences = allow
+            return True
+
+        if self._remote is not None:
+            self._remote.stop()
+            self._remote = None
+
+        if not enabled:
+            self._remote_signature = signature
+            return False
+
+        gate = remote_lib.Gate(remote_lib.ensure_pin(),
+                               remote_lib.ensure_token())
+        # gate.pin rather than the pin read above: the first ever start makes
+        # one and writes it to the settings, which is itself a settings change.
+        # Recording what we actually used stops that coming straight back round
+        # as a restart.
+        self._remote_signature = (enabled, port, gate.pin)
+
+        server = remote_lib.RemoteServer(port=port, gate=gate,
+                                         allow_sequences=allow)
+        if not server.start():
+            # start() has already said why in the log. The lights carry on
+            # working without a remote, which is the right way round.
+            return False
+
+        self._remote = server
+        # So the first phone to ask is not told the service is still starting.
+        server.refresh(self.app)
+        return True
+
+    def _pump_remote(self):
+        """Run whatever the phone asked for, on this thread."""
+        if self._remote is None:
+            return 0
+        alive = lambda index, step: not self.abortRequested()
+        return self._remote.pump(self.app, sleep_func=self._pause,
+                                 on_step=alive)
+
+    def _mark_sequence(self, running):
+        """Tell the remote a sequence is running, so it starts no other."""
+        if self._remote is not None:
+            self._remote.sequence_running = running
 
     # -- event intake ------------------------------------------------------
 
@@ -244,12 +327,22 @@ class GoveeService(xbmc.Monitor):
         the first one's pause would interleave two sets of commands. Anything
         that comes due while we are busy is picked up when the pause ends,
         which is what the grace allowance below is for.
+
+        The web remote is pumped here for the opposite reason -- somebody is
+        standing there holding a phone, and a remote that stopped answering
+        for the length of an hour-long pause would look broken. Its own guard
+        stops that turning into a second sequence.
         """
         try:
             if self.app.cycle_due():
                 self.app.cycle_step()
         except Exception as exc:
             utils.log('Cycle step failed: %s' % exc, xbmc.LOGERROR)
+
+        try:
+            self._pump_remote()
+        except Exception as exc:
+            utils.log('Web remote pump failed: %s' % exc, xbmc.LOGERROR)
 
         event = self._pending
         if event is not None:
@@ -332,11 +425,19 @@ class GoveeService(xbmc.Monitor):
 
         grace, self._blocked_for = self._blocked_for, 0.0
         alive = lambda index, step: not self.abortRequested()
-        ran = self.app.run_due_sequences(sleep_func=self._pause,
-                                         on_step=alive, grace=grace)
-        # Today's rerack is checked in the same pass and for the same reason.
-        ran.extend(self.app.run_due_phases(sleep_func=self._pause,
-                                           on_step=alive, grace=grace))
+        # The remote is pumped inside the pauses these can hold, so it has to
+        # know a sequence is already going -- otherwise a tap on the phone
+        # could start a second one between two steps of this one.
+        self._mark_sequence(True)
+        try:
+            ran = self.app.run_due_sequences(sleep_func=self._pause,
+                                             on_step=alive, grace=grace)
+            # Today's rerack is checked in the same pass and for the same
+            # reason.
+            ran.extend(self.app.run_due_phases(sleep_func=self._pause,
+                                               on_step=alive, grace=grace))
+        finally:
+            self._mark_sequence(False)
         return ran
 
     def run(self):
@@ -358,6 +459,11 @@ class GoveeService(xbmc.Monitor):
             except Exception as exc:
                 utils.log('Satellite startup copy failed: %s' % exc,
                           xbmc.LOGERROR)
+
+        try:
+            self._apply_remote_settings()
+        except Exception as exc:
+            utils.log('Web remote failed to start: %s' % exc, xbmc.LOGERROR)
 
         if utils.get_bool('discover_on_startup', False):
             try:
@@ -390,8 +496,24 @@ class GoveeService(xbmc.Monitor):
             except Exception as exc:
                 utils.log('Satellite sync failed: %s' % exc, xbmc.LOGERROR)
 
+            if self._remote_stale:
+                try:
+                    self._apply_remote_settings()
+                except Exception as exc:
+                    utils.log('Web remote failed to restart: %s' % exc,
+                              xbmc.LOGERROR)
+
             if self.waitForAbort(0.5):
                 break
+
+        # Before the log line: a phone waiting on a command should be told the
+        # service has gone rather than sit there until its own timeout.
+        try:
+            if self._remote is not None:
+                self._remote.stop()
+                self._remote = None
+        except Exception as exc:
+            utils.log('Web remote failed to stop: %s' % exc, xbmc.LOGERROR)
 
         utils.log('Service stopped')
 

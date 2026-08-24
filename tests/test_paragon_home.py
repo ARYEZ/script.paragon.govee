@@ -247,6 +247,8 @@ class RecordingController(object):
         self.calls = []
         self.fail_on = fail_on or set()
         self.caps = caps
+        # What a state read comes back with, for the callers that do one.
+        self.states = {}
 
     def capabilities(self, device):
         """The real implementation unless a test asks for something else.
@@ -297,6 +299,17 @@ class RecordingController(object):
         # infrared code failed against the stub for a reason the real code
         # would never have had.
         self._record('command', device, name)
+
+    def driver(self, driver_id):
+        """The Hub answers with the driver object, or None for an unknown id."""
+        return None
+
+    def get_state(self, device):
+        return self.states.get(device.device_id)
+
+    def get_states(self, devices, timeout=3.0):
+        return dict((device.device_id, self.states.get(device.device_id))
+                    for device in devices)
 
 
 # ---------------------------------------------------------------------------
@@ -6813,12 +6826,20 @@ class TestScriptArguments(unittest.TestCase):
         self.assertEqual(default.parse_args(['garbage']), {})
 
     def test_hex_parsing_accepts_short_and_long_forms(self):
-        import default
+        """The colour a keymap names is read the same way everywhere.
 
-        self.assertEqual(default._parse_hex('#FF8800'), (255, 136, 0))
-        self.assertEqual(default._parse_hex('f80'), (255, 136, 0))
-        self.assertIsNone(default._parse_hex('nope'))
-        self.assertIsNone(default._parse_hex(''))
+        Reads the session's resolver rather than a private helper in
+        default.py: the web remote calls the same one, and a test pinned to
+        one caller's copy would not notice the two diverging.
+        """
+        from paragon_home import ParagonHome
+
+        app = ParagonHome()
+
+        self.assertEqual(app.resolve_color('#FF8800'), (255, 136, 0))
+        self.assertEqual(app.resolve_color('f80'), (255, 136, 0))
+        self.assertIsNone(app.resolve_color('nope'))
+        self.assertIsNone(app.resolve_color(''))
 
     def test_target_resolves_by_name_and_by_id(self):
         import default
@@ -7192,6 +7213,132 @@ class TestPlaybackService(unittest.TestCase):
 
     def tearDown(self):
         clean_profile()
+
+    def test_the_remote_stays_off_unless_it_is_switched_on(self):
+        import service
+
+        svc = service.GoveeService()
+
+        self.assertFalse(svc._apply_remote_settings())
+        self.assertIsNone(svc._remote)
+
+    def test_the_remote_starts_and_stops_with_its_setting(self):
+        import service
+
+        xbmcaddon.SETTINGS['remote_enabled'] = 'true'
+        xbmcaddon.SETTINGS['remote_port'] = str(_free_port())
+        xbmcaddon.SETTINGS['remote_pin'] = '424242'
+        svc = service.GoveeService()
+
+        try:
+            self.assertTrue(svc._apply_remote_settings())
+            self.assertTrue(svc._remote.running())
+
+            xbmcaddon.SETTINGS['remote_enabled'] = 'false'
+            self.assertFalse(svc._apply_remote_settings())
+            self.assertIsNone(svc._remote)
+        finally:
+            if svc._remote is not None:
+                svc._remote.stop()
+
+    def test_an_unrelated_settings_change_does_not_restart_the_remote(self):
+        """Restarting it would sign every phone in the house out for nothing."""
+        import service
+
+        xbmcaddon.SETTINGS['remote_enabled'] = 'true'
+        xbmcaddon.SETTINGS['remote_port'] = str(_free_port())
+        xbmcaddon.SETTINGS['remote_pin'] = '424242'
+        svc = service.GoveeService()
+
+        try:
+            svc._apply_remote_settings()
+            first = svc._remote
+
+            xbmcaddon.SETTINGS['debug_logging'] = 'true'
+            svc._apply_remote_settings()
+
+            self.assertIs(svc._remote, first)
+            self.assertTrue(svc._remote.running())
+
+            # A new PIN is a different matter: it must sign everyone out.
+            xbmcaddon.SETTINGS['remote_pin'] = '999999'
+            svc._apply_remote_settings()
+
+            self.assertIsNot(svc._remote, first)
+            self.assertFalse(first.running())
+        finally:
+            if svc._remote is not None:
+                svc._remote.stop()
+
+    def test_a_settings_change_is_noted_rather_than_acted_on(self):
+        """onSettingsChanged runs on Kodi's thread, not the loop's."""
+        import service
+
+        svc = service.GoveeService()
+        svc._remote_stale = False
+
+        svc.onSettingsChanged()
+
+        self.assertTrue(svc._remote_stale)
+        self.assertIsNone(svc._remote)
+
+    def test_every_tick_drains_the_remote_queue(self):
+        """Including the ticks inside a sequence pause -- that is the point."""
+        import service
+
+        svc = service.GoveeService()
+
+        class StubRemote(object):
+            def __init__(self):
+                self.pumps = 0
+
+            def pump(self, app, sleep_func=None, on_step=None):
+                self.pumps += 1
+                return 0
+
+        stub = StubRemote()
+        svc._remote = stub
+
+        class StubApp(object):
+            @staticmethod
+            def cycle_due():
+                return False
+
+        svc._app = StubApp()
+        svc._tick()
+        svc._tick()
+
+        self.assertEqual(stub.pumps, 2)
+
+    def test_a_scheduled_sequence_stops_the_remote_starting_another(self):
+        """Two sequences interleaving is the thing v2.22 went to lengths over."""
+        import remote as remote_lib
+        import service
+
+        svc = service.GoveeService()
+        server = remote_lib.RemoteServer(gate=remote_lib.Gate('424242', 'tok'))
+        svc._remote = server
+        seen = []
+
+        class StubApp(object):
+            @staticmethod
+            def run_due_sequences(**kwargs):
+                seen.append(server.sequence_running)
+                return []
+
+            @staticmethod
+            def run_due_phases(**kwargs):
+                seen.append(server.sequence_running)
+                return []
+
+        svc._app = StubApp()
+
+        svc._check_sequences(now=10000.0)
+
+        self.assertEqual(seen, [True, True])
+        # And released afterwards, or the remote would refuse sequences for
+        # the rest of the Kodi session.
+        self.assertFalse(server.sequence_running)
 
     def test_a_pause_keeps_stepping_a_cycle(self):
         """An hour-long pause must not freeze everything else for an hour."""
@@ -9017,6 +9164,644 @@ class TestControlPanel(unittest.TestCase):
         xbmcgui.YESNO_QUEUE.append(False)  # decline the search
         self.panel().run()
         self.assertEqual(self.recorder.calls, [])
+
+
+# ---------------------------------------------------------------------------
+# The web remote
+# ---------------------------------------------------------------------------
+
+try:
+    from http.client import HTTPConnection
+except ImportError:  # pragma: no cover - Python 2 runner
+    from httplib import HTTPConnection
+
+
+class RemoteClient(object):
+    """A phone, near enough.
+
+    Keeps its cookie the way a browser would, and sets the guard header the
+    page's own JavaScript sets -- so a test that leaves it off is testing what
+    happens when the request did not come from the page.
+    """
+
+    def __init__(self, port, token=None):
+        self.port = port
+        self.token = token
+        self.cookie = None
+
+    def call(self, method, path, body=None, headers=None, guard=True):
+        sent = {}
+        if guard:
+            sent['X-Paragon-Remote'] = '1'
+        if self.token:
+            sent['X-Paragon-Token'] = self.token
+        if self.cookie:
+            sent['Cookie'] = self.cookie
+        sent.update(headers or {})
+
+        payload = None
+        if body is not None:
+            payload = body if isinstance(body, str) else json.dumps(body)
+            sent['Content-Type'] = 'application/json'
+
+        connection = HTTPConnection('127.0.0.1', self.port, timeout=15)
+        try:
+            connection.request(method, path, payload, sent)
+            response = connection.getresponse()
+            raw = response.read()
+            status = response.status
+            content_type = response.getheader('Content-Type') or ''
+            cookie = response.getheader('Set-Cookie')
+        finally:
+            connection.close()
+
+        if cookie:
+            self.cookie = cookie.split(';')[0]
+        try:
+            data = json.loads(raw.decode('utf-8'))
+        except ValueError:
+            data = {}
+        return {'status': status, 'data': data, 'body': raw,
+                'type': content_type}
+
+    def login(self, pin):
+        return self.call('POST', '/api/login', {'pin': pin})
+
+    def state(self):
+        return self.call('GET', '/api/state')
+
+    def act(self, action, **params):
+        params['action'] = action
+        return self.call('POST', '/api/action', params)
+
+
+class ServiceLoop(object):
+    """Stands in for service.py's loop: the one thread allowed in the session.
+
+    The remote's whole design is that a request never touches ParagonHome --
+    it queues work and something else runs it. That something else is this, so
+    a test without one running sees actions queue and time out, which is the
+    correct behaviour rather than a broken fixture.
+    """
+
+    def __init__(self, server, app, interval=0.02):
+        self.server = server
+        self.app = app
+        self.interval = interval
+        self.pumped = 0
+        self.thread_id = None
+        self.error = None
+        self._stop = threading.Event()
+        self._thread = None
+
+    def start(self):
+        self._thread = threading.Thread(target=self._run)
+        self._thread.daemon = True
+        self._thread.start()
+        # Wait for it to actually be on its own thread, so a test can compare
+        # thread ids without racing the start-up.
+        for _ in range(200):
+            if self.thread_id is not None:
+                break
+            time.sleep(0.01)
+        return self
+
+    def _run(self):
+        self.thread_id = threading.current_thread().ident
+        while not self._stop.is_set():
+            try:
+                self.pumped += self.server.pump(self.app)
+            except Exception as exc:  # recorded, not swallowed
+                self.error = exc
+            self._stop.wait(self.interval)
+
+    def stop(self):
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(5)
+            self._thread = None
+
+
+class ThreadWatchingController(RecordingController):
+    """A recorder that also remembers which thread the command came from."""
+
+    def __init__(self, *args, **kwargs):
+        RecordingController.__init__(self, *args, **kwargs)
+        self.threads = set()
+
+    def _record(self, name, device, *args):
+        self.threads.add(threading.current_thread().ident)
+        RecordingController._record(self, name, device, *args)
+
+
+class TestWebRemote(unittest.TestCase):
+    """The web remote, over a real socket on loopback."""
+
+    PIN = '135790'
+    TOKEN = 'e6a1f0c3d2b4a5968778695a4b3c2d1e0f9a8b7c6d5e4f30'
+
+    def setUp(self):
+        clean_profile()
+        xbmcaddon.reset()
+        xbmcgui.reset()
+        for name in ('addon_utils', 'paragon_home', 'remote'):
+            if name in sys.modules:
+                del sys.modules[name]
+
+        import remote as remote_lib
+        from paragon_home import ParagonHome
+
+        self.lib = remote_lib
+        self.app = ParagonHome()
+        self.recorder = ThreadWatchingController()
+        self.app.controller = self.recorder
+        self.app._devices = [
+            Device('AA:BB', name='Living Room', lan=True),
+            # supports= narrows what the controller reports, which is how a
+            # plug and a blaster tell themselves apart from a bulb here.
+            Device('CC:DD', name='Desk Plug', driver='tuya', lan=True,
+                   supports=['turn']),
+            Device('EE:FF', name='Hall Blaster', driver='broadlink', lan=True,
+                   supports=['learn']),
+        ]
+        self.server = None
+        self.loop = None
+
+    def tearDown(self):
+        if self.loop is not None:
+            self.loop.stop()
+        if self.server is not None:
+            self.server.stop()
+        clean_profile()
+        xbmcaddon.reset()
+
+    # -- fixtures ----------------------------------------------------------
+
+    def serve(self, pin=None, allow_sequences=True, run_loop=True):
+        """Start a real server on loopback and return a client for it."""
+        gate = self.lib.Gate(self.PIN if pin is None else pin, self.TOKEN)
+        server = self.lib.RemoteServer(port=_free_port(), gate=gate,
+                                       address='127.0.0.1',
+                                       allow_sequences=allow_sequences)
+        self.assertTrue(server.start())
+        self.server = server
+        server.refresh(self.app)
+        if run_loop:
+            self.loop = ServiceLoop(server, self.app).start()
+        return RemoteClient(server.port)
+
+    def signed_in(self, **kwargs):
+        client = self.serve(**kwargs)
+        self.assertEqual(client.login(self.PIN)['status'], 200)
+        return client
+
+    # -- the page ----------------------------------------------------------
+
+    def test_the_page_is_served_before_anyone_signs_in(self):
+        """The PIN box is on the page, so the page cannot need the PIN."""
+        client = self.serve()
+        answer = client.call('GET', '/', guard=False)
+
+        self.assertEqual(answer['status'], 200)
+        self.assertIn('text/html', answer['type'])
+        self.assertIn(b'Paragon Home', answer['body'])
+
+    def test_the_page_asks_for_nothing_from_anywhere_else(self):
+        """No CDN, no font, no icon: there is nothing here to serve them."""
+        for marker in (b'http://', b'https://', b'//cdn'):
+            self.assertNotIn(marker, self.lib.PAGE.encode('utf-8'))
+
+    def test_an_unknown_route_says_so_rather_than_serving_the_page(self):
+        client = self.serve()
+        self.assertEqual(client.call('GET', '/wp-admin')['status'], 404)
+        self.assertEqual(client.call('POST', '/api/nope', {})['status'], 404)
+
+    # -- getting in --------------------------------------------------------
+
+    def test_the_api_is_shut_without_a_credential(self):
+        client = self.serve()
+        self.assertEqual(client.state()['status'], 401)
+        self.assertEqual(client.act('off')['status'], 401)
+        self.assertEqual(self.recorder.calls, [])
+
+    def test_a_request_without_the_page_header_is_refused(self):
+        """The CSRF defence: a form on another site cannot set this header."""
+        client = self.signed_in()
+
+        answer = client.call('POST', '/api/action', {'action': 'off'},
+                             guard=False)
+
+        self.assertEqual(answer['status'], 403)
+        self.assertEqual(self.recorder.calls, [])
+
+    def test_a_request_claiming_another_origin_is_refused(self):
+        client = self.signed_in()
+
+        answer = client.call('POST', '/api/action', {'action': 'off'},
+                             headers={'Origin': 'http://example.invalid'})
+
+        self.assertEqual(answer['status'], 403)
+        self.assertEqual(self.recorder.calls, [])
+
+    def test_the_wrong_pin_gets_nowhere_and_the_right_one_signs_in(self):
+        client = self.serve()
+
+        refused = client.login('000000')
+        self.assertEqual(refused['status'], 401)
+        self.assertFalse(refused['data'].get('ok'))
+        self.assertEqual(client.state()['status'], 401)
+
+        self.assertEqual(client.login(self.PIN)['status'], 200)
+        self.assertEqual(client.state()['status'], 200)
+
+    def test_the_api_token_needs_no_login_at_all(self):
+        """curl and a keymap have no browser to keep a cookie in."""
+        client = self.serve()
+        machine = RemoteClient(client.port, token=self.TOKEN)
+
+        self.assertEqual(machine.state()['status'], 200)
+        self.assertTrue(machine.act('off')['data'].get('ok'))
+
+    def test_signing_out_ends_the_session(self):
+        client = self.signed_in()
+        self.assertEqual(client.state()['status'], 200)
+
+        self.assertEqual(client.call('POST', '/api/logout', {})['status'], 200)
+        client.cookie = client.cookie  # the browser keeps sending the old one
+        self.assertEqual(client.state()['status'], 401)
+
+    def test_enough_wrong_pins_stop_the_right_one_working(self):
+        """A six-digit PIN is only worth what the lockout behind it is."""
+        client = self.serve()
+
+        for _ in range(self.lib.MAX_ATTEMPTS):
+            self.assertEqual(client.login('999999')['status'], 401)
+
+        locked = client.login(self.PIN)
+        self.assertEqual(locked['status'], 429)
+        self.assertGreater(locked['data'].get('locked'), 0)
+        self.assertEqual(client.state()['status'], 401)
+
+    def test_the_lockout_lifts_and_gets_longer_each_time(self):
+        gate = self.lib.Gate(self.PIN, self.TOKEN)
+
+        for _ in range(self.lib.MAX_ATTEMPTS):
+            self.assertIsNone(gate.login('000000', '10.0.0.9', now=1000.0))
+        self.assertTrue(gate.locked_for('10.0.0.9', now=1000.0))
+
+        # Waiting it out works, and the round after costs twice as long.
+        later = 1000.0 + self.lib.LOCKOUT_SECONDS + 1
+        self.assertFalse(gate.locked_for('10.0.0.9', now=later))
+        self.assertTrue(gate.login(self.PIN, '10.0.0.9', now=later))
+
+        for _ in range(self.lib.MAX_ATTEMPTS):
+            self.assertIsNone(gate.login('000000', '10.0.0.9', now=later))
+        self.assertGreater(gate.locked_for('10.0.0.9', now=later),
+                           self.lib.LOCKOUT_SECONDS)
+
+    def test_one_address_locked_out_does_not_lock_out_the_house(self):
+        gate = self.lib.Gate(self.PIN, self.TOKEN)
+
+        for _ in range(self.lib.MAX_ATTEMPTS):
+            gate.login('000000', '10.0.0.9', now=1000.0)
+
+        self.assertTrue(gate.locked_for('10.0.0.9', now=1000.0))
+        self.assertFalse(gate.locked_for('10.0.0.4', now=1000.0))
+        self.assertTrue(gate.login(self.PIN, '10.0.0.4', now=1000.0))
+
+    def test_a_session_stops_working_once_it_has_expired(self):
+        gate = self.lib.Gate(self.PIN, self.TOKEN, session_seconds=60)
+        token = gate.login(self.PIN, '10.0.0.4', now=1000.0)
+
+        self.assertTrue(gate.accepts(token, now=1050.0))
+        self.assertFalse(gate.accepts(token, now=1100.0))
+        # The API token has no expiry; it is not a session.
+        self.assertTrue(gate.accepts(self.TOKEN, now=99999.0))
+
+    def test_a_server_with_no_pin_refuses_to_listen(self):
+        """Switching the remote on must never quietly mean opening the LAN."""
+        server = self.lib.RemoteServer(port=_free_port(),
+                                       gate=self.lib.Gate('', self.TOKEN),
+                                       address='127.0.0.1')
+
+        self.assertFalse(server.start())
+        self.assertFalse(server.running())
+
+    # -- doing things ------------------------------------------------------
+
+    def test_an_action_runs_on_the_service_loop_and_not_the_handler(self):
+        """The single-threaded session is the point of the queue."""
+        client = self.signed_in()
+
+        self.assertTrue(client.act('off')['data'].get('ok'))
+
+        self.assertEqual(self.recorder.threads, set([self.loop.thread_id]))
+        self.assertNotIn(threading.current_thread().ident,
+                         self.recorder.threads)
+
+    def test_off_reaches_every_light_and_plug(self):
+        client = self.signed_in()
+
+        answer = client.act('off')
+
+        self.assertEqual(answer['status'], 200)
+        self.assertTrue(answer['data'].get('ok'))
+        self.assertIn(('turn', 'AA:BB', False), self.recorder.calls)
+        self.assertIn(('turn', 'CC:DD', False), self.recorder.calls)
+
+    def test_a_named_target_reaches_only_that_one(self):
+        client = self.signed_in()
+
+        self.assertTrue(client.act('on', target='Desk Plug')['data']['ok'])
+
+        self.assertEqual(self.recorder.calls, [('turn', 'CC:DD', True)])
+
+    def test_a_target_that_is_not_here_is_said_so_rather_than_ignored(self):
+        client = self.signed_in()
+
+        answer = client.act('off', target='Greenhouse')
+
+        self.assertEqual(answer['status'], 200)
+        self.assertFalse(answer['data']['ok'])
+        self.assertIn('Greenhouse', answer['data']['message'])
+        self.assertEqual(self.recorder.calls, [])
+
+    def test_brightness_and_colour_and_temperature_arrive_as_asked(self):
+        client = self.signed_in()
+
+        client.act('brightness', value=20, target='Living Room')
+        client.act('color', value='FF8800', target='Living Room')
+        client.act('temp', value=2700, target='Living Room')
+
+        self.assertIn(('brightness', 'AA:BB', 20), self.recorder.calls)
+        self.assertIn(('color', 'AA:BB', 255, 136, 0), self.recorder.calls)
+        self.assertIn(('temp', 'AA:BB', 2700), self.recorder.calls)
+
+    def test_a_colour_can_be_named_from_the_speed_dial(self):
+        """The same names a keymap can use, without copying hex about."""
+        client = self.signed_in()
+        saved = self.app.palette[0]
+
+        self.assertTrue(client.act('color', value=saved['name'],
+                                   target='Living Room')['data']['ok'])
+
+        self.assertIn(('color', 'AA:BB') + tuple(saved['color']),
+                      self.recorder.calls)
+
+    def test_an_out_of_range_brightness_is_clamped_not_refused(self):
+        client = self.signed_in()
+
+        client.act('brightness', value=900, target='Living Room')
+
+        self.assertIn(('brightness', 'AA:BB', 100), self.recorder.calls)
+
+    def test_a_brightness_that_is_not_a_number_is_refused(self):
+        client = self.signed_in()
+
+        answer = client.act('brightness', value='bright', target='Living Room')
+
+        self.assertFalse(answer['data']['ok'])
+        self.assertEqual(self.recorder.calls, [])
+
+    def test_a_scene_runs_by_name(self):
+        client = self.signed_in()
+
+        answer = client.act('scene', name='All Off')
+
+        self.assertTrue(answer['data']['ok'])
+        self.assertTrue(self.recorder.calls)
+
+    def test_a_scene_that_does_not_exist_is_named_in_the_answer(self):
+        client = self.signed_in()
+
+        answer = client.act('scene', name='Disco Inferno')
+
+        self.assertFalse(answer['data']['ok'])
+        self.assertIn('Disco Inferno', answer['data']['message'])
+
+    def test_an_unknown_action_is_refused_before_it_is_queued(self):
+        client = self.signed_in()
+
+        answer = client.act('detonate')
+
+        self.assertEqual(answer['status'], 400)
+        self.assertEqual(self.server.commands.pending(), 0)
+
+    def test_a_malformed_body_is_refused(self):
+        client = self.signed_in()
+
+        answer = client.call('POST', '/api/action', '{not json')
+
+        self.assertEqual(answer['status'], 400)
+        self.assertEqual(self.recorder.calls, [])
+
+    def test_a_sequence_says_it_started_rather_than_waiting_for_it_to_end(self):
+        """A sequence can hold an hour of pauses; a phone cannot wait for it."""
+        import sequences as sequence_lib
+
+        self.app._sequences = [sequence_lib.make_sequence('Bedtime')]
+        client = self.signed_in()
+
+        answer = client.act('sequence', name='Bedtime')
+
+        self.assertEqual(answer['status'], 202)
+        self.assertTrue(answer['data']['queued'])
+
+    def test_sequences_can_be_switched_off_for_the_remote(self):
+        """A phone in a pocket should not be able to start the bedtime run."""
+        import sequences as sequence_lib
+
+        self.app._sequences = [sequence_lib.make_sequence('Bedtime')]
+        client = self.signed_in(allow_sequences=False)
+
+        answer = client.act('sequence', name='Bedtime')
+
+        self.assertEqual(answer['status'], 403)
+        self.assertFalse(client.state()['data']['allow_sequences'])
+
+    def test_a_second_sequence_cannot_start_inside_the_first(self):
+        """The rule the scheduler already follows, kept when a phone can ask."""
+        import sequences as sequence_lib
+
+        self.app._sequences = [sequence_lib.make_sequence('Bedtime')]
+        client = self.serve(run_loop=False)
+        self.server.sequence_running = True
+
+        job = self.server.commands.submit('sequence', {'name': 'Bedtime'})
+        self.server.pump(self.app)
+
+        self.assertTrue(job.done.is_set())
+        self.assertFalse(job.result['ok'])
+        self.assertIn('already running', job.result['message'])
+        self.assertEqual(self.recorder.calls, [])
+        client.cookie = None  # nothing signed in; the client is only the port
+
+    def test_a_failing_light_answers_rather_than_leaving_the_phone_waiting(self):
+        self.recorder.fail_on = set(['AA:BB'])
+        client = self.signed_in()
+
+        answer = client.act('off', target='Living Room')
+
+        self.assertEqual(answer['status'], 200)
+        self.assertFalse(answer['data']['ok'])
+        self.assertIn('unreachable', answer['data']['message'])
+
+    def test_sync_on_a_box_that_is_not_a_satellite_does_nothing(self):
+        """It answers before it runs, so the refusal lands in the log."""
+        client = self.signed_in()
+
+        answer = client.act('sync')
+        self.assertEqual(answer['status'], 202)
+
+        job = self.server.commands.submit('sync', {})
+        self.server.pump(self.app)
+
+        self.assertFalse(job.result['ok'])
+        self.assertIn('not a satellite', job.result['message'])
+
+    # -- what the page is shown --------------------------------------------
+
+    def test_the_snapshot_lists_only_what_can_be_controlled(self):
+        """A blaster has no power, brightness or colour: a row for one is blank."""
+        client = self.signed_in()
+
+        state = client.state()['data']
+        names = [device['name'] for device in state['devices']]
+
+        self.assertIn('Living Room', names)
+        self.assertIn('Desk Plug', names)
+        self.assertNotIn('Hall Blaster', names)
+        self.assertEqual([d['id'] for d in state['drivers']
+                          if d['id'] == 'broadlink'], [])
+
+    def test_the_snapshot_carries_the_scenes_sequences_and_palette(self):
+        import sequences as sequence_lib
+
+        self.app._sequences = [sequence_lib.make_sequence('Bedtime')]
+        client = self.signed_in()
+
+        state = client.state()['data']
+
+        self.assertTrue(state['ready'])
+        self.assertIn('All Off', [s['name'] for s in state['scenes']])
+        self.assertEqual([s['name'] for s in state['sequences']], ['Bedtime'])
+        self.assertTrue(state['palette'])
+        self.assertEqual(len(state['palette'][0]['hex']), 6)
+
+    def test_the_snapshot_says_when_this_box_is_only_a_satellite(self):
+        """A satellite's copy can be a quarter of an hour old; say so."""
+        xbmcaddon.SETTINGS['satellite_mode'] = 'true'
+        xbmcaddon.SETTINGS['master_ip'] = '192.168.1.10'
+        client = self.signed_in()
+
+        satellite = client.state()['data']['satellite']
+
+        self.assertTrue(satellite['mode'])
+        self.assertEqual(satellite['master'], '192.168.1.10')
+
+    def test_a_device_name_cannot_smuggle_markup_into_the_page(self):
+        """Names come from the Govee app, so they are not to be trusted."""
+        self.app._devices = [Device('AA:BB', name='<img onerror=alert(1)>',
+                                    lan=True)]
+        client = self.signed_in()
+
+        state = client.state()['data']
+
+        # It survives as text -- the page puts it in with textContent, and the
+        # page itself never carries a device name.
+        self.assertEqual(state['devices'][0]['name'], '<img onerror=alert(1)>')
+        self.assertNotIn(b'onerror', self.lib.PAGE.encode('utf-8'))
+
+    def test_a_state_read_is_only_done_when_it_is_asked_for(self):
+        """One round trip per light is not something to do twice a second."""
+        self.recorder.states = {'AA:BB': {'power': 'on', 'brightness': 40}}
+        client = self.signed_in()
+
+        self.assertIsNone(client.state()['data']['devices'][0]['power'])
+
+        self.assertTrue(client.act('states')['data']['ok'])
+        after = client.state()['data']['devices'][0]
+
+        self.assertEqual(after['power'], 'on')
+        self.assertEqual(after['brightness'], 40)
+
+    # -- the queue ---------------------------------------------------------
+
+    def test_a_full_queue_refuses_work_rather_than_piling_it_up(self):
+        queue = self.lib.Commands(limit=2)
+
+        self.assertIsNotNone(queue.submit('off', {}))
+        self.assertIsNotNone(queue.submit('off', {}))
+        self.assertIsNone(queue.submit('off', {}))
+        self.assertEqual(queue.pending(), 2)
+
+    def test_stopping_answers_whoever_is_still_waiting(self):
+        """Otherwise a handler blocks to its timeout on a job nobody will run."""
+        queue = self.lib.Commands()
+        job = queue.submit('off', {})
+
+        queue.close()
+        queue.abandon()
+
+        self.assertTrue(job.done.is_set())
+        self.assertFalse(job.result['ok'])
+        self.assertIsNone(queue.submit('off', {}))
+
+    def test_the_server_stops_cleanly_and_stops_answering(self):
+        client = self.signed_in()
+        self.assertEqual(client.state()['status'], 200)
+
+        self.loop.stop()
+        self.loop = None
+        self.server.stop()
+        server, self.server = self.server, None
+
+        self.assertFalse(server.running())
+        self.assertRaises(Exception, client.state)
+
+    # -- secrets and settings ----------------------------------------------
+
+    def test_a_pin_is_made_the_first_time_and_then_kept(self):
+        first = self.lib.ensure_pin()
+
+        self.assertEqual(len(first), self.lib.PIN_LENGTH)
+        self.assertTrue(first.isdigit())
+        self.assertEqual(self.lib.ensure_pin(), first)
+        self.assertEqual(xbmcaddon.SETTINGS['remote_pin'], first)
+
+    def test_the_api_token_is_kept_across_a_restart(self):
+        first = self.lib.ensure_token()
+
+        self.assertEqual(len(first), self.lib.TOKEN_BYTES * 2)
+        self.assertEqual(self.lib.ensure_token(), first)
+
+    def test_two_pins_in_a_row_are_not_the_same(self):
+        made = set(self.lib.generate_pin() for _ in range(50))
+
+        self.assertGreater(len(made), 40)
+
+    def test_the_address_dialog_says_where_to_go_and_what_to_type(self):
+        xbmcaddon.SETTINGS['remote_enabled'] = 'true'
+        xbmcaddon.SETTINGS['remote_port'] = '8778'
+
+        text = self.lib.describe(pin='424242', address='192.168.1.50')
+
+        self.assertIn('http://192.168.1.50:8778', text)
+        self.assertIn('424242', text)
+
+    def test_the_dialog_says_so_when_the_remote_is_switched_off(self):
+        text = self.lib.describe(pin='424242', address='192.168.1.50')
+
+        self.assertIn('switched off', text)
+
+    def test_comparing_secrets_does_not_stop_at_the_first_difference(self):
+        from compat import same_secret
+
+        self.assertTrue(same_secret('123456', '123456'))
+        self.assertFalse(same_secret('123456', '123457'))
+        self.assertFalse(same_secret('123456', '12345'))
+        self.assertFalse(same_secret('', 'x'))
+        self.assertTrue(same_secret('', ''))
 
 
 if __name__ == '__main__':

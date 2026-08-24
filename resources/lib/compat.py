@@ -21,14 +21,21 @@ PY2 = sys.version_info[0] == 2
 if PY2:  # pragma: no cover - exercised on Kodi 17.6 only
     import urllib2 as _urllib_request
     from urllib2 import HTTPError, URLError
-    from urllib import urlencode
+    from urllib import urlencode, unquote
+    from urlparse import parse_qs
+
+    from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
+    from SocketServer import ThreadingMixIn
 
     string_types = (str, unicode)  # noqa: F821 - `unicode` only exists on PY2
     text_type = unicode  # noqa: F821
 else:
     import urllib.request as _urllib_request
     from urllib.error import HTTPError, URLError
-    from urllib.parse import urlencode
+    from urllib.parse import urlencode, unquote, parse_qs
+
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from socketserver import ThreadingMixIn
 
     string_types = (str,)
     text_type = str
@@ -37,8 +44,10 @@ Request = _urllib_request.Request
 urlopen = _urllib_request.urlopen
 
 __all__ = [
-    'PY2', 'HTTPError', 'URLError', 'urlencode', 'Request', 'urlopen',
-    'string_types', 'text_type', 'to_text', 'to_bytes', 'to_native',
+    'PY2', 'HTTPError', 'URLError', 'urlencode', 'unquote', 'parse_qs',
+    'Request', 'urlopen', 'BaseHTTPRequestHandler', 'HTTPServer',
+    'ThreadingMixIn', 'string_types', 'text_type', 'to_text', 'to_bytes',
+    'to_native', 'same_secret',
 ]
 
 
@@ -74,3 +83,30 @@ def to_native(value):
     if PY2:
         return to_bytes(value)
     return to_text(value)
+
+
+def same_secret(left, right):
+    """Compare two secrets without leaking their length or content in time.
+
+    `hmac.compare_digest` would do this, but it only arrived in Python 2.7.7
+    and the interpreter embedded in a given Krypton build is not something
+    this add-on gets to choose. The fallback is the standard trick: compare
+    every byte of the longer of the two, accumulating differences, so the
+    loop takes the same time whether the first byte differs or the last.
+
+    A PIN is short enough that a remote timing attack over a LAN is a stretch;
+    this is here because the alternative is `==`, and `==` on a secret is a
+    habit worth not having.
+    """
+    left = to_bytes(left or '')
+    right = to_bytes(right or '')
+    difference = len(left) ^ len(right)
+    # bytearray indexes to ints on both versions; `left[i]` alone gives a
+    # one-character str on Python 2 and an int on Python 3.
+    left_bytes = bytearray(left)
+    right_bytes = bytearray(right)
+    for index in range(max(len(left_bytes), len(right_bytes))):
+        first = left_bytes[index] if index < len(left_bytes) else 0
+        second = right_bytes[index] if index < len(right_bytes) else 0
+        difference |= first ^ second
+    return difference == 0

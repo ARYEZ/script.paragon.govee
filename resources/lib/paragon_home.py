@@ -205,6 +205,42 @@ class ParagonHome(object):
                 return device
         return None
 
+    def resolve_targets(self, target):
+        """Turn a target name into a device list, or None meaning "all".
+
+        The one rule for what a named target means, so a keymap, the web
+        remote and anything added later all agree about it. Matching is
+        case-insensitive and accepts either the friendly name or the device
+        id; an empty target, or "all", means every enabled device rather than
+        none. A name that matches nothing gives an empty list, which is a
+        different answer from None and is meant to be: one says "everything",
+        the other says "you asked for something that is not here".
+        """
+        if not target or target.strip().lower() == 'all':
+            return None
+        wanted = target.strip().lower()
+        return [device for device in self.enabled_devices
+                if device.name.lower() == wanted
+                or device.device_id.lower() == wanted]
+
+    def resolve_color(self, value):
+        """Read a colour as (r, g, b), from a hex code or a saved name.
+
+        Hex first, then the speed dial, because a colour added to the palette
+        is meant to be usable by name anywhere a code is -- on a remote
+        button, in a sequence, or from the web remote -- without its digits
+        being copied around.
+        """
+        import scenes as scene_lib
+
+        rgb, _note = scene_lib.parse_hex_color(value)
+        if rgb is not None:
+            return rgb
+        entry = self.color_by_name(value)
+        if entry:
+            return tuple(entry['color'])
+        return None
+
     def refresh_devices(self):
         """Re-discover and merge into the cache. Returns (devices, warnings).
 

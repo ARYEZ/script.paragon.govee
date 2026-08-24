@@ -32,6 +32,8 @@ Built for **Kodi 17.6 (Krypton)** — `xbmc.python 2.25.0`, Python 2.7.
   brings the lights part-way up on pause, and restores them on stop.
 * **Remote and keymap friendly** — every action is reachable via `RunScript()`,
   so it can go on a button or in Favourites.
+* **A web remote** — one page on your LAN, behind a PIN, for the phone in your
+  pocket. Scenes, sequences, lights and plugs.
 
 ### Why two transports
 
@@ -376,6 +378,7 @@ RunScript(script.paragon.home,action=scene,name=Movie Night)
 RunScript(script.paragon.home,action=refresh)
 RunScript(script.paragon.home,action=diagnose)                  # why no lights?
 RunScript(script.paragon.home,action=verifystatus)              # does status work?
+RunScript(script.paragon.home,action=remote)                    # web remote address + PIN
 ```
 
 Add `target=<name or device id>` to any of them to hit one light:
@@ -951,6 +954,124 @@ discovering.
 
 ---
 
+## Web remote
+
+The lights are on the LAN, and so is your phone. **Settings → Remote → Serve
+the web remote on this box** turns the background service into a small web
+server: one page, mobile-shaped, with the scenes and sequences this box knows
+and a row for every light and plug.
+
+It is Kore's idea pointed somewhere else. Kore drives Kodi's playback; this
+drives the room.
+
+```
+Settings → Remote
+  Serve the web remote on this box   [x]
+  Port                               8778
+  PIN                                418302
+  Allow sequences from the remote    [x]
+  Show the address and PIN
+```
+
+**Show the address and PIN** puts both on the television, which saves squinting
+at a settings screen while typing into a phone. Then open
+`http://<that address>:8778`, enter the PIN once, and the phone stays signed in
+for a month.
+
+### The PIN, and what stands behind it
+
+A port open on the LAN with no lock on it means anything on your network can
+switch every light in the house — a guest, a phone with a bad app, one of the
+smart devices themselves. So there is a PIN, six digits, and it is made for you
+the first time the remote starts. **The server refuses to run without one**:
+switching the remote on is never quietly the same thing as opening the house up.
+
+Six digits is a million guesses, which a script would walk through in minutes
+if nothing stopped it. Something does: five wrong answers from an address and
+that address is ignored for a minute, then two, then four, up to a quarter of an
+hour. That turns minutes into months.
+
+Change the PIN whenever you like. Every phone is signed out the next time the
+service picks the change up.
+
+### For scripts, not browsers
+
+Anything that is not a browser — `curl`, a keymap, another add-on — skips the
+login and sends a token instead. It is in `remote.json` in the add-on's data
+folder:
+
+```
+curl -X POST http://192.168.1.50:8778/api/action \
+     -H "X-Paragon-Token: <the token from remote.json>" \
+     -H "Content-Type: application/json" \
+     -d '{"action": "scene", "name": "Movie Night"}'
+```
+
+The actions are the ones `RunScript` already takes — `scene`, `sequence`, `on`,
+`off`, `toggle`, `brightness`, `color`, `temp`, `refresh`, `sync` — plus
+`states`, which asks the lights what they are currently doing. `target` picks
+one device by name or id; leave it out for everything. `GET /api/state` returns
+what the page draws itself from.
+
+### What it is not
+
+**There is no encryption.** This is plain HTTP, so the PIN and the token cross
+your LAN in the clear. A certificate would mean a browser warning on every
+phone in the house forever, and Krypton's TLS is old enough that it would be a
+poor one. On a home network that is the right trade, but it is a trade: anyone
+who can watch your wi-fi can read the PIN as you type it.
+
+**Do not forward the port.** It is built for the LAN and nothing about it is
+hardened for the open internet. If you want it from outside the house, put it
+behind a VPN.
+
+**It is not a second brain.** The remote asks the service to do things; it does
+not decide anything by itself. Close it and everything carries on.
+
+### Which box should serve it
+
+The master. It owns the schedule, the state and the authoritative copy of
+everything, and it is the box that is always on — a remote you cannot rely on
+being there is worse than no remote.
+
+Nothing stops a satellite serving one, and it will work: a satellite reaches
+the same lights. But its copy of your scenes and sequences can be up to fifteen
+minutes old, so a satellite serving the remote says **Satellite, following
+&lt;master&gt;** across the top of the page, and its schedule lines are there to
+read rather than to act on.
+
+### Sequences
+
+A sequence is the most disruptive thing a stray tap can start — ten steps, and
+possibly an hour of pauses. **Allow sequences from the remote** turns them off
+without touching anything else, which is the setting to reach for if the phone
+lives in a pocket.
+
+Starting a sequence answers straight away rather than waiting for it to finish,
+and the same rule the schedule follows still applies: a second sequence cannot
+start inside the first one's pauses. It is refused, and the page says so.
+
+### What happens while a sequence is running
+
+Nothing stops. The service checks the queue every half second, including during
+a sequence's pauses, so the remote answers throughout — an hour-long pause is
+not an hour of a remote that does nothing.
+
+Nothing the phone asks for runs on the web server's own thread. Requests are put
+on a queue and the service loop performs them, which is the same arrangement
+playback lighting already used, and it is what keeps one thread at a time in the
+scene engine. The cost is up to half a second before a command starts, which is
+the tick interval.
+
+### Blasters
+
+An infrared blaster has no power, no brightness and no colour, so there is
+nothing a row for one could offer. They are left off the page for the same
+reason they are not scene targets — a blaster is reached through a sequence
+step.
+
+---
+
 ## Moving to another box
 
 Everything the add-on knows lives in one folder as plain JSON, so moving to
@@ -972,6 +1093,7 @@ LibreELEC   /storage/.kodi/userdata/addon_data/script.paragon.home/
 | `palette.json` | the speed-dial colours |
 | `broadlink_codes.json` | learned infrared codes |
 | `tuya_keys.json` | Tuya local keys |
+| `remote.json` | the web remote's API token |
 | `settings.xml` | the add-on's settings, including the Kasa account |
 | `cycle.json`, `*_state.json` | what is running and what has already run today |
 
@@ -1015,6 +1137,10 @@ password file.
 | Govee API key | empty | Only needed for cloud control |
 | Verify the Govee TLS certificate | on | Only turn off if an old box has an unusable CA bundle |
 | Change the lights with playback | off | The playback service |
+| Serve the web remote on this box | off | See [Web remote](#web-remote) |
+| Port | 8778 | Kodi's own web server usually has 8080 |
+| PIN | made for you | Six digits, made the first time the remote starts |
+| Allow sequences from the remote | on | Turn off if a pocket should not be able to start Bedtime |
 | Network address to send from | automatic | Set it if the box is multi-homed (VPN, docker bridge) |
 | Verbose logging | off | Adds per-command detail to `kodi.log` |
 
@@ -1066,7 +1192,7 @@ button that appears to do nothing is worse.
 ## Development
 
 ```
-python3 tests/test_paragon_home.py      # 354 tests
+python3 tests/test_paragon_home.py      # 667 tests
 python3 tests/check_py2.py              # Python 2.7 syntax gate
 python3 tests/validate_addon.py         # manifest and settings cross-check
 python3 tools/make_assets.py            # regenerate icon.png / fanart.png
@@ -1123,6 +1249,8 @@ resources/lib/devices.py      device model + transport selection
 resources/lib/scenes.py       scene model and application
 resources/lib/paragon_home.py  the add-on session
 resources/lib/gui.py          dialog-driven control panel
+resources/lib/remote.py       the web remote: server, API and page
+resources/lib/satellite.py    copying the master's setup down
 ```
 
 ### Targeting Kodi 19+

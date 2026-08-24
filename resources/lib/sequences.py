@@ -60,7 +60,7 @@ POWER_ACTIONS = (ACTION_ON, ACTION_OFF, ACTION_TOGGLE)
 # rather than one of them.
 TARGET_ALL = '*'
 
-MAX_PAUSE = 600
+MAX_PAUSE = 3600
 
 SEQUENCE_STATE_FILE = 'sequence_state.json'
 
@@ -209,7 +209,7 @@ def own_schedule(sequence):
     return sequence.get('time') or '', list(sequence.get('days') or [])
 
 
-def due(sequence, now, last='', schedule=None):
+def due(sequence, now, last='', schedule=None, grace=0):
     """Whether this sequence should run right now.
 
     Three separate questions, and all of them have to be yes: is today one of
@@ -218,6 +218,14 @@ def due(sequence, now, last='', schedule=None):
     `schedule` is a resolved (time, days) pair for a sequence whose schedule
     comes from elsewhere. Resolving it outside keeps this function free of
     any knowledge of where a time came from.
+
+    `grace` widens the catch-up window for one check. The service cannot look
+    at the clock while it is part way through a sequence, so an hour-long
+    pause would otherwise push everything due in that hour past the catch-up
+    window and skip it outright. The service passes the time it was busy, so
+    the allowance covers exactly the period it could not have noticed -- which
+    is not the same as making the window permanently wider, since that is what
+    stops a Kodi restart replaying this morning's sequences.
     """
     at_time, days = own_schedule(sequence) if schedule is None else schedule
     if not at_time or not days:
@@ -228,7 +236,7 @@ def due(sequence, now, last='', schedule=None):
     hour, minute = [int(part) for part in at_time.split(':')]
     at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     late = (now - at).total_seconds()
-    if late < 0 or late > CATCH_UP_SECONDS:
+    if late < 0 or late > CATCH_UP_SECONDS + max(0, grace):
         return False
     return last != stamp(sequence, now, at_time)
 

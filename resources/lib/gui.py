@@ -2136,7 +2136,9 @@ class ControlPanel(object):
 
     def _ask_pause(self, sequence, index):
         current = str(sequence['steps'][index].get('pause') or 0)
-        value = self._ask_number('Seconds to wait after this step', current)
+        value = self._ask_number(
+            'Seconds to wait after this step (0-%d)' % sequence_lib.MAX_PAUSE,
+            current)
         if value is None:
             return
         sequence['steps'][index]['pause'] = max(0, min(sequence_lib.MAX_PAUSE,

@@ -220,7 +220,7 @@ def stamp(rerack, number, now, at_time):
                                         now.year, now.month, now.day, at_time)
 
 
-def due_phases(rerack, now, state, tv_times=None):
+def due_phases(rerack, now, state, tv_times=None, grace=0):
     """The phases of this rerack whose time has come.
 
     Returns (number, sequence name, time, stamp) for each. The state is read
@@ -237,7 +237,7 @@ def due_phases(rerack, now, state, tv_times=None):
         if key in state:
             continue
         if sequence_lib.due({'time': at_time, 'days': [now.weekday()]}, now,
-                            schedule=(at_time, [now.weekday()])):
+                            schedule=(at_time, [now.weekday()]), grace=grace):
             due.append((number, phase['sequence'], at_time, key))
     return due
 

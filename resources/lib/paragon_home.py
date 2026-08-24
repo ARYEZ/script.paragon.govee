@@ -683,19 +683,24 @@ class ParagonHome(object):
             return '', []
         return at_time, [now.weekday()]
 
-    def due_sequences(self, now=None):
-        """The sequences whose time has come and that have not run yet today."""
+    def due_sequences(self, now=None, grace=0):
+        """The sequences whose time has come and that have not run yet today.
+
+        `grace` widens the catch-up window by however long the caller was too
+        busy to look -- see sequences.due.
+        """
         moment = now or sequence_lib.now()
         state = self.sequence_state
         due = []
         for sequence in self.sequences:
             schedule = self.resolved_schedule(sequence, moment)
             if sequence_lib.due(sequence, moment, state.get(sequence['name'], ''),
-                              schedule=schedule):
+                              schedule=schedule, grace=grace):
                 due.append((sequence, schedule[0]))
         return due
 
-    def run_due_sequences(self, now=None, sleep_func=None, on_step=None):
+    def run_due_sequences(self, now=None, sleep_func=None, on_step=None,
+                          grace=0):
         """Run whatever is due. Returns the names of the sequences that ran.
 
         Each is marked as run *before* it runs, not after. A sequence can hold
@@ -706,7 +711,7 @@ class ParagonHome(object):
         """
         moment = now or sequence_lib.now()
         ran = []
-        for sequence, at_time in self.due_sequences(moment):
+        for sequence, at_time in self.due_sequences(moment, grace=grace):
             self.sequence_state[sequence['name']] = sequence_lib.stamp(
                 sequence, moment, at_time)
             self.save_sequence_state()
@@ -840,7 +845,8 @@ class ParagonHome(object):
                 times[number] = at_time
         return times
 
-    def run_due_phases(self, now=None, sleep_func=None, on_step=None):
+    def run_due_phases(self, now=None, sleep_func=None, on_step=None,
+                       grace=0):
         """Run whatever today's rerack says is due. Returns what ran."""
         moment = now or sequence_lib.now()
         rerack = self.todays_rerack(moment)
@@ -848,7 +854,8 @@ class ParagonHome(object):
             return []
 
         due = rerack_lib.due_phases(rerack, moment, self.phase_state,
-                                    self.tv_phase_times(rerack, moment))
+                                    self.tv_phase_times(rerack, moment),
+                                    grace=grace)
         ran = []
         for number, name, at_time, key in due:
             # Marked before running, for the same reason a sequence is: a

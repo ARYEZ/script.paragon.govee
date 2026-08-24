@@ -1,3 +1,17 @@
+v2.22.0
+- The pause between steps can now be up to an hour, was ten minutes.
+- A pause no longer freezes everything else. The service waits in half-second
+  slices and steps cycling scenes and handles playback changes between them,
+  so an hour-long pause looks the same from outside as no pause at all.
+- Anything that came due while a sequence was paused now still runs. The
+  service could not look at the clock while it was busy, so a phase falling in
+  that hour used to be more than the catch-up window late and was skipped
+  outright rather than run. The allowance is exactly the time spent paused,
+  which leaves the ordinary window doing its job of stopping a Kodi restart
+  replaying this morning's sequences.
+- A second sequence still cannot start inside the first one's pause; it runs
+  when the pause ends.
+
 v2.21.1
 - Any bulk change now stops a running colour cycle, not just applying a scene.
   Switching the lights off, on, or setting a brightness or colour by hand all

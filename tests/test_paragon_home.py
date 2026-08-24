@@ -925,6 +925,43 @@ class TestSequences(unittest.TestCase):
         self.assertFalse(self.sequences.due(
             self.ignition(), self.SATURDAY_6PM + datetime.timedelta(hours=1)))
 
+    def test_grace_covers_time_the_service_could_not_look(self):
+        """An hour-long pause must not silently swallow what came due in it."""
+        late = self.SATURDAY_6PM + datetime.timedelta(minutes=40)
+        self.assertFalse(self.sequences.due(self.ignition(), late))
+        self.assertTrue(self.sequences.due(self.ignition(), late,
+                                           grace=3600))
+
+    def test_grace_does_not_resurrect_something_older_than_the_allowance(self):
+        """The allowance is the time actually spent busy, not a blank cheque."""
+        late = self.SATURDAY_6PM + datetime.timedelta(hours=3)
+        self.assertFalse(self.sequences.due(self.ignition(), late,
+                                            grace=3600))
+
+    def test_grace_of_zero_is_the_ordinary_catch_up_window(self):
+        late = self.SATURDAY_6PM + datetime.timedelta(minutes=40)
+        self.assertFalse(self.sequences.due(self.ignition(), late, grace=0))
+        self.assertTrue(self.sequences.due(
+            self.ignition(), self.SATURDAY_6PM + datetime.timedelta(minutes=4),
+            grace=0))
+
+    def test_a_negative_grace_cannot_narrow_the_window(self):
+        self.assertTrue(self.sequences.due(
+            self.ignition(), self.SATURDAY_6PM + datetime.timedelta(minutes=4),
+            grace=-9999))
+
+    def test_an_hour_long_pause_is_allowed(self):
+        step = self.sequences.normalise_step(
+            {'kind': self.sequences.KIND_SCENE, 'target': 'Dawn',
+             'pause': 3600})
+        self.assertEqual(step['pause'], 3600)
+
+    def test_a_pause_beyond_the_maximum_is_clamped(self):
+        step = self.sequences.normalise_step(
+            {'kind': self.sequences.KIND_SCENE, 'target': 'Dawn',
+             'pause': 99999})
+        self.assertEqual(step['pause'], self.sequences.MAX_PAUSE)
+
     def test_it_does_not_run_twice_in_the_same_day(self):
         sequence = self.ignition()
         already = self.sequences.stamp(sequence, self.SATURDAY_6PM)
@@ -6886,6 +6923,62 @@ class TestPlaybackService(unittest.TestCase):
 
     def tearDown(self):
         clean_profile()
+
+    def test_a_pause_keeps_stepping_a_cycle(self):
+        """An hour-long pause must not freeze everything else for an hour."""
+        import service
+
+        svc = service.GoveeService()
+        ticks = []
+        svc._tick = lambda: ticks.append(1)
+        waits = []
+        svc.waitForAbort = lambda seconds: waits.append(seconds) or False
+
+        aborted = svc._pause(2.0)
+
+        self.assertFalse(aborted)
+        # Sliced, not one long block, with the loop's work done between.
+        self.assertEqual(waits, [0.5, 0.5, 0.5, 0.5])
+        self.assertEqual(len(ticks), 4)
+
+    def test_a_pause_gives_up_promptly_when_kodi_is_closing(self):
+        import service
+
+        svc = service.GoveeService()
+        svc._tick = lambda: None
+        calls = []
+
+        def closing(seconds):
+            calls.append(seconds)
+            return len(calls) >= 2
+
+        svc.waitForAbort = closing
+
+        self.assertTrue(svc._pause(3600))
+        # Two slices, not two hours of them.
+        self.assertEqual(len(calls), 2)
+
+    def test_a_pause_is_counted_as_time_the_service_could_not_look(self):
+        import service
+
+        svc = service.GoveeService()
+        svc._tick = lambda: None
+        svc.waitForAbort = lambda seconds: False
+
+        self.assertEqual(svc._blocked_for, 0.0)
+        svc._pause(1.0)
+        self.assertGreater(svc._blocked_for, 0.0)
+
+    def test_time_spent_aborting_a_pause_still_counts(self):
+        """The finally clause matters: an interrupted pause was still time."""
+        import service
+
+        svc = service.GoveeService()
+        svc._tick = lambda: None
+        svc.waitForAbort = lambda seconds: True
+
+        svc._pause(3600)
+        self.assertGreaterEqual(svc._blocked_for, 0.0)
 
     def test_content_filter_video_only(self):
         import xbmc

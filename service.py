@@ -31,6 +31,12 @@ import addon_utils as utils  # noqa: E402 - needs the sys.path setup above
 # cheap; firing one writes a file, and this loop runs twice a second.
 SEQUENCE_CHECK_SECONDS = 5
 
+# How long the service waits at a stretch while a sequence is paused. A pause
+# can now be an hour, and the loop below is the only thing stepping a cycle and
+# turning playback into light changes -- so the wait is taken in slices, with
+# that work done between them, rather than as one long block.
+PAUSE_SLICE_SECONDS = 0.5
+
 EVENT_PLAY = 'play'
 EVENT_PAUSE = 'pause'
 EVENT_STOP = 'stop'
@@ -99,6 +105,9 @@ class GoveeService(xbmc.Monitor):
         self._last_applied = None
         self._we_dimmed = False
         self._last_sequence_check = 0.0
+        # Seconds the loop spent inside a sequence pause since the last
+        # schedule check, so anything that came due meanwhile still counts.
+        self._blocked_for = 0.0
         self.player = GoveePlayer().attach(self)
 
     # -- lifecycle ---------------------------------------------------------
@@ -221,6 +230,51 @@ class GoveeService(xbmc.Monitor):
 
     # -- main loop ---------------------------------------------------------
 
+    def _tick(self):
+        """The per-pass work that must keep happening during a pause.
+
+        Deliberately not the schedule check: starting a second sequence inside
+        the first one's pause would interleave two sets of commands. Anything
+        that comes due while we are busy is picked up when the pause ends,
+        which is what the grace allowance below is for.
+        """
+        try:
+            if self.app.cycle_due():
+                self.app.cycle_step()
+        except Exception as exc:
+            utils.log('Cycle step failed: %s' % exc, xbmc.LOGERROR)
+
+        event = self._pending
+        if event is not None:
+            self._pending = None
+            try:
+                self.handle(event)
+            except Exception as exc:
+                # A failing light must never take the service down; it would
+                # stop reacting to playback for the rest of the Kodi session.
+                utils.log('Error handling %s: %s' % (event, exc), xbmc.LOGERROR)
+                import traceback
+                utils.log(traceback.format_exc(), xbmc.LOGERROR)
+
+    def _pause(self, seconds):
+        """Wait out a sequence pause without stopping everything else.
+
+        Same contract as waitForAbort: returns True if Kodi is shutting down,
+        so a sequence still stops promptly when it is.
+        """
+        started = time.time()
+        remaining = float(seconds or 0)
+        try:
+            while remaining > 0:
+                slice_length = min(PAUSE_SLICE_SECONDS, remaining)
+                if self.waitForAbort(slice_length):
+                    return True
+                remaining -= slice_length
+                self._tick()
+            return False
+        finally:
+            self._blocked_for += time.time() - started
+
     def _check_sequences(self, now=None):
         """Run anything the clock says is due.
 
@@ -228,21 +282,29 @@ class GoveeService(xbmc.Monitor):
         test itself is cheap, but a sequence that fires writes a file, and this
         loop runs twice a second.
 
-        A sequence can hold pauses, so its waits go through waitForAbort and
-        each step is gated on the service still being alive. Otherwise closing
-        Kodi during a five-minute sequence would wait for it to finish.
+        A sequence can hold pauses, so its waits go through _pause -- which
+        keeps cycling and playback alive meanwhile and still returns True the
+        moment Kodi is shutting down, so closing Kodi part way through a
+        sequence does not wait for it to finish.
+
+        Whatever time those pauses took is handed to the next check as grace.
+        A sequence pausing for an hour is an hour this loop spent unable to
+        look at the clock, and without that allowance anything due in the
+        meantime would be more than the catch-up window late and get skipped
+        rather than run.
         """
         moment = now or time.time()
         if moment - self._last_sequence_check < SEQUENCE_CHECK_SECONDS:
             return []
         self._last_sequence_check = moment
 
+        grace, self._blocked_for = self._blocked_for, 0.0
         alive = lambda index, step: not self.abortRequested()
-        ran = self.app.run_due_sequences(sleep_func=self.waitForAbort,
-                                         on_step=alive)
+        ran = self.app.run_due_sequences(sleep_func=self._pause,
+                                         on_step=alive, grace=grace)
         # Today's rerack is checked in the same pass and for the same reason.
-        ran.extend(self.app.run_due_phases(sleep_func=self.waitForAbort,
-                                           on_step=alive))
+        ran.extend(self.app.run_due_phases(sleep_func=self._pause,
+                                           on_step=alive, grace=grace))
         return ran
 
     def run(self):
@@ -263,13 +325,12 @@ class GoveeService(xbmc.Monitor):
 
         while not self.abortRequested():
             # Cycling scenes are stepped here rather than on a timer of their
-            # own: this loop already exists, already stops cleanly on abort,
-            # and a half-second tick is far finer than any sensible cycle.
-            try:
-                if self.app.cycle_due():
-                    self.app.cycle_step()
-            except Exception as exc:
-                utils.log('Cycle step failed: %s' % exc, xbmc.LOGERROR)
+            # own, and playback events are handled here rather than in the
+            # callback that raised them: this loop already exists, already
+            # stops cleanly on abort, and a half-second tick is far finer than
+            # any sensible cycle. A failing light must never take the service
+            # down, so _tick swallows and logs rather than raising.
+            self._tick()
 
             # Scheduled sequences are checked here for the same reason
             # cycling is: this loop already exists and already stops cleanly.
@@ -278,20 +339,6 @@ class GoveeService(xbmc.Monitor):
             except Exception as exc:
                 utils.log('Sequence schedule check failed: %s' % exc,
                           xbmc.LOGERROR)
-
-            event = self._pending
-            if event is not None:
-                self._pending = None
-                try:
-                    self.handle(event)
-                except Exception as exc:
-                    # A failing light must never take the service down; it
-                    # would stop reacting to playback for the rest of the
-                    # Kodi session.
-                    utils.log('Error handling %s: %s' % (event, exc),
-                              xbmc.LOGERROR)
-                    import traceback
-                    utils.log(traceback.format_exc(), xbmc.LOGERROR)
 
             if self.waitForAbort(0.5):
                 break

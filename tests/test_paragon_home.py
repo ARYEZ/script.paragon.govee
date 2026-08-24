@@ -500,25 +500,36 @@ class TestScenes(unittest.TestCase):
 
         self.assertEqual(set(c[1] for c in controller.calls), set(['AA:BB']))
 
-    def test_a_blaster_is_never_a_scene_target(self):
-        """No power, no brightness, no colour -- a scene can set nothing."""
+    def test_only_a_light_is_a_scene_target(self):
+        """A plug switches and a blaster emits; neither has a look."""
         controller = RecordingController()
-        blaster = Device('EE:FF', name='Bedroom Broadlink', driver='broadlink')
-        controller.capabilities = lambda d: set(['commands'])
+        cases = [
+            (Device('AA:BB', name='Lamp', driver='govee'),
+             ['power', 'brightness', 'color', 'color_temp', 'state'], True),
+            (Device('8006ABCD', name='Kitchen Plug', driver='kasa'),
+             ['power', 'state'], False),
+            (Device('WP9#1', name='Office Monitor Plug', driver='tuya'),
+             ['power', 'state'], False),
+            (Device('EE:FF', name='Bedroom Broadlink', driver='broadlink'),
+             ['commands'], False),
+        ]
+        for device, caps, expected in cases:
+            controller.capabilities = lambda d, c=caps: set(c)
+            self.assertEqual(scene_lib.is_a_light(device, controller), expected,
+                             '%s judged wrongly' % device.name)
 
-        self.assertFalse(scene_lib.can_be_in_a_scene(blaster, controller))
-        self.assertFalse(scene_lib.is_a_light(blaster, controller))
+    def test_a_device_is_a_light_when_nothing_can_say_otherwise(self):
+        """No controller means no capability list, so do not silently drop it."""
+        self.assertTrue(scene_lib.is_a_light(Device('AA:BB', name='Lamp')))
 
-    def test_a_plug_can_be_in_a_scene_but_is_not_a_light(self):
-        controller = RecordingController()
-        plug = Device('8006ABCD', name='Christmas Tree', driver='kasa')
-        controller.capabilities = lambda d: set(['power', 'state'])
+    def test_a_plug_named_in_a_scene_is_passed_over(self):
+        """One rule throughout, so the picker and the engine cannot disagree.
 
-        self.assertTrue(scene_lib.can_be_in_a_scene(plug, controller))
-        self.assertFalse(scene_lib.is_a_light(plug, controller))
-
-    def test_a_plug_named_in_a_scene_is_still_honoured(self):
-        """Naming targets is how a plug joins a colour scene deliberately."""
+        A scene saved before plugs were excluded may still name one. It is
+        passed over rather than switched, which is what the target picker now
+        shows -- the alternative is a scene doing something it cannot be
+        edited to stop doing.
+        """
         controller = RecordingController()
         bulb = Device('AA:BB', name='Lamp', driver='govee', lan=True)
         plug = Device('8006ABCD', name='Christmas Tree', driver='kasa',
@@ -532,8 +543,7 @@ class TestScenes(unittest.TestCase):
 
         scene_lib.apply_scene(controller, scene, [bulb, plug])
 
-        self.assertEqual(set(c[1] for c in controller.calls),
-                         set(['AA:BB', '8006ABCD']))
+        self.assertEqual(set(c[1] for c in controller.calls), set(['AA:BB']))
 
     def test_apply_scene_ignores_disabled_devices(self):
         controller = RecordingController()
@@ -1347,7 +1357,9 @@ class TestReracks(unittest.TestCase):
 
         app = ParagonHome()
         self.recorder = RecordingController()
-        self.recorder.capabilities = lambda d: set(['power', 'state'])
+        # A Govee lamp, so a light: colour and brightness, not just a switch.
+        self.recorder.capabilities = lambda d: set(
+            ['power', 'brightness', 'color', 'color_temp', 'state'])
         app.controller = self.recorder
         app._devices = [Device('AA:BB', name='Lamp', driver='govee',
                                lan=True)]
@@ -2062,7 +2074,9 @@ class TestParagonTV(unittest.TestCase):
 
         app = ParagonHome()
         self.recorder = RecordingController()
-        self.recorder.capabilities = lambda d: set(['power', 'state'])
+        # A Govee lamp, so a light: colour and brightness, not just a switch.
+        self.recorder.capabilities = lambda d: set(
+            ['power', 'brightness', 'color', 'color_temp', 'state'])
         app.controller = self.recorder
         app._devices = [Device('AA:BB', name='Lamp', driver='govee',
                                lan=True)]
@@ -6747,10 +6761,13 @@ class TestCollapsingTargets(unittest.TestCase):
         devices = [Device('AA:BB'), Device('CC:DD')]
         self.assertEqual(Hub([Plain()]).collapse(devices), devices)
 
-    def test_a_scene_is_not_collapsed(self):
-        """A scene can tell outlets different things, so folding them would
-        silently drop one. Only same-instruction-to-all comes through the
-        collapsing path."""
+    def test_a_scene_does_not_reach_a_plug_at_all(self):
+        """Collapsing outlets was the worry while scenes could switch plugs.
+
+        They no longer can, named or not, which settles the question rather
+        more firmly than not folding them would have. Bulk switching -- the
+        collapsing path above -- is where a multi-outlet plug is handled.
+        """
         import scenes as scenes_mod
 
         master, outlets = self.plug()
@@ -6765,8 +6782,7 @@ class TestCollapsingTargets(unittest.TestCase):
             targets=[d.device_id for d in [master] + outlets])
         app.apply_scene(scene, announce=False)
 
-        self.assertEqual(sorted(switched),
-                         ['Office Plug', 'Outlet 1', 'Outlet 2'])
+        self.assertEqual(switched, [])
 
 
 class TestScriptArguments(unittest.TestCase):

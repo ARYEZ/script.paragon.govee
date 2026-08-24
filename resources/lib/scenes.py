@@ -31,12 +31,9 @@ import random
 from devices import (CAP_BRIGHTNESS, CAP_COLOR, CAP_COLOR_TEMP,
                      CAP_POWER)
 
-# What a scene can set on a device. A device with none of these -- an infrared
-# blaster, which only emits named commands -- cannot be in a scene at all.
-SCENE_CAPABILITIES = (CAP_POWER, CAP_BRIGHTNESS, CAP_COLOR, CAP_COLOR_TEMP)
-
-# What makes a device a light rather than a switch. A scene with no targets of
-# its own means these, and only these.
+# What makes a device a light: something a scene can describe the look of.
+# A plug has power and state only, and a blaster has neither, so neither is
+# ever a scene target -- see is_a_light.
 LIGHT_CAPABILITIES = (CAP_COLOR, CAP_COLOR_TEMP, CAP_BRIGHTNESS)
 
 POWER_ON = 'on'
@@ -664,24 +661,18 @@ def _caps(controller, device):
     return set(getter(device) or [])
 
 
-def can_be_in_a_scene(device, controller=None):
-    """Whether a scene could set anything at all on this device.
-
-    An infrared blaster cannot: it emits named commands and has no power,
-    brightness or colour. Listing one among a scene's targets only offers a
-    choice that does nothing.
-    """
-    caps = _caps(controller, device)
-    if caps is None:
-        return True
-    return bool(caps & set(SCENE_CAPABILITIES))
-
-
 def is_a_light(device, controller=None):
-    """Whether this device is a light rather than a switch.
+    """Whether this device is a light, which is the only thing a scene touches.
 
-    A plug reports power and nothing else. It is a perfectly good scene target
-    when named deliberately, but it is not what "all" means.
+    A light has a colour, a colour temperature or a brightness. A plug reports
+    power and state and nothing else; an infrared blaster reports neither. A
+    scene describes how a room looks, so neither belongs in one -- switching a
+    plug or firing a blaster is a sequence's job, and a sequence can do both.
+
+    This is the single rule: it decides what the target picker offers, what
+    "all" means, and what a scene touches even when targets were named. A
+    scene saved before this that names a plug simply passes over it now,
+    rather than the picker and the engine disagreeing about it.
     """
     caps = _caps(controller, device)
     if caps is None:
@@ -701,21 +692,19 @@ def scene_targets(scene, devices, controller=None):
     plug in the house as a side effect of the power setting that came with
     the colour, which is not something anyone asked it to do.
 
-    A scene that names its targets is honoured exactly, which is how a plug
-    joins a scene deliberately. With none named, "all" means the lights: a
-    scene is a statement about how the room looks, and switching the plugs is
-    a sequence's job. An "all off" scene that also cut the plugs was the older
-    reading, and it made a scene quietly reach past what it describes.
+    A scene only ever touches lights -- see is_a_light. With no targets named
+    that means all of them; with targets named it means those of them. An "all
+    off" scene that also cut the plugs was the older reading, and it made a
+    scene quietly reach past what it describes.
 
     A scene that expresses a colour narrows further, to devices that have one.
     """
-    enabled = [d for d in devices if d.enabled]
+    lights = [d for d in devices if d.enabled and is_a_light(d, controller)]
+
     targets = scene.get('targets') or []
     if targets:
         wanted = set(targets)
-        return [d for d in enabled if d.device_id in wanted]
-
-    lights = [d for d in enabled if is_a_light(d, controller)]
+        return [d for d in lights if d.device_id in wanted]
 
     needed = scene_expresses(scene)
     if not needed or controller is None:

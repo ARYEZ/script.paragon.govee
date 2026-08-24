@@ -1152,12 +1152,13 @@ class ControlPanel(object):
         Krypton's Dialog().multiselect exists but silently differs across skins
         on some builds, so this uses a plain checklist the user toggles.
         """
-        # An infrared blaster has no power, brightness or colour, so a scene
-        # can set nothing on it. Offering it here is a choice that does nothing.
+        # Lights only. A plug and a blaster are perfectly good sequence
+        # steps, but a scene describes how a room looks and neither has a
+        # look -- offering them here is a choice that would do nothing.
         devices = [d for d in self.app.devices
-                   if scene_lib.can_be_in_a_scene(d, self.app.controller)]
+                   if scene_lib.is_a_light(d, self.app.controller)]
         if not devices:
-            utils.force_notify('No devices a scene can set anything on')
+            utils.force_notify('No lights known yet')
             return
 
         chosen = set(scene['targets'])

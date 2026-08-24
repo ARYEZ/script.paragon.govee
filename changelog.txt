@@ -1,3 +1,12 @@
+v2.23.1
+- Plugs are no longer offered in a scene's light list. 2.23.0 stopped "all"
+  meaning them but still listed them, on the idea that one might be named
+  deliberately -- which left a list headed "lights" full of plugs.
+- One rule now decides all three things: what the picker offers, what "all"
+  means, and what a scene touches even where targets were named. A scene saved
+  earlier that names a plug passes over it rather than switching it, so the
+  picker can never show something different from what runs.
+
 v2.23.0
 - A scene applied to "all" now means the lights, not every device in the
   house. A scene that said nothing but "off" used to reach the plugs as well,

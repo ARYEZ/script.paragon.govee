@@ -74,6 +74,22 @@ the add-on ships a single locale.
                  default="false"/>
     </category>
 
+    <category label="Satellite">
+        <setting id="satellite_mode" type="bool"
+                 label="This box follows a master box"
+                 default="false"/>
+        <setting id="master_ip" type="ipaddress"
+                 label="Master box address" default=""
+                 enable="eq(-1,true)"/>
+        <setting id="satellite_sync_minutes" type="slider"
+                 label="Copy from the master every (minutes)" default="15"
+                 range="5,5,120" option="int" enable="eq(-2,true)"/>
+        <setting type="lsep" label="A satellite copies the devices, scenes and sequences from the master and runs no schedule of its own."/>
+        <setting type="action" label="Copy from the master now"
+                 action="RunScript(script.paragon.home,action=sync)"
+                 option="close" enable="eq(-4,true)"/>
+    </category>
+
     <category label="Advanced">
         <setting id="bind_address" type="ipaddress"
                  label="Network address to send from (blank = automatic)"

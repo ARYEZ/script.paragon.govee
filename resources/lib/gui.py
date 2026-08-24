@@ -175,7 +175,16 @@ class ControlPanel(object):
         rows.extend([
             ('Scenes...', self.scene_menu),
             ('Sequences...', self.sequence_menu),
-            ('Reracks...', self.rerack_menu),
+        ])
+        # A satellite has no reracks of its own: the master keeps the day's
+        # shape for the whole house, and a satellite following its own copy
+        # would run every phase a second time.
+        if self.app.satellite_mode:
+            rows.append(('Satellite of %s' % self.app.describe_satellite(),
+                         self.satellite_menu))
+        else:
+            rows.append(('Reracks...', self.rerack_menu))
+        rows.extend([
             ('Refresh devices', self.refresh_devices),
             # Stays at the top level rather than inside a driver: the time you
             # need it is when a driver found nothing and so has no menu.
@@ -1181,6 +1190,46 @@ class ControlPanel(object):
                 chosen.discard(device.device_id)
             else:
                 chosen.add(device.device_id)
+
+    def satellite_menu(self):
+        """What this box follows, and a way to copy from it now."""
+        while True:
+            rows = [
+                ('Copy from the master now', self._sync_now),
+                ('Master address: %s' % (self.app.master_ip or 'not set'),
+                 utils.open_settings),
+                ('Last copied: %s' % (self.app.last_sync or 'never'),
+                 self._sync_now),
+                ('Stop following a master', utils.open_settings),
+            ]
+            choice = _select('Satellite', [label for label, _h in rows])
+            if choice == BACK:
+                return
+            rows[choice][1]()
+            if choice in (1, 3):
+                # Settings were open; what they say may have changed.
+                return
+
+    def _sync_now(self):
+        progress = xbmcgui.DialogProgressBG()
+        progress.create(utils.ADDON_NAME, 'Copying from the master...')
+        try:
+            copied, problems = self.app.sync_from_master()
+        except Exception as exc:
+            utils.log('Satellite sync raised: %s' % exc)
+            copied, problems = [], [str(exc)]
+        finally:
+            progress.close()
+
+        if copied and not problems:
+            utils.notify('Copied %d file(s) from the master' % len(copied))
+        elif copied:
+            utils.force_notify('Copied %d, %d problem(s)'
+                               % (len(copied), len(problems)))
+        elif problems:
+            _dialog().ok('Satellite', 'Nothing was copied.', problems[0])
+        else:
+            utils.notify('Nothing to copy')
 
     # -- devices ------------------------------------------------------------
 

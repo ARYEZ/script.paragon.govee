@@ -1,3 +1,21 @@
+v2.24.0
+- Satellite mode, for a house with more than one Kodi box. Under Settings ->
+  Satellite, name the master's address and this box follows it.
+- A satellite copies the devices, scenes, sequences, palette and Tuya keys
+  from the master: at start-up, every 15 minutes by default, and on demand.
+  Files are read over SSH the way Paragon TV reads its master's settings, so
+  boxes that already have passwordless access need nothing further. Nothing is
+  ever written to the master.
+- A satellite runs no schedule -- no reracks, no timed sequences. Three boxes
+  running the same rerack would send every phase three times. The Reracks menu
+  is replaced by a Satellite one.
+- Anything asked for by hand still runs on a satellite: a scene or sequence
+  from the menu, a keymap, Paragon TV's sidebar button. It follows the
+  master's schedule, not the master's remote control.
+- A master that is off or unreachable changes nothing. The satellite keeps
+  what it has, and a file that arrives truncated is discarded rather than
+  written over a good one.
+
 v2.23.1
 - Plugs are no longer offered in a scene's light list. 2.23.0 stopped "all"
   meaning them but still listed them, on the idea that one might be named

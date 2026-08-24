@@ -896,6 +896,61 @@ and says so rather than failing obscurely.
 
 ---
 
+## Satellite mode
+
+More than one Kodi box in the house, all reaching the same lights. The lights
+are on the LAN rather than attached to any one box, so the question is not who
+*can* control them but who *should decide*. Satellite mode answers it: one box
+is the master and keeps the setup, the others copy it down.
+
+Turn it on under **Settings → Satellite** and give it the master's address.
+
+**A satellite copies** the devices, scenes, sequences, colour palette and Tuya
+keys from the master — on start-up, then every 15 minutes by default, and
+whenever you press **Copy from the master now**.
+
+**A satellite runs no schedule.** No reracks, no timed sequences. That is the
+whole point: three boxes running the same rerack would send every phase three
+times, three "off" commands to one bulb, three sequences racing through their
+steps. The Reracks menu is replaced by a Satellite one, because a rerack on a
+satellite would be a copy nobody should act on.
+
+**A satellite still does anything you ask it to** — a scene or sequence from
+its menu, a keymap, Paragon TV's sidebar button. It follows the master's
+schedule, not the master's remote control.
+
+### What it needs
+
+Passwordless SSH from each satellite to the master, as `root`. If your boxes
+already have it — Paragon TV's own satellite mode uses the same thing — there
+is nothing more to set up. Files are read with:
+
+```
+ssh -o BatchMode=yes root@MASTER cat /storage/.kodi/userdata/addon_data/script.paragon.home/<file>
+```
+
+`BatchMode=yes` matters: without a key it fails immediately instead of sitting
+at a password prompt with the service behind it.
+
+Nothing is ever written to the master. A satellite only reads.
+
+### When the master is unreachable
+
+Nothing happens, quietly. The satellite keeps the copy it already has and the
+lights carry on working — they are just a little out of date. A file that
+arrives truncated or unparseable is discarded rather than written, because
+half a scene list is worse than yesterday's whole one.
+
+### One thing worth knowing
+
+The Tuya keys are copied too, so a sequence step naming a plug works from a
+satellite. That does put a credential on every satellite. It is the same trust
+boundary as the passwordless SSH that fetched it — anyone who can reach the
+master as root can already read the key — but it is worth knowing rather than
+discovering.
+
+---
+
 ## Moving to another box
 
 Everything the add-on knows lives in one folder as plain JSON, so moving to

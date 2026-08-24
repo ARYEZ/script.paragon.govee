@@ -18,6 +18,7 @@ import time
 import addon_utils as utils
 import palette as palette_lib
 import reracks as rerack_lib
+import satellite as satellite_lib
 import sequences as sequence_lib
 import scenes as scene_lib
 from devices import (DEVICE_CACHE, Device, TRANSPORT_AUTO, TRANSPORT_CLOUD,
@@ -709,6 +710,11 @@ class ParagonHome(object):
         every tick after that -- a failing sequence retrying in a loop is worse
         than one that failed once.
         """
+        if self.satellite_mode:
+            # The master decides. Three boxes running the same schedule would
+            # send every step three times.
+            return []
+
         moment = now or sequence_lib.now()
         ran = []
         for sequence, at_time in self.due_sequences(moment, grace=grace):
@@ -848,6 +854,9 @@ class ParagonHome(object):
     def run_due_phases(self, now=None, sleep_func=None, on_step=None,
                        grace=0):
         """Run whatever today's rerack says is due. Returns what ran."""
+        if self.satellite_mode:
+            return []
+
         moment = now or sequence_lib.now()
         rerack = self.todays_rerack(moment)
         if rerack is None:
@@ -883,6 +892,60 @@ class ParagonHome(object):
                 utils.force_notify('No sequence named "%s"' % name)
             return False
         return self.run_sequence(sequence, announce=announce)
+
+    # -- satellite mode ----------------------------------------------------
+    #
+    # One box owns the setup and the others follow it. See satellite.py for
+    # why a satellite runs no schedule of its own.
+
+    SATELLITE_STATE = 'satellite_state.json'
+
+    @property
+    def satellite_mode(self):
+        return utils.get_bool('satellite_mode', False)
+
+    @property
+    def master_ip(self):
+        return (utils.get_setting('master_ip') or '').strip()
+
+    @property
+    def sync_minutes(self):
+        return max(5, utils.get_int('satellite_sync_minutes', 15))
+
+    @property
+    def last_sync(self):
+        """When this box last copied from the master, as a display string."""
+        state = utils.read_json(self.SATELLITE_STATE, default={}) or {}
+        return state.get('at', '')
+
+    def _stamp_sync(self, at=None):
+        moment = at or sequence_lib.now()
+        utils.write_json(self.SATELLITE_STATE,
+                         {'at': moment.strftime('%Y-%m-%d %H:%M')})
+
+    def sync_from_master(self, run=None, at=None):
+        """Copy the shared files down. Returns (copied, [problems]).
+
+        The caches are dropped afterwards rather than reloaded: the next
+        reader picks the new files up, and a satellite that syncs while a
+        menu is open would otherwise be looking at the old list.
+        """
+        if not self.satellite_mode:
+            return [], ['This box is not a satellite']
+
+        copied, problems = satellite_lib.pull(self.master_ip, run=run)
+        if copied:
+            self._devices = None
+            self._scenes = None
+            self._sequences = None
+            self._palette = None
+            self._codes = utils.read_json(self.CODE_FILE, default={}) or {}
+            self._tuya_keys = utils.read_json(self.KEY_FILE, default={}) or {}
+            self._stamp_sync(at)
+        return copied, problems
+
+    def describe_satellite(self):
+        return satellite_lib.describe(self.master_ip, self.last_sync)
 
     # -- bulk actions ------------------------------------------------------
 

@@ -181,6 +181,10 @@ def run_action(app, params, utils):
         setting_id = params.get('setting')
         if setting_id:
             gui.pick_scene_for_setting(app, setting_id)
+    elif action == 'sync':
+        # The "copy from the master now" button in the settings.
+        import gui
+        gui.ControlPanel(app)._sync_now()
     elif action == 'settings':
         utils.open_settings()
     else:

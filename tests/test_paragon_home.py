@@ -6948,6 +6948,234 @@ class TestScriptArguments(unittest.TestCase):
 # Playback service decisions
 # ---------------------------------------------------------------------------
 
+class TestSatelliteMode(unittest.TestCase):
+    """One box owns the setup; the others copy it and run no schedule."""
+
+    def setUp(self):
+        clean_profile()
+        xbmcaddon.reset()
+        xbmcgui.reset()
+        for name in ('addon_utils', 'paragon_home', 'satellite', 'scenes',
+                     'sequences', 'reracks', 'palette'):
+            if name in sys.modules:
+                del sys.modules[name]
+
+    def tearDown(self):
+        clean_profile()
+
+    def master(self, **files):
+        """An ssh runner standing in for a master box."""
+        served = {
+            'devices.json': json.dumps([{'device_id': 'AA:BB',
+                                         'name': 'Master Lamp',
+                                         'driver': 'govee'}]),
+            'scenes.json': json.dumps([{'name': 'Warshade'}]),
+            'sequences.json': json.dumps([{'name': 'Ignition'}]),
+        }
+        served.update(files)
+        self.asked = []
+
+        def run(command):
+            self.asked.append(command)
+            remote = command[-1]
+            for name, body in served.items():
+                if remote.endswith(name):
+                    if body is None:
+                        raise RuntimeError('cat: no such file')
+                    return body
+            raise RuntimeError('cat: no such file')
+
+        return run
+
+    def app(self, satellite=True, master_ip='10.0.0.99'):
+        from paragon_home import ParagonHome
+
+        xbmcaddon.SETTINGS['satellite_mode'] = 'true' if satellite else 'false'
+        xbmcaddon.SETTINGS['master_ip'] = master_ip
+        app = ParagonHome()
+        app.controller = RecordingController()
+        return app
+
+    # -- copying -----------------------------------------------------------
+
+    def test_it_copies_the_masters_devices_scenes_and_sequences(self):
+        app = self.app()
+
+        copied, problems = app.sync_from_master(run=self.master())
+
+        self.assertEqual(problems, [])
+        self.assertEqual(sorted(copied),
+                         ['devices.json', 'scenes.json', 'sequences.json'])
+        self.assertEqual([d.name for d in app.devices], ['Master Lamp'])
+        self.assertEqual([s['name'] for s in app.scenes], ['Warshade'])
+        self.assertEqual([s['name'] for s in app.sequences], ['Ignition'])
+
+    def test_it_reads_over_ssh_without_a_password_prompt(self):
+        """BatchMode, or a missing key hangs the service instead of failing."""
+        app = self.app()
+
+        app.sync_from_master(run=self.master())
+
+        command = self.asked[0]
+        self.assertEqual(command[0], 'ssh')
+        self.assertIn('BatchMode=yes', command)
+        self.assertIn('root@10.0.0.99', command)
+        self.assertIn('script.paragon.home', command[-1])
+
+    def test_it_never_writes_to_the_master(self):
+        app = self.app()
+
+        app.sync_from_master(run=self.master())
+
+        for command in self.asked:
+            self.assertTrue(command[-1].startswith('cat '),
+                            'not a read: %s' % command[-1])
+
+    def test_a_master_that_cannot_be_reached_leaves_what_is_here(self):
+        """The lights still work; they are just a little out of date."""
+        app = self.app()
+        app.sync_from_master(run=self.master())
+
+        def unreachable(command):
+            raise RuntimeError('ssh: connect to host 10.0.0.99: timed out')
+
+        copied, problems = app.sync_from_master(run=unreachable)
+
+        self.assertEqual(copied, [])
+        self.assertTrue(problems)
+        self.assertEqual([d.name for d in app.devices], ['Master Lamp'])
+
+    def test_a_truncated_file_does_not_overwrite_a_good_one(self):
+        """Half a scene list is worse than yesterday's whole one."""
+        app = self.app()
+        app.sync_from_master(run=self.master())
+
+        copied, problems = app.sync_from_master(
+            run=self.master(**{'scenes.json': '[{"name": "Warsh'}))
+
+        self.assertNotIn('scenes.json', copied)
+        self.assertTrue([p for p in problems if 'scenes.json' in p])
+        self.assertEqual([s['name'] for s in app.scenes], ['Warshade'])
+
+    def test_a_house_with_no_tuya_keys_is_not_a_problem(self):
+        """Absent is the normal case, not a failure worth showing."""
+        app = self.app()
+
+        copied, problems = app.sync_from_master(
+            run=self.master(**{'tuya_keys.json': None}))
+
+        self.assertEqual(problems, [])
+        self.assertNotIn('tuya_keys.json', copied)
+
+    def test_with_no_master_address_it_says_so(self):
+        app = self.app(master_ip='')
+
+        copied, problems = app.sync_from_master(run=self.master())
+
+        self.assertEqual(copied, [])
+        self.assertIn('master', problems[0].lower())
+
+    def test_a_master_box_does_not_copy_from_anything(self):
+        app = self.app(satellite=False)
+
+        copied, problems = app.sync_from_master(run=self.master())
+
+        self.assertEqual(copied, [])
+        self.assertEqual(self.asked, [])
+
+    # -- what a satellite does not do --------------------------------------
+
+    def test_a_satellite_runs_no_scheduled_sequence(self):
+        """Three boxes on one schedule would send every step three times."""
+        import sequences as sequence_lib
+
+        app = self.app()
+        app._sequences = [sequence_lib.make_sequence(
+            'Ignition', time='18:00', days=[5])]
+        saturday = datetime.datetime(2026, 8, 22, 18, 0)
+
+        self.assertEqual(app.run_due_sequences(now=saturday), [])
+
+    def test_the_same_sequence_does_run_on_the_master(self):
+        """The other half: this is a satellite rule, not a broken schedule."""
+        import sequences as sequence_lib
+
+        app = self.app(satellite=False)
+        app._sequences = [sequence_lib.make_sequence(
+            'Ignition', time='18:00', days=[5])]
+        saturday = datetime.datetime(2026, 8, 22, 18, 0)
+
+        self.assertEqual(app.run_due_sequences(now=saturday), ['Ignition'])
+
+    def _with_a_phase_due(self, satellite=True):
+        """A rerack whose phase 2 is due at 07:00 on the Saturday below."""
+        import reracks as rerack_lib
+        import sequences as sequence_lib
+
+        app = self.app(satellite=satellite)
+        app._reracks = rerack_lib.normalise_all([rerack_lib.make_rerack(
+            'Alpha', [{}, {'sequence': 'Curtain Up', 'time': '07:00'}])])
+        app._week = ['Alpha'] * 7
+        app._phase_state = set()
+        app._sequences = [sequence_lib.make_sequence('Curtain Up')]
+        return app
+
+    def test_a_satellite_runs_no_rerack_phase(self):
+        app = self._with_a_phase_due()
+
+        self.assertEqual(
+            app.run_due_phases(now=datetime.datetime(2026, 8, 22, 7, 0)), [])
+
+    def test_the_same_phase_does_run_on_the_master(self):
+        """Proves the phase really was due, so the test above is not vacuous."""
+        app = self._with_a_phase_due(satellite=False)
+
+        self.assertEqual(
+            app.run_due_phases(now=datetime.datetime(2026, 8, 22, 7, 0)),
+            ['Alpha phase 2'])
+
+    def test_asked_by_hand_a_satellite_still_runs_it(self):
+        """It follows the master's schedule, not the master's remote control."""
+        import sequences as sequence_lib
+
+        app = self.app()
+        scene = scene_lib.make_scene('Warshade', power=scene_lib.POWER_OFF)
+        app._scenes = [scene]
+        app._devices = [Device('AA:BB', name='Lamp', driver='govee', lan=True)]
+        app.controller.capabilities = lambda d: set(
+            ['power', 'brightness', 'color', 'color_temp', 'state'])
+
+        ran = app.run_sequence(sequence_lib.make_sequence(
+            'By Hand', [{'kind': 'scene', 'target': 'Warshade'}]),
+            announce=False)
+
+        self.assertTrue(ran)
+        self.assertTrue(app.controller.calls)
+
+    # -- the menu ----------------------------------------------------------
+
+    def test_the_menu_offers_no_reracks_on_a_satellite(self):
+        import gui
+
+        app = self.app()
+        app._devices = []
+        labels = menu_row(lambda: gui.ControlPanel(app).main_menu(),
+                          'Satellite')[1]
+
+        self.assertFalse([row for row in labels if row.startswith('Rerack')],
+                         'reracks offered on a satellite: %s' % labels)
+
+    def test_the_menu_offers_reracks_on_the_master(self):
+        import gui
+
+        app = self.app(satellite=False)
+        app._devices = []
+        labels = menu_row(lambda: gui.ControlPanel(app).main_menu(),
+                          'Reracks...')[1]
+
+        self.assertFalse([row for row in labels if row.startswith('Satellite')])
+
+
 class TestPlaybackService(unittest.TestCase):
 
     def setUp(self):

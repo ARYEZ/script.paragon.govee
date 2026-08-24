@@ -755,6 +755,9 @@ class ControlPanel(object):
         while True:
             brightness = ('leave alone' if scene['brightness'] is None
                           else '%d%%' % scene['brightness'])
+            bar_brightness = ('same as above'
+                              if scene.get('bar_brightness') is None
+                              else '%d%%' % scene['bar_brightness'])
             if scene['mode'] == scene_lib.MODE_COLOR:
                 appearance = 'RGB %d, %d, %d' % tuple(scene['color'][:3])
             elif scene['mode'] == scene_lib.MODE_MIX:
@@ -793,6 +796,8 @@ class ControlPanel(object):
                  lambda: self._edit_power(scene)),
                 ('Brightness: %s' % brightness,
                  lambda: self._edit_brightness(scene)),
+                ('Lightbar brightness: %s' % bar_brightness,
+                 lambda: self._edit_bar_brightness(scene)),
                 ('Appearance: %s' % appearance,
                  lambda: self._edit_appearance(scene)),
                 ('Lights: %s' % target_label,
@@ -989,6 +994,27 @@ class ControlPanel(object):
                 scene['brightness'] = max(1, min(100, value))
         else:
             scene['brightness'] = BRIGHTNESS_STEPS[choice - 1]
+
+    def _edit_bar_brightness(self, scene):
+        """A separate brightness for lightbars, overriding the scene's own.
+
+        A lightbar at 50% is far brighter than a bulb at 50%, so a scene that
+        looks right on the bulbs often blows out the bars.
+        """
+        options = ['Same as the scene brightness']
+        options += ['%d%%' % step for step in BRIGHTNESS_STEPS]
+        options.append('Custom...')
+        choice = _select('Lightbar brightness', options)
+        if choice == BACK:
+            return
+        if choice == 0:
+            scene['bar_brightness'] = None
+        elif choice == len(options) - 1:
+            value = self._ask_number('Lightbar brightness (1-100)', '25')
+            if value is not None:
+                scene['bar_brightness'] = max(1, min(100, value))
+        else:
+            scene['bar_brightness'] = BRIGHTNESS_STEPS[choice - 1]
 
     def _edit_appearance(self, scene):
         choice = _select('Scene appearance',

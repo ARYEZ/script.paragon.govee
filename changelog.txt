@@ -1,3 +1,12 @@
+v2.21.0
+- A scene can now carry a second brightness that applies only to lightbars.
+  A lightbar throws far more light than a bulb at the same percentage, so a
+  scene tuned for the bulbs tends to blow out the bars. Left unset, bars keep
+  using the scene's own brightness, so existing scenes are unchanged.
+- A device counts as a lightbar if its model is a known lightbar SKU (H610A
+  today) or its name contains "lightbar", which covers a model not yet listed
+  without needing a code change.
+
 v2.20.0
 - Phase times now match Paragon TV, which does not store them. It holds one
   anchor per preset and a list of offsets in minutes, hardcoded in its own

@@ -344,6 +344,64 @@ class TestScenes(unittest.TestCase):
         defaults = scene_lib.default_scenes()
         self.assertEqual(len(scene_lib.normalise_all(defaults)), len(defaults))
 
+    def test_lightbar_brightness_overrides_for_bars_only(self):
+        controller = RecordingController()
+        bulb = Device('AA:BB', name='Bulb', model='H6008', lan=True,
+                      ip='127.0.0.1')
+        bar = Device('CC:DD', name='Greatroom Lightbar One', model='H610A',
+                     lan=True, ip='127.0.0.2')
+        scene = scene_lib.make_scene('Dawn', brightness=50,
+                                     bar_brightness=5)
+        applied, errors = scene_lib.apply_scene(controller, scene,
+                                                [bulb, bar])
+
+        self.assertEqual(applied, 2)
+        self.assertEqual(errors, [])
+        levels = dict((c[1], c[2]) for c in controller.calls
+                      if c[0] == 'brightness')
+        self.assertEqual(levels, {'AA:BB': 50, 'CC:DD': 5})
+
+    def test_lightbar_brightness_absent_leaves_bars_on_scene_value(self):
+        controller = RecordingController()
+        bar = Device('CC:DD', name='Bar', model='H610A', lan=True,
+                     ip='127.0.0.2')
+        scene = scene_lib.make_scene('Dawn', brightness=50)
+        scene_lib.apply_scene(controller, scene, [bar])
+
+        levels = [c[2] for c in controller.calls if c[0] == 'brightness']
+        self.assertEqual(levels, [50])
+
+    def test_lightbar_recognised_by_name_as_well_as_model(self):
+        by_model = Device('AA:BB', name='Anything', model='h610a')
+        by_name = Device('CC:DD', name='Kitchen LIGHTBAR two', model='H6008')
+        plain = Device('EE:FF', name='Bedroom Left Top', model='H6008')
+        self.assertTrue(scene_lib.is_lightbar(by_model))
+        self.assertTrue(scene_lib.is_lightbar(by_name))
+        self.assertFalse(scene_lib.is_lightbar(plain))
+
+    def test_lightbar_override_does_not_write_back_into_the_scene(self):
+        controller = RecordingController()
+        bar = Device('CC:DD', name='Bar', model='H610A', lan=True,
+                     ip='127.0.0.2')
+        scene = scene_lib.make_scene('Dawn', brightness=50, bar_brightness=5)
+        scene_lib.apply_scene(controller, scene, [bar])
+        self.assertEqual(scene['brightness'], 50)
+        self.assertEqual(scene['bar_brightness'], 5)
+
+    def test_normalise_clamps_lightbar_brightness(self):
+        scene = scene_lib.normalise({'name': 'X', 'bar_brightness': 900})
+        self.assertEqual(scene['bar_brightness'], 100)
+        scene = scene_lib.normalise({'name': 'X', 'bar_brightness': 'junk'})
+        self.assertIsNone(scene['bar_brightness'])
+        scene = scene_lib.normalise({'name': 'X'})
+        self.assertIsNone(scene['bar_brightness'])
+
+    def test_describe_reports_lightbar_brightness(self):
+        scene = scene_lib.make_scene('Dawn', brightness=50, bar_brightness=5)
+        self.assertIn('bars 5%', scene_lib.describe(scene))
+        plain = scene_lib.make_scene('Dawn', brightness=50)
+        self.assertNotIn('bars', scene_lib.describe(plain))
+
     def test_apply_scene_orders_brightness_before_colour(self):
         controller = RecordingController()
         device = Device('AA:BB', name='Lamp', lan=True, ip='127.0.0.1')

@@ -1,3 +1,17 @@
+v2.23.0
+- A scene applied to "all" now means the lights, not every device in the
+  house. A scene that said nothing but "off" used to reach the plugs as well,
+  on the reasoning that off is something a plug can be. It made a scene quietly
+  act past what it describes: a scene says how the room looks, and switching a
+  plug is a sequence's job.
+- A plug is still a perfectly good scene target when named in the light list.
+  That is unchanged, and is how a plug joins a scene deliberately.
+- Infrared blasters no longer appear in the target list. An RM has no power,
+  no brightness and no colour, so a scene could never set anything on one --
+  ticking it did nothing at all.
+- If a scene step in one of your sequences was relying on "all off" to cut a
+  plug, add a power step for that plug: the scene no longer does it.
+
 v2.22.0
 - The pause between steps can now be up to an hour, was ten minutes.
 - A pause no longer freezes everything else. The service waits in half-second

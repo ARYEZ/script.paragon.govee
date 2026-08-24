@@ -775,9 +775,9 @@ class ControlPanel(object):
             if targets:
                 target_label = '%d selected' % len(targets)
             elif scene_lib.scene_expresses(scene):
-                target_label = 'all colour devices'
+                target_label = 'all colour lights'
             else:
-                target_label = 'all devices'
+                target_label = 'all lights'
             cycle = int(scene.get('cycle') or 0)
             cycle_label = ('off' if not cycle
                            else 'every %s' % _duration(cycle))
@@ -1152,9 +1152,12 @@ class ControlPanel(object):
         Krypton's Dialog().multiselect exists but silently differs across skins
         on some builds, so this uses a plain checklist the user toggles.
         """
-        devices = self.app.devices
+        # An infrared blaster has no power, brightness or colour, so a scene
+        # can set nothing on it. Offering it here is a choice that does nothing.
+        devices = [d for d in self.app.devices
+                   if scene_lib.can_be_in_a_scene(d, self.app.controller)]
         if not devices:
-            utils.force_notify('No devices known yet')
+            utils.force_notify('No devices a scene can set anything on')
             return
 
         chosen = set(scene['targets'])

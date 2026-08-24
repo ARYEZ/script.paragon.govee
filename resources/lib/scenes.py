@@ -31,6 +31,14 @@ import random
 from devices import (CAP_BRIGHTNESS, CAP_COLOR, CAP_COLOR_TEMP,
                      CAP_POWER)
 
+# What a scene can set on a device. A device with none of these -- an infrared
+# blaster, which only emits named commands -- cannot be in a scene at all.
+SCENE_CAPABILITIES = (CAP_POWER, CAP_BRIGHTNESS, CAP_COLOR, CAP_COLOR_TEMP)
+
+# What makes a device a light rather than a switch. A scene with no targets of
+# its own means these, and only these.
+LIGHT_CAPABILITIES = (CAP_COLOR, CAP_COLOR_TEMP, CAP_BRIGHTNESS)
+
 POWER_ON = 'on'
 POWER_OFF = 'off'
 POWER_KEEP = 'keep'
@@ -648,6 +656,39 @@ def scene_expresses(scene):
     return needed
 
 
+def _caps(controller, device):
+    """What this device can be asked to do, via the controller when there is one."""
+    getter = getattr(controller, 'capabilities', None) if controller else None
+    if getter is None:
+        return None
+    return set(getter(device) or [])
+
+
+def can_be_in_a_scene(device, controller=None):
+    """Whether a scene could set anything at all on this device.
+
+    An infrared blaster cannot: it emits named commands and has no power,
+    brightness or colour. Listing one among a scene's targets only offers a
+    choice that does nothing.
+    """
+    caps = _caps(controller, device)
+    if caps is None:
+        return True
+    return bool(caps & set(SCENE_CAPABILITIES))
+
+
+def is_a_light(device, controller=None):
+    """Whether this device is a light rather than a switch.
+
+    A plug reports power and nothing else. It is a perfectly good scene target
+    when named deliberately, but it is not what "all" means.
+    """
+    caps = _caps(controller, device)
+    if caps is None:
+        return True
+    return bool(caps & set(LIGHT_CAPABILITIES))
+
+
 def scene_targets(scene, devices, controller=None):
     """Resolve a scene's target list against the known devices.
 
@@ -660,9 +701,13 @@ def scene_targets(scene, devices, controller=None):
     plug in the house as a side effect of the power setting that came with
     the colour, which is not something anyone asked it to do.
 
-    A scene that expresses nothing but power still means everything: "all
-    off" should turn off the plugs too. And a scene that names its targets is
-    honoured exactly, which is how a plug joins a colour scene deliberately.
+    A scene that names its targets is honoured exactly, which is how a plug
+    joins a scene deliberately. With none named, "all" means the lights: a
+    scene is a statement about how the room looks, and switching the plugs is
+    a sequence's job. An "all off" scene that also cut the plugs was the older
+    reading, and it made a scene quietly reach past what it describes.
+
+    A scene that expresses a colour narrows further, to devices that have one.
     """
     enabled = [d for d in devices if d.enabled]
     targets = scene.get('targets') or []
@@ -670,14 +715,16 @@ def scene_targets(scene, devices, controller=None):
         wanted = set(targets)
         return [d for d in enabled if d.device_id in wanted]
 
+    lights = [d for d in enabled if is_a_light(d, controller)]
+
     needed = scene_expresses(scene)
     if not needed or controller is None:
-        return enabled
+        return lights
 
     getter = getattr(controller, 'capabilities', None)
     if getter is None:
-        return enabled
-    return [d for d in enabled if needed & set(getter(d) or [])]
+        return lights
+    return [d for d in lights if needed & set(getter(d) or [])]
 
 
 def apply_scene(controller, scene, devices, log_func=None,

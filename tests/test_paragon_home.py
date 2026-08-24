@@ -485,19 +485,37 @@ class TestScenes(unittest.TestCase):
 
         self.assertEqual(set(c[1] for c in controller.calls), set(['AA:BB']))
 
-    def test_a_scene_that_only_says_off_still_reaches_the_plugs(self):
-        """"All off" means all of it, because off is something a plug can be."""
+    def test_a_scene_that_only_says_off_leaves_the_plugs_alone(self):
+        """"All" means the lights. Switching plugs is a sequence's job."""
         controller = RecordingController()
         bulb = Device('AA:BB', name='Lamp', driver='govee', lan=True)
         plug = Device('8006ABCD', name='Christmas Tree', driver='kasa',
                       lan=True)
-        controller.capabilities = lambda d: set(['power', 'state'])
+        controller.capabilities = lambda d: set(
+            ['power', 'state'] if d.driver == 'kasa'
+            else ['power', 'brightness', 'color', 'color_temp', 'state'])
         scene = scene_lib.make_scene('All Off', power=scene_lib.POWER_OFF)
 
         scene_lib.apply_scene(controller, scene, [bulb, plug])
 
-        self.assertEqual(set(c[1] for c in controller.calls),
-                         set(['AA:BB', '8006ABCD']))
+        self.assertEqual(set(c[1] for c in controller.calls), set(['AA:BB']))
+
+    def test_a_blaster_is_never_a_scene_target(self):
+        """No power, no brightness, no colour -- a scene can set nothing."""
+        controller = RecordingController()
+        blaster = Device('EE:FF', name='Bedroom Broadlink', driver='broadlink')
+        controller.capabilities = lambda d: set(['commands'])
+
+        self.assertFalse(scene_lib.can_be_in_a_scene(blaster, controller))
+        self.assertFalse(scene_lib.is_a_light(blaster, controller))
+
+    def test_a_plug_can_be_in_a_scene_but_is_not_a_light(self):
+        controller = RecordingController()
+        plug = Device('8006ABCD', name='Christmas Tree', driver='kasa')
+        controller.capabilities = lambda d: set(['power', 'state'])
+
+        self.assertTrue(scene_lib.can_be_in_a_scene(plug, controller))
+        self.assertFalse(scene_lib.is_a_light(plug, controller))
 
     def test_a_plug_named_in_a_scene_is_still_honoured(self):
         """Naming targets is how a plug joins a colour scene deliberately."""
@@ -742,13 +760,16 @@ class TestSequences(unittest.TestCase):
         for suffix in ('1', '3', '4'):
             self.assertNotIn('8006ABC%s' % suffix, switched)
 
-    def test_an_all_off_scene_step_still_switches_everything(self):
-        """The other half: a scene that only says off means all of it."""
+    def test_an_all_off_scene_step_leaves_the_plugs_to_a_power_step(self):
+        """A scene says how the room looks; cutting plugs is a power step."""
         app = self.app()
         app._devices.append(Device('8006ABC1', name='Kasa 1', driver='kasa',
                                    lan=True))
-        by_driver = {'govee': ['power', 'state'], 'tuya': ['power', 'state'],
-                     'broadlink': ['commands'], 'kasa': ['power', 'state']}
+        by_driver = {
+            'govee': ['power', 'brightness', 'color', 'color_temp', 'state'],
+            'tuya': ['power', 'state'],
+            'broadlink': ['commands'],
+            'kasa': ['power', 'state']}
         self.recorder.capabilities = lambda d: set(by_driver[d.driver])
         app._scenes = [scene_lib.make_scene('All Off',
                                             power=scene_lib.POWER_OFF)]
@@ -756,8 +777,9 @@ class TestSequences(unittest.TestCase):
         self.sequences.run(app, self.sequences.make_sequence(
             'Goodnight', [{'kind': 'scene', 'target': 'All Off'}]))
 
-        self.assertIn('8006ABC1',
-                      set(call[1] for call in self.recorder.calls))
+        touched = set(call[1] for call in self.recorder.calls)
+        self.assertNotIn('8006ABC1', touched)
+        self.assertTrue(touched, 'the lights should still have been switched')
 
     def test_a_failing_step_does_not_stop_the_ones_after_it(self):
         """A plug that has been unplugged is no reason to leave the room dark."""
@@ -6737,7 +6759,10 @@ class TestCollapsingTargets(unittest.TestCase):
         app.controller.turn = lambda device, on: switched.append(device.name)
         app.controller.capabilities = lambda device: set(['power', 'state'])
 
-        scene = scenes_mod.make_scene('Bedtime', power=scenes_mod.POWER_OFF)
+        # Named explicitly: "all" now means the lights, and these are plugs.
+        scene = scenes_mod.make_scene(
+            'Bedtime', power=scenes_mod.POWER_OFF,
+            targets=[d.device_id for d in [master] + outlets])
         app.apply_scene(scene, announce=False)
 
         self.assertEqual(sorted(switched),
@@ -7836,8 +7861,8 @@ class TestControlPanel(unittest.TestCase):
         xbmcgui.reset()
         plain = menu_row(lambda: self.panel().edit_scene(1), 'Lights:')[1]
 
-        self.assertIn('Lights: all colour devices', colour)
-        self.assertIn('Lights: all devices', plain)
+        self.assertIn('Lights: all colour lights', colour)
+        self.assertIn('Lights: all lights', plain)
 
     def _blaster_app(self):
         blaster = Device('EE:FF', name='Bedroom Broadlink', driver='broadlink',
@@ -7848,6 +7873,22 @@ class TestControlPanel(unittest.TestCase):
             else ['power', 'brightness', 'color', 'color_temp', 'state'])
         self.recorder.commands = lambda d: ['AVR Power', 'TV power']
         return blaster
+
+    def test_the_target_picker_leaves_out_a_blaster(self):
+        """A scene can set nothing on it, so offering it does nothing."""
+        blaster = self._blaster_app()
+        scene = scene_lib.make_scene('All Off',
+                                     power=scene_lib.POWER_OFF)
+        self.app._scenes = [scene]
+
+        xbmcgui.SELECT_QUEUE.extend([-1])
+        self.panel()._edit_targets(scene)
+        offered = xbmcgui.SELECT_CALLS[-1][1]
+
+        self.assertFalse([row for row in offered if blaster.name in row],
+                         'the blaster was offered: %s' % offered)
+        self.assertTrue([row for row in offered
+                         if self.app.devices[0].name in row])
 
     def test_the_scene_editor_offers_the_commands_a_scene_sends(self):
         """They worked in the engine all along; there was no way to add one."""

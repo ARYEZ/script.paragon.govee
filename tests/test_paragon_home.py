@@ -9410,19 +9410,64 @@ class TestWebRemote(unittest.TestCase):
         for escape in ('/font/../../../settings.xml',
                        '/font/..%2f..%2ftuya_keys.json',
                        '/font/....//paragon-bold.woff2',
-                       '/font//etc/passwd'):
+                       '/font//etc/passwd',
+                       '/icon.png/../addon.xml',
+                       '/icon.png/../resources/lib/remote.py'):
             answer = client.call('GET', escape)
             self.assertEqual(answer['status'], 404, escape)
             self.assertNotIn(b'root:', answer['body'])
 
-    def test_the_page_policy_allows_the_font_and_nothing_else(self):
+    def test_the_page_policy_allows_what_the_page_loads_and_no_more(self):
         client = self.serve()
 
-        answer = client.call('GET', '/', guard=False)
-        policy = answer.get('csp') or ''
+        policy = client.call('GET', '/', guard=False).get('csp') or ''
 
         self.assertIn("default-src 'none'", policy)
+        # Everything the page loads, it loads from this box.
         self.assertIn("font-src 'self'", policy)
+        self.assertIn("img-src 'self' data:", policy)
+        self.assertIn("manifest-src 'self'", policy)
+        self.assertIn("connect-src 'self'", policy)
+
+    # -- launching as an app -----------------------------------------------
+
+    def test_a_tablet_can_launch_it_without_a_browser_around_it(self):
+        """A page cannot go full screen by itself, so the manifest carries it."""
+        client = self.serve()
+
+        answer = client.call('GET', '/manifest.webmanifest', guard=False)
+
+        self.assertEqual(answer['status'], 200)
+        self.assertIn('manifest+json', answer['type'])
+        self.assertEqual(answer['data']['display'], 'fullscreen')
+        self.assertIn('standalone', answer['data']['display_override'])
+        self.assertEqual(answer['data']['start_url'], '/')
+
+    def test_the_manifest_is_readable_before_signing_in(self):
+        """A browser fetches it before anyone has typed a PIN."""
+        client = self.serve()
+
+        self.assertEqual(
+            client.call('GET', '/manifest.webmanifest')['status'], 200)
+        self.assertEqual(client.state()['status'], 401)
+
+    def test_the_icon_is_served_for_a_home_screen(self):
+        client = self.serve()
+
+        answer = client.call('GET', '/icon.png', guard=False)
+
+        self.assertEqual(answer['status'], 200)
+        self.assertEqual(answer['type'], 'image/png')
+        self.assertEqual(answer['body'][:4], b'\x89PNG')
+
+    def test_the_page_asks_the_browser_to_drop_its_own_chrome(self):
+        page = self.lib.PAGE.encode('utf-8')
+
+        self.assertIn(b'rel="manifest" href="/manifest.webmanifest"', page)
+        # iOS reads these rather than the manifest, and honours them over
+        # plain HTTP where Android will not.
+        self.assertIn(b'apple-mobile-web-app-capable', page)
+        self.assertIn(b'apple-touch-icon', page)
 
     # -- getting in --------------------------------------------------------
 

@@ -113,21 +113,28 @@ IMMEDIATE = ('on', 'off', 'toggle', 'brightness', 'color', 'temp', 'scene',
 BACKGROUND = ('sequence', 'refresh', 'sync')
 ACTIONS = IMMEDIATE + BACKGROUND
 
-# The typeface the page is set in, shipped with the add-on rather than fetched
-# from a font host: this is a media player on a LAN, and a remote that needs
-# the internet to look right is a remote that looks wrong when the internet is
-# down. Saira Condensed, under the SIL Open Font License -- see
-# resources/fonts/OFL.txt.
+# Everything the page loads from disk, as a table of whole routes rather than
+# a directory to look in. The path is never built from what the URL asked for:
+# joining a caller's string onto a path is how "/font/../../tuya_keys.json"
+# becomes a way to read the Tuya keys, and everything above resources/ is this
+# user's credentials.
 #
-# A tuple of exact names, not a directory listing: the name arrives in a URL,
-# and joining a caller's string onto a path is how "/font/../../settings.xml"
-# becomes a way to read the Kasa password.
-FONT_DIR = os.path.join(utils.ADDON_PATH, 'resources', 'fonts')
-FONTS = ('paragon-medium.woff2', 'paragon-bold.woff2')
+# The typeface is Saira Condensed under the SIL Open Font License (see
+# resources/fonts/OFL.txt), shipped rather than fetched from a font host: this
+# is a media player on a LAN, and a remote that needs the internet to look
+# right is a remote that looks wrong when the internet is down.
+STATIC_FILES = {
+    '/font/paragon-medium.woff2': (
+        ('resources', 'fonts', 'paragon-medium.woff2'), 'font/woff2'),
+    '/font/paragon-bold.woff2': (
+        ('resources', 'fonts', 'paragon-bold.woff2'), 'font/woff2'),
+    # The add-on's own icon, which is also what a tablet puts on its home
+    # screen when the page is added to it.
+    '/icon.png': (('icon.png',), 'image/png'),
+}
 
-# A year. The files only change when the add-on is updated, and that changes
-# the URL below with them.
-FONT_CACHE = 'public, max-age=31536000, immutable'
+# A year. These only change when the add-on is updated.
+STATIC_CACHE = 'public, max-age=31536000, immutable'
 
 # What has to be true of a device before the page draws a row for it. Anything
 # else -- an infrared blaster -- would get a row with nothing on it.
@@ -703,29 +710,45 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(status, json.dumps(payload),
                    'application/json; charset=utf-8', extra)
 
-    def _send_font(self, name):
-        """Serve one of the shipped font files, and nothing else.
-
-        Membership of FONTS is the whole check, deliberately done before any
-        path is built: `os.path.join` with a caller's string happily walks up
-        out of the fonts directory, and everything above it is this user's
-        Tuya keys and Kasa password.
-        """
-        if name not in FONTS:
-            return self._send_json(404, {'ok': False,
-                                         'message': 'No such font'})
+    def _send_static(self, route):
+        """Serve one of the files the page loads. Whole-route match only."""
+        parts, content_type = STATIC_FILES[route]
         try:
-            handle = open(os.path.join(FONT_DIR, name), 'rb')
+            handle = open(os.path.join(utils.ADDON_PATH, *parts), 'rb')
             try:
                 data = handle.read()
             finally:
                 handle.close()
         except (OSError, IOError) as exc:
-            # The page has a fallback stack, so a missing file is a plainer
-            # remote rather than a broken one.
-            utils.debug('Web remote: cannot read font %s: %s' % (name, exc))
+            # The page names a fallback for each of these, so a missing file
+            # is a plainer remote rather than a broken one.
+            utils.debug('Web remote: cannot read %s: %s' % (route, exc))
             return self._send_json(404, {'ok': False, 'message': 'Missing'})
-        return self._send(200, data, 'font/woff2', cache=FONT_CACHE)
+        return self._send(200, data, content_type, cache=STATIC_CACHE)
+
+    def _send_manifest(self):
+        """The web app manifest, so a tablet can launch this without a browser
+        wrapped around it.
+
+        Served without a session: a browser fetches it before anyone has
+        signed in, and it says nothing the login page does not already show.
+        """
+        body = json.dumps({
+            'name': utils.ADDON_NAME,
+            'short_name': 'Paragon',
+            'description': 'Lights, scenes and sequences on your network',
+            'start_url': '/',
+            'scope': '/',
+            # fullscreen first, standalone as the fallback for a browser that
+            # will not give up its own chrome entirely.
+            'display': 'fullscreen',
+            'display_override': ['fullscreen', 'standalone'],
+            'background_color': '#0a0a0b',
+            'theme_color': '#0a0a0b',
+            'icons': [{'src': '/icon.png', 'sizes': '512x512',
+                       'type': 'image/png', 'purpose': 'any maskable'}],
+        })
+        return self._send(200, body, 'application/manifest+json')
 
     def _send_page(self):
         self._send(200, PAGE, 'text/html; charset=utf-8', [
@@ -734,7 +757,8 @@ class _Handler(BaseHTTPRequestHandler):
             ('Content-Security-Policy',
              "default-src 'none'; style-src 'unsafe-inline'; "
              "script-src 'unsafe-inline'; connect-src 'self'; "
-             "font-src 'self'; img-src data:; form-action 'none'; "
+             "font-src 'self'; img-src 'self' data:; "
+             "manifest-src 'self'; form-action 'none'; "
              "frame-ancestors 'none'"),
         ])
 
@@ -803,8 +827,10 @@ class _Handler(BaseHTTPRequestHandler):
         if path == '/favicon.ico':
             # An empty answer rather than a 404 on every single page load.
             return self._send(204, '', 'image/x-icon')
-        if path.startswith('/font/'):
-            return self._send_font(path[len('/font/'):])
+        if path in STATIC_FILES:
+            return self._send_static(path)
+        if path == '/manifest.webmanifest':
+            return self._send_manifest()
         if path == '/api/state':
             if not self._allowed():
                 return None
@@ -1102,6 +1128,17 @@ PAGE = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
 <meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#0a0a0b">
+<!-- Added to a tablet's home screen, these launch it without a browser
+     wrapped around it. iOS reads the apple- ones and honours them over plain
+     HTTP; Android reads the manifest. -->
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Paragon Home">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.png">
+<link rel="apple-touch-icon" href="/icon.png">
 <title>Paragon Home</title>
 <style>
 /* The typeface ships with the add-on and is served from this box, so the page
@@ -1660,6 +1697,7 @@ footer button { flex: 1 1 auto; }
       <div class="barside">
         <span class="tag" id="version"></span>
         <span class="badge" id="badge" hidden></span>
+        <button class="ghost" id="fullscreen" hidden>Full screen</button>
         <button class="ghost" id="signout">Sign out</button>
       </div>
     </div>
@@ -1726,6 +1764,85 @@ footer button { flex: 1 1 auto; }
 <script>
 var state = null;
 var busy = false;
+
+/* -- full screen ---------------------------------------------------------
+   A page cannot put itself into full screen when it loads. Every browser
+   requires a gesture first, or any site could take over the display of
+   anything that visited it -- so the closest to launching full screen is to
+   remember that this panel wants it, and take the first touch as the gesture.
+
+   Kept in this browser's own storage rather than in a Kodi setting: it is a
+   property of the tablet on the wall, not of the house. The phone that
+   occasionally opens the same address should not inherit it. */
+var FULLSCREEN_KEY = 'paragon.fullscreen';
+
+function fullscreenAvailable() {
+  var el = document.documentElement;
+  return !!(el.requestFullscreen || el.webkitRequestFullscreen);
+}
+
+function inFullscreen() {
+  return !!(document.fullscreenElement || document.webkitFullscreenElement);
+}
+
+function wantsFullscreen() {
+  try {
+    return localStorage.getItem(FULLSCREEN_KEY) === '1';
+  } catch (error) {
+    // Private browsing, or storage switched off. The button still works for
+    // this visit; it just will not be remembered for the next one.
+    return false;
+  }
+}
+
+function rememberFullscreen(on) {
+  try {
+    localStorage.setItem(FULLSCREEN_KEY, on ? '1' : '0');
+  } catch (error) { /* nothing to be done about it */ }
+}
+
+function enterFullscreen() {
+  var el = document.documentElement;
+  var ask = el.requestFullscreen || el.webkitRequestFullscreen;
+  if (!ask) { return; }
+  try {
+    var pending = ask.call(el);
+    // Rejects when the browser did not count this as a gesture. That is a
+    // refusal rather than a fault, and an uncaught rejection would land in
+    // the console as though something had broken.
+    if (pending && pending['catch']) { pending['catch'](function () {}); }
+  } catch (error) { /* same */ }
+}
+
+function leaveFullscreen() {
+  var drop = document.exitFullscreen || document.webkitExitFullscreen;
+  if (!drop) { return; }
+  try {
+    var pending = drop.call(document);
+    if (pending && pending['catch']) { pending['catch'](function () {}); }
+  } catch (error) { /* same */ }
+}
+
+function paintFullscreenButton() {
+  var node = document.getElementById('fullscreen');
+  node.hidden = !fullscreenAvailable();
+  node.textContent = inFullscreen() ? 'Exit full screen' : 'Full screen';
+}
+
+/* Takes the next touch anywhere as the gesture, once, so a panel that has
+   asked for full screen returns to it the moment somebody reaches for it.
+   Listening on the way down and never cancelling, so that same touch still
+   lands on whatever button it was aimed at. */
+function armFullscreen() {
+  if (!wantsFullscreen() || !fullscreenAvailable() || inFullscreen()) {
+    return;
+  }
+  var once = function () {
+    document.removeEventListener('pointerdown', once, true);
+    if (wantsFullscreen() && !inFullscreen()) { enterFullscreen(); }
+  };
+  document.addEventListener('pointerdown', once, true);
+}
 
 function el(tag, className, text) {
   var node = document.createElement(tag);
@@ -1977,7 +2094,26 @@ function render() {
   renderDevices();
 }
 
-document.getElementById('signin').addEventListener('click', signIn);
+document.getElementById('fullscreen').addEventListener('click', function () {
+  if (inFullscreen()) {
+    rememberFullscreen(false);
+    leaveFullscreen();
+  } else {
+    rememberFullscreen(true);
+    enterFullscreen();
+  }
+});
+document.addEventListener('fullscreenchange', paintFullscreenButton);
+document.addEventListener('webkitfullscreenchange', paintFullscreenButton);
+paintFullscreenButton();
+armFullscreen();
+
+document.getElementById('signin').addEventListener('click', function () {
+  // Signing in is a gesture, and on a panel that has asked for full screen it
+  // is the one that gets there without needing a second tap.
+  if (wantsFullscreen()) { enterFullscreen(); }
+  signIn();
+});
 document.getElementById('pin').addEventListener('keydown', function (event) {
   if (event.key === 'Enter') { signIn(); }
 });

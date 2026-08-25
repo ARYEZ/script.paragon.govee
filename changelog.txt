@@ -1,3 +1,20 @@
+v2.29.0
+- The web remote can run full screen, with no browser wrapped around it.
+- Two ways there. Add it to the tablet's home screen and it launches without
+  browser chrome at all -- there is a web app manifest and the icons for it
+  now. Or press the Full screen button in the header, which is remembered:
+  after that the panel goes back to full screen on the first touch, every
+  time it is opened.
+- It cannot simply launch that way on its own. Every browser insists on a
+  gesture before it will give a page the whole display, or any site could
+  take over the screen of anything that visited it. The first touch is that
+  gesture, and on a wall panel it is a touch you were making anyway.
+- The button hides itself where the browser has no full screen to give --
+  Safari on an iPhone, for one. The home screen route still works there.
+- The preference lives in the browser, not in the settings: it belongs to the
+  tablet on the wall, and the phone that opens the same address occasionally
+  should not inherit it.
+
 v2.28.0
 - Every panel in the web remote now carries a gradient, the way the Govee
   desktop app's cards do -- dark in one corner, warming through an ember band

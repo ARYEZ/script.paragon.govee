@@ -1013,6 +1013,27 @@ fixed size either leaves a third of a 1080p panel empty or pushes the sequences
 off the bottom of a 720p one. Type and targets grow on a large screen too,
 because a panel on a wall is read from further away than a phone in a hand.
 
+### Running it full screen
+
+**Add it to the tablet's home screen.** Then it launches with no browser
+around it at all — no address bar, no tabs. On iOS this works as it stands. On
+Android it depends: Chrome only grants a home-screen launch its own window
+over HTTPS, and this is plain HTTP, so you may get a shortcut that opens in a
+tab instead.
+
+**Or press "Full screen"** in the header. That is remembered, and from then on
+the panel returns to full screen on the first touch each time it is opened.
+
+It cannot simply open full screen by itself, and no page can: browsers insist
+on a gesture first, or any site could take over the display of anything that
+visited it. The first touch is that gesture — on a wall panel, one you were
+making anyway. Press the button again to stop it.
+
+If you want a panel that is *never* anything but this — no way out, survives a
+reboot, screen stays awake — that is a job for a kiosk browser such as Fully
+Kiosk, pointed at the same address. Nothing here stops you, and nothing here
+can do it for you.
+
 The typeface is **Saira Condensed**, and it ships with the add-on under
 `resources/fonts/` rather than being fetched from a font host. Two reasons: a
 remote that needs the internet to look right looks wrong on the LAN it was
@@ -1234,7 +1255,7 @@ button that appears to do nothing is worse.
 ## Development
 
 ```
-python3 tests/test_paragon_home.py      # 671 tests
+python3 tests/test_paragon_home.py      # 675 tests
 python3 tests/check_py2.py              # Python 2.7 syntax gate
 python3 tests/validate_addon.py         # manifest and settings cross-check
 python3 tools/make_assets.py            # regenerate icon.png / fanart.png

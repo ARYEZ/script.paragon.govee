@@ -44,7 +44,8 @@ import devices as devices_mod  # noqa: E402
 import govee_cloud  # noqa: E402
 import govee_lan  # noqa: E402
 import scenes as scene_lib  # noqa: E402
-from devices import ControlError, Device, GoveeController  # noqa: E402
+from devices import (CAP_COMMANDS, ControlError, Device,  # noqa: E402
+                     GoveeController)
 
 PROFILE = xbmcaddon._PROFILE
 
@@ -249,6 +250,8 @@ class RecordingController(object):
         self.caps = caps
         # What a state read comes back with, for the callers that do one.
         self.states = {}
+        # The codes each blaster has been taught, by device id.
+        self.command_map = {}
 
     def capabilities(self, device):
         """The real implementation unless a test asks for something else.
@@ -259,11 +262,14 @@ class RecordingController(object):
         """
         if self.caps is not None:
             return set(self.caps)
+        if (getattr(device, 'driver', None) or '') == 'broadlink':
+            # What the blaster driver really answers: commands and nothing
+            # else, whether or not any have been learned yet.
+            return set([CAP_COMMANDS])
         return GoveeController.capabilities(device)
 
-    @staticmethod
-    def commands(device):
-        return []
+    def commands(self, device):
+        return list(self.command_map.get(device.device_id, []))
 
     class _StandIn(object):
         """What the Hub would hand back for this device's driver."""
@@ -6841,6 +6847,42 @@ class TestScriptArguments(unittest.TestCase):
         self.assertIsNone(app.resolve_color('nope'))
         self.assertIsNone(app.resolve_color(''))
 
+    def test_command_action_fires_a_learned_code(self):
+        """The same verb the web remote uses, so the two cannot drift."""
+        import addon_utils
+        import default
+        from paragon_home import ParagonHome
+
+        app = ParagonHome()
+        app._devices = [Device('EE:FF', name='Hall RM', driver='broadlink',
+                               lan=True)]
+        recorder = RecordingController()
+        recorder.command_map = {'EE:FF': ['TV Power']}
+        app.controller = recorder
+
+        default.run_action(app, {'action': 'command', 'target': 'Hall RM',
+                                 'name': 'TV Power'}, addon_utils)
+
+        self.assertEqual(recorder.calls, [('command', 'EE:FF', 'TV Power')])
+
+    def test_command_action_will_not_fire_at_everything(self):
+        """A learned code belongs to the blaster that learned it."""
+        import addon_utils
+        import default
+        from paragon_home import ParagonHome
+
+        app = ParagonHome()
+        app._devices = [Device('EE:FF', name='Hall RM', driver='broadlink',
+                               lan=True)]
+        recorder = RecordingController()
+        recorder.command_map = {'EE:FF': ['TV Power']}
+        app.controller = recorder
+
+        default.run_action(app, {'action': 'command', 'name': 'TV Power'},
+                           addon_utils)
+
+        self.assertEqual(recorder.calls, [])
+
     def test_target_resolves_by_name_and_by_id(self):
         import default
         from paragon_home import ParagonHome
@@ -9325,6 +9367,7 @@ class TestWebRemote(unittest.TestCase):
             Device('EE:FF', name='Hall Blaster', driver='broadlink', lan=True,
                    supports=['learn']),
         ]
+        self.recorder.command_map = {'EE:FF': ['TV Power', 'Volume Up']}
         self.server = None
         self.loop = None
 
@@ -9656,6 +9699,41 @@ class TestWebRemote(unittest.TestCase):
         self.assertFalse(answer['data']['ok'])
         self.assertEqual(self.recorder.calls, [])
 
+    def test_a_learned_code_can_be_fired(self):
+        client = self.signed_in()
+
+        answer = client.act('command', target='Hall Blaster', name='TV Power')
+
+        self.assertTrue(answer['data']['ok'])
+        self.assertIn(('command', 'EE:FF', 'TV Power'), self.recorder.calls)
+
+    def test_a_code_needs_the_blaster_to_send_it_from(self):
+        """There is no "all": a code belongs to the blaster that learned it."""
+        client = self.signed_in()
+
+        answer = client.act('command', name='TV Power')
+
+        self.assertFalse(answer['data']['ok'])
+        self.assertIn('blaster', answer['data']['message'])
+        self.assertEqual(self.recorder.calls, [])
+
+    def test_a_code_needs_a_name(self):
+        client = self.signed_in()
+
+        answer = client.act('command', target='Hall Blaster')
+
+        self.assertFalse(answer['data']['ok'])
+        self.assertEqual(self.recorder.calls, [])
+
+    def test_a_code_aimed_at_something_that_does_not_send_them(self):
+        client = self.signed_in()
+
+        answer = client.act('command', target='Living Room', name='TV Power')
+
+        self.assertFalse(answer['data']['ok'])
+        self.assertIn('sends commands', answer['data']['message'])
+        self.assertEqual(self.recorder.calls, [])
+
     def test_a_scene_runs_by_name(self):
         client = self.signed_in()
 
@@ -9754,18 +9832,30 @@ class TestWebRemote(unittest.TestCase):
 
     # -- what the page is shown --------------------------------------------
 
-    def test_the_snapshot_lists_only_what_can_be_controlled(self):
-        """A blaster has no power, brightness or colour: a row for one is blank."""
+    def test_the_snapshot_lists_everything_with_something_to_press(self):
+        """Including the blasters, which have codes rather than a switch."""
         client = self.signed_in()
 
         state = client.state()['data']
-        names = [device['name'] for device in state['devices']]
+        by_name = dict((d['name'], d) for d in state['devices'])
 
-        self.assertIn('Living Room', names)
-        self.assertIn('Desk Plug', names)
-        self.assertNotIn('Hall Blaster', names)
-        self.assertEqual([d['id'] for d in state['drivers']
-                          if d['id'] == 'broadlink'], [])
+        self.assertIn('Living Room', by_name)
+        self.assertIn('Desk Plug', by_name)
+        self.assertIn('Hall Blaster', by_name)
+        self.assertEqual(by_name['Hall Blaster']['commands'],
+                         ['TV Power', 'Volume Up'])
+        self.assertIn('broadlink', [d['id'] for d in state['drivers']])
+
+    def test_a_blaster_with_nothing_learned_is_still_listed(self):
+        """Knowing it is found and reachable is most of what you wanted."""
+        self.recorder.command_map = {}
+        client = self.signed_in()
+
+        blasters = [d for d in client.state()['data']['devices']
+                    if d['driver'] == 'broadlink']
+
+        self.assertEqual(len(blasters), 1)
+        self.assertEqual(blasters[0]['commands'], [])
 
     def test_the_snapshot_carries_the_scenes_sequences_and_palette(self):
         import sequences as sequence_lib

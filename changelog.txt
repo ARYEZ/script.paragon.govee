@@ -1,3 +1,23 @@
+v2.30.0
+- Broadlink blasters have their own section in the web remote now, with a
+  button for every code they have been taught. They were the one thing left
+  out: a blaster has no power, brightness or colour, so the rule about what
+  earns a row on the page skipped them -- but the codes are as much a thing
+  to press as an on switch is.
+- A blaster that has learned nothing yet is still listed, saying so. Knowing
+  it was found and is reachable is most of what you wanted, and teaching it a
+  code is a job for the box it is plugged into.
+- `action=command` works from a keymap or a favourite too, not only from the
+  remote:
+
+      RunScript(script.paragon.home,action=command,target=Hall RM,name=TV Power)
+
+  There is no "all" for it. A learned code belongs to the blaster that
+  learned it, and firing every code in the house that happens to be called
+  "Power" is not something to do by accident.
+- One rule decides what firing a code means, on the session, so the remote
+  and a keymap cannot come to disagree about it.
+
 v2.29.1
 - Sequences sit above scenes in the web remote now, rather than below them.
 - Both blocks take the height their contents want, and the leftover collects

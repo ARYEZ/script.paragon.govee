@@ -19,6 +19,7 @@ button, a keymap or a favourite:
     RunScript(script.paragon.home,action=color,value=Paragon Purple)
     RunScript(script.paragon.home,action=temp,value=2700)
     RunScript(script.paragon.home,action=off,target=Living Room Strip)
+    RunScript(script.paragon.home,action=command,target=Hall RM,name=TV Power)
     RunScript(script.paragon.home,action=remote)
 
 `target` accepts a device name or a Govee device id; leave it out to act on
@@ -156,6 +157,16 @@ def run_action(app, params, utils):
         setting_id = params.get('setting')
         if setting_id:
             gui.pick_scene_for_setting(app, setting_id)
+    elif action == 'command':
+        # A learned infrared code, fired from the blaster that learned it.
+        # No "all" here: the code belongs to that blaster.
+        name = params.get('name') or params.get('value')
+        if not name:
+            utils.force_notify('command needs name=<learned command>')
+        elif targets is None:
+            utils.force_notify('command needs target=<blaster name>')
+        else:
+            report(app.send_command_all(name, targets), 'Sent %s' % name)
     elif action == 'remote':
         # The "show the address and PIN" button in the settings. Typing an
         # address into a phone is the whole friction of the web remote, so it

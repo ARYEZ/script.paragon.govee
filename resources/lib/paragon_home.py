@@ -1040,6 +1040,30 @@ class ParagonHome(object):
         return self._each(
             lambda d: self.controller.set_color_temp(d, kelvin), targets)
 
+    def send_command_all(self, name, targets):
+        """Fire a learned command on each target that sends commands.
+
+        Deliberately not built on `_each`. That one falls back to every
+        enabled device when given no targets, and stops a running colour
+        cycle -- both wrong here. A learned code belongs to the blaster that
+        learned it, so there is no sensible "all"; and firing a television's
+        power code is no reason to stop the lights cycling.
+        """
+        from devices import CAP_COMMANDS, ControlError
+
+        done = 0
+        errors = []
+        for device in (targets or []):
+            if CAP_COMMANDS not in self.controller.capabilities(device):
+                continue
+            try:
+                self.controller.send_command(device, name)
+                done += 1
+            except ControlError as exc:
+                utils.log('Command failed on %s: %s' % (device.name, exc))
+                errors.append(str(exc))
+        return done, errors
+
     def toggle_all(self, targets=None):
         """Flip the lights as a group.
 

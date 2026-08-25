@@ -378,6 +378,7 @@ RunScript(script.paragon.home,action=scene,name=Movie Night)
 RunScript(script.paragon.home,action=refresh)
 RunScript(script.paragon.home,action=diagnose)                  # why no lights?
 RunScript(script.paragon.home,action=verifystatus)              # does status work?
+RunScript(script.paragon.home,action=command,target=Hall RM,name=TV Power)
 RunScript(script.paragon.home,action=remote)                    # web remote address + PIN
 ```
 
@@ -1072,8 +1073,9 @@ curl -X POST http://192.168.1.50:8778/api/action \
 
 The actions are the ones `RunScript` already takes — `scene`, `sequence`, `on`,
 `off`, `toggle`, `brightness`, `color`, `temp`, `refresh`, `sync` — plus
-`states`, which asks the lights what they are currently doing. `target` picks
-one device by name or id; leave it out for everything. `GET /api/state` returns
+`states`, which asks the lights what they are currently doing, and `command`,
+which fires a learned infrared code. `target` picks one device by name or id;
+leave it out for everything, except for `command`, which insists on one. `GET /api/state` returns
 what the page draws itself from.
 
 ### What it is not
@@ -1128,10 +1130,17 @@ the tick interval.
 
 ### Blasters
 
-An infrared blaster has no power, no brightness and no colour, so there is
-nothing a row for one could offer. They are left off the page for the same
-reason they are not scene targets — a blaster is reached through a sequence
-step.
+Blasters get their own section, with a button for every code they have been
+taught. They have no power, brightness or colour — which is why they are still
+not scene targets — but the codes are as much a thing to press as an on switch
+is.
+
+One that has learned nothing yet is listed anyway, saying so. Knowing it was
+found and is reachable is most of what you wanted to know, and teaching it a
+code is a job for the box it is plugged into.
+
+There is no "all" for a code. It belongs to the blaster that learned it, so
+`action=command` always wants a `target`.
 
 ---
 
@@ -1255,7 +1264,7 @@ button that appears to do nothing is worse.
 ## Development
 
 ```
-python3 tests/test_paragon_home.py      # 675 tests
+python3 tests/test_paragon_home.py      # 682 tests
 python3 tests/check_py2.py              # Python 2.7 syntax gate
 python3 tests/validate_addon.py         # manifest and settings cross-check
 python3 tools/make_assets.py            # regenerate icon.png / fanart.png

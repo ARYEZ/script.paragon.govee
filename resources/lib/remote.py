@@ -48,8 +48,8 @@ import scenes as scene_lib
 import sequences as sequence_lib
 from compat import (BaseHTTPRequestHandler, HTTPServer, ThreadingMixIn,
                     same_secret, to_bytes, to_text)
-from devices import (CAP_BRIGHTNESS, CAP_COLOR, CAP_COLOR_TEMP, CAP_POWER,
-                     CAP_STATE)
+from devices import (CAP_BRIGHTNESS, CAP_COLOR, CAP_COLOR_TEMP, CAP_COMMANDS,
+                     CAP_POWER, CAP_STATE)
 
 # Where the API token is kept. Not in settings.xml: it is not something anyone
 # types, and Kodi rewrites settings.xml on exit -- which is exactly the race
@@ -106,7 +106,7 @@ COOKIE_NAME = 'paragon_remote'
 # Sequences and discovery are not waited on: a sequence can hold an hour of
 # pauses, and the phone wants to know it started, not sit there until it ends.
 IMMEDIATE = ('on', 'off', 'toggle', 'brightness', 'color', 'temp', 'scene',
-             'states')
+             'command', 'states')
 # A satellite copying from its master reads five files over SSH, each with its
 # own timeout, so a master that is off can take longer than a handler is
 # willing to wait. Discovery is the same shape.
@@ -136,10 +136,12 @@ STATIC_FILES = {
 # A year. These only change when the add-on is updated.
 STATIC_CACHE = 'public, max-age=31536000, immutable'
 
-# What has to be true of a device before the page draws a row for it. Anything
-# else -- an infrared blaster -- would get a row with nothing on it.
-CONTROLLABLE = frozenset([CAP_POWER, CAP_BRIGHTNESS, CAP_COLOR,
-                          CAP_COLOR_TEMP])
+# What has to be true of a device before the page draws a row for it: there
+# has to be something the row could offer. A blaster has no power, brightness
+# or colour, but it does have the codes it has been taught, and those are as
+# much a thing to press as an on switch is.
+ACTIONABLE = frozenset([CAP_POWER, CAP_BRIGHTNESS, CAP_COLOR, CAP_COLOR_TEMP,
+                        CAP_COMMANDS])
 
 
 # ---------------------------------------------------------------------------
@@ -450,7 +452,8 @@ def perform(app, action, params, sleep_func=None, on_step=None):
         return {'ok': False, 'message': 'Unknown action "%s"' % action}
 
     targets = None
-    if action in ('on', 'off', 'toggle', 'brightness', 'color', 'temp'):
+    if action in ('on', 'off', 'toggle', 'brightness', 'color', 'temp',
+                  'command'):
         targets = app.resolve_targets(params.get('target'))
         if targets == []:
             return {'ok': False,
@@ -482,6 +485,25 @@ def perform(app, action, params, sleep_func=None, on_step=None):
         if value is None:
             return {'ok': False, 'message': 'Temperature needs a number'}
         return outcome(app.color_temp_all(value, targets), '%dK' % value)
+
+    if action == 'command':
+        name = params.get('name') or params.get('value') or ''
+        if not name:
+            return {'ok': False,
+                    'message': 'That needs the name of a learned command'}
+        if targets is None:
+            # "All" is meaningless here. A learned code belongs to the blaster
+            # that learned it, and firing every code in the house that happens
+            # to be called "Power" is not something to do by accident.
+            return {'ok': False,
+                    'message': 'That needs the blaster to send it from'}
+
+        done, errors = app.send_command_all(name, targets)
+        if done:
+            return {'ok': True, 'message': name}
+        if errors:
+            return {'ok': False, 'message': errors[0]}
+        return {'ok': False, 'message': 'Nothing there sends commands'}
 
     if action == 'scene':
         name = params.get('name') or params.get('value') or ''
@@ -554,6 +576,10 @@ def _device_entry(app, device, state):
         'model': device.model,
         'light': scene_lib.is_a_light(device, app.controller),
         'caps': sorted(caps),
+        # The codes this one has been taught, which for a blaster is the whole
+        # of what it can be asked to do.
+        'commands': (sorted(app.controller.commands(device))
+                     if CAP_COMMANDS in caps else []),
         'power': None,
         'brightness': None,
     }
@@ -580,10 +606,7 @@ def snapshot(app, states=None, allow_sequences=True):
     devices = []
     counts = collections.OrderedDict()
     for device in app.enabled_devices:
-        if not CONTROLLABLE & app.controller.capabilities(device):
-            # A blaster has no power, no brightness and no colour, so a row
-            # for one could offer nothing. It is reached through a sequence
-            # step instead -- the same reason it is not a scene target.
+        if not ACTIONABLE & app.controller.capabilities(device):
             continue
         devices.append(_device_entry(app, device,
                                      states.get(device.device_id)))
@@ -1530,6 +1553,22 @@ input[type=color]::-moz-color-swatch { border: none; border-radius: 2px; }
                         min-height: 40px; }
 .dev .dim { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
 .dev .dim .stat { font-size: 22px; min-width: 54px; }
+/* The codes a blaster has been taught. A grid rather than a row: there can be
+   a handful or there can be thirty, and they are named whatever the remote
+   they were learned from calls them. */
+.dev .codes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+.dev .codes button {
+  font-size: 12px; min-height: 42px; padding: 10px 8px;
+  letter-spacing: 1.1px;
+}
+/* --sub, not --dim: this line sits on the warm part of a card like the
+   schedule under a sequence does, and --dim does not clear 3:1 there. */
+.dev .empty { margin-top: 10px; color: var(--sub); }
 
 /* -- status -------------------------------------------------------------- */
 
@@ -1989,6 +2028,12 @@ function renderPalette() {
 }
 
 function describe(device) {
+  // A blaster has no power to report; what it has is however many codes it
+  // has been taught.
+  if ((device.caps || []).indexOf('power') < 0) {
+    var learned = (device.commands || []).length;
+    return learned ? learned + ' code(s)' : (device.model || 'Infrared');
+  }
   if (!device.power) { return device.model || 'Ready'; }
   if (device.power !== 'on') { return 'Off'; }
   return device.brightness ? 'On at ' + device.brightness + '%' : 'On';
@@ -2054,6 +2099,26 @@ function deviceCard(device) {
     dim.appendChild(readout);
     dim.appendChild(slider);
     card.appendChild(dim);
+  }
+
+  if (caps.indexOf('commands') >= 0) {
+    if ((device.commands || []).length) {
+      var codes = el('div', 'codes');
+      device.commands.forEach(function (name) {
+        var node = el('button', null, name);
+        node.addEventListener('click', function () {
+          act('command', {target: device.id, name: name});
+        });
+        codes.appendChild(node);
+      });
+      card.appendChild(codes);
+    } else {
+      // Listed with nothing to press rather than left out: knowing the
+      // blaster is found and reachable is most of what you wanted to know,
+      // and learning a code is a job for the box it is plugged into.
+      card.appendChild(el('p', 'label empty',
+                          'No codes learned yet - teach it in Kodi'));
+    }
   }
 
   return card;

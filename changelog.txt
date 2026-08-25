@@ -1,3 +1,19 @@
+v2.27.0
+- The web remote is laid out for a tablet now rather than a phone. A 16:9
+  panel is wide and short, so the height is the scarce thing: the page no
+  longer scrolls at all on one. The header stays put and the screen divides
+  into columns -- scenes and sequences, the whole-house controls, the devices
+  -- each scrolling inside itself.
+- Three columns on a 1080p panel, two on a smaller or portrait one, and one on
+  a phone, which still works exactly as it did.
+- The scene buttons size themselves against the height of the screen. Fixed
+  sizes either left a third of a 1080p panel empty or pushed the sequences off
+  the bottom of a 720p one.
+- Bigger type and bigger targets on a large screen, since a panel on a wall is
+  read from further away than a phone in a hand.
+- A device count sits beside its heading rather than at the far end of the
+  rule, where a scrollbar was cutting it in half.
+
 v2.26.0
 - The web remote now looks like the rest of the Paragon TV project rather than
   like a generic dark page: the near-black ground, the orange-to-red accent,

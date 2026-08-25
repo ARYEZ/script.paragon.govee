@@ -1239,13 +1239,22 @@ h2 { font-size: 14px; margin: 0; color: var(--text); letter-spacing: 2px; }
   margin: 12px -16px -13px -16px;
 }
 .bar-in {
-  max-width: 680px;
+  max-width: 1680px;
   margin: 0 auto;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 14px;
+  flex-wrap: wrap;
 }
+.bar-in .status { flex: 1 1 200px; margin: 0; }
+/* On a phone the bar has no room for a status beside the wordmark, so it
+   takes a line of its own -- and gives that line back when it has nothing to
+   say, rather than leaving the header two rows tall over an empty strip. */
+@media (max-width: 859px) {
+  .bar-in .status { order: 3; flex: 1 1 100%; }
+}
+.status:empty { min-height: 0; margin: 0; padding: 0; border-left: 0; }
+.barside { display: flex; align-items: center; gap: 10px; margin-left: auto; }
 
 /* PARAGON HOME, with the slash mark the rest of the family carries. */
 .mark { display: flex; align-items: center; gap: 9px; min-width: 0; }
@@ -1257,11 +1266,17 @@ h2 { font-size: 14px; margin: 0; color: var(--text); letter-spacing: 2px; }
 .wordmark { white-space: nowrap; }
 .wordmark .b { color: var(--orange); }
 
+/* The deck. A phone gets one column and scrolls; a 16:9 tablet gets the
+   width it actually has and each column scrolls on its own, so the panel on
+   the wall never moves under the finger that is reaching for it. */
 .wrap {
   max-width: 680px;
   margin: 0 auto;
-  padding: 0 16px calc(44px + env(safe-area-inset-bottom));
+  padding: 14px 16px calc(30px + env(safe-area-inset-bottom));
 }
+.deck { display: grid; grid-template-columns: 1fr; gap: 14px; }
+.pane { min-width: 0; }
+.pane > section:first-child { margin-top: 0; }
 
 .meta {
   display: flex; align-items: center; gap: 8px;
@@ -1294,8 +1309,12 @@ section { margin-top: 26px; }
       var(--orange) 0 3px, transparent 3px 6px);
 }
 .head .rule { flex: 1; height: 1px; background: var(--line); }
-.head .count { font-family: var(--display); font-size: 11px;
-               letter-spacing: 1.4px; color: var(--dim); }
+/* Beside the heading rather than out at the far end of the rule: at the end
+   of a column that scrolls, the scrollbar was slicing it in half. */
+.head .count {
+  font-family: var(--display); font-size: 11px; font-weight: 700;
+  letter-spacing: 1.4px; color: var(--dim); margin-left: -4px;
+}
 
 /* -- surfaces ------------------------------------------------------------ */
 
@@ -1464,16 +1483,16 @@ input[type=color]::-moz-color-swatch { border: none; border-radius: 2px; }
   padding-left: 10px;
   border-left: 2px solid var(--line);
 }
-.status:empty { border-left-color: transparent; }
 .status.good { color: var(--teal); border-left-color: var(--teal); }
 .status.bad { color: #ff5f5f; border-left-color: #ff5f5f; }
 .status.busy { color: var(--orange); border-left-color: var(--orange); }
 
 footer {
-  display: flex; gap: 9px;
-  margin-top: 30px; padding-top: 16px;
+  display: flex; gap: 9px; flex-wrap: wrap;
+  margin-top: 22px; padding-top: 16px;
   border-top: 1px solid var(--line);
 }
+footer button { flex: 1 1 auto; }
 
 /* -- signing in ---------------------------------------------------------- */
 
@@ -1486,8 +1505,108 @@ footer {
 }
 #login .status { text-align: left; margin-top: 14px; }
 
+/* Two columns once there is room for them, three on a 1080p panel. minmax(0)
+   on every track: a grid column defaults to min-content, and one long device
+   name would otherwise push the whole column wider than its share. */
+@media (min-width: 860px) {
+  .wrap { max-width: 1680px; padding-left: 22px; padding-right: 22px; }
+  .deck { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; }
+}
+/* Three panes do not divide into two columns: left to itself the devices
+   pane drops to a second row and leaves half the screen empty. So the tall
+   pane -- scenes and sequences -- takes the left column outright and the
+   other two stack down the right. */
+@media (min-width: 860px) and (max-width: 1179px) {
+  .pane:nth-child(1) { grid-row: 1 / span 2; }
+}
+@media (min-width: 1180px) {
+  .deck {
+    grid-template-columns: minmax(0, 1.12fr) minmax(0, .92fr) minmax(0, 1.1fr);
+  }
+}
+
+/* Wide and short is a wall panel, not a document: the header stays put, the
+   columns take the rest of the height, and each one scrolls inside itself.
+   `hidden` still wins over these display rules -- that is what the
+   !important on [hidden] near the top is for. */
+@media (min-width: 860px) and (max-width: 1179px) and (min-height: 460px) {
+  .deck { grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+}
+
+@media (min-width: 860px) and (min-height: 460px) {
+  html, body { height: 100vh; overflow: hidden; }
+  html, body { height: 100dvh; }
+  #remote { display: flex; flex-direction: column; height: 100%; }
+  .wrap { flex: 1; min-height: 0; display: flex; flex-direction: column;
+          padding-bottom: 18px; }
+  .deck { flex: 1; min-height: 0; }
+  .pane {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    /* Clear of the scrollbar: the device count sits at the right end of a
+       section heading and was being sliced in half by it. */
+    padding-right: 14px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-lit) transparent;
+  }
+  .pane::-webkit-scrollbar { width: 8px; }
+  .pane::-webkit-scrollbar-thumb {
+    background: var(--line-lit); border-radius: 4px;
+  }
+  .pane::-webkit-scrollbar-track { background: transparent; }
+  .pane { display: flex; flex-direction: column; }
+  /* Anchored to the bottom of its column, so the middle one reads as a
+     finished panel rather than as content that ran out. */
+  footer { margin-top: auto; }
+}
+
+/* Given real height, the scenes and sequences stretch to use it. A wall panel
+   wants large targets, and six scenes clustered at the top of a column with
+   four hundred pixels of nothing under them looks like a page that failed to
+   load the rest of itself. Past a certain number they stop growing -- the
+   tile keeps its minimum and the column scrolls instead. */
+@media (min-width: 1180px) and (min-height: 620px) {
+  #scenesBlock, #sequencesBlock {
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  /* The scenes take the height they need at a good size, and the sequences
+     take whatever is left. Splitting the slack between both blocks instead
+     opened a gap in the middle of the column, because a grid row will not
+     grow past its cap however much room is going spare. */
+  #scenesBlock { flex: 0 0 auto; }
+  #sequencesBlock { flex: 1; }
+  /* Sized against the height of the panel rather than fixed: at 1080 the
+     scenes want to be generous, at 720 the same number would push the
+     sequences off the bottom of the screen entirely. The plain value first
+     is what a browser without clamp() falls back to. */
+  #scenes { grid-auto-rows: 150px; }
+  #scenes { grid-auto-rows: clamp(86px, 13.5vh, 150px); }
+  #sequences { flex: 1; }
+  #sequences button { flex: 1; max-height: 150px; }
+  #sequences button { max-height: clamp(96px, 15vh, 150px); }
+}
+
+/* Read from across the room, and tapped standing up. */
+@media (min-width: 1180px) {
+  body { font-size: 16px; }
+  h1 { font-size: 30px; }
+  h2 { font-size: 16px; }
+  .slashes { width: 24px; height: 26px; }
+  button { font-size: 16px; min-height: 54px; }
+  button.tile { padding: 19px 17px; font-size: 19px; min-height: 86px; }
+  button.tile .sub { font-size: 11px; margin-top: 7px; }
+  /* Wider tiles so six scenes fill a column rather than huddling at the top
+     of it, and so the label has room at arm's length. */
+  .grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+  .dev .name { font-size: 19px; }
+  .dev .controls button { font-size: 14px; min-height: 46px; }
+  .stat { font-size: 40px; }
+  .swatch { width: 46px; height: 46px; }
+  .label { font-size: 12px; }
+}
+
 @media (min-width: 560px) {
-  .grid { grid-template-columns: repeat(3, 1fr); }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); }
 }
 </style>
 </head>
@@ -1512,17 +1631,19 @@ footer {
         <span class="slashes"></span>
         <h1 class="wordmark">Paragon <span class="b">Home</span></h1>
       </div>
-      <button class="ghost" id="signout">Sign out</button>
+      <p class="status" id="status"></p>
+      <div class="barside">
+        <span class="tag" id="version"></span>
+        <span class="badge" id="badge" hidden></span>
+        <button class="ghost" id="signout">Sign out</button>
+      </div>
     </div>
   </div>
 
   <div class="wrap">
-    <div class="meta">
-      <span class="tag" id="version"></span>
-      <span class="badge" id="badge" hidden></span>
-    </div>
-    <p class="status" id="status"></p>
+   <div class="deck">
 
+    <div class="pane">
     <section id="scenesBlock" hidden>
       <div class="head">
         <span class="nick"></span><h2>Scenes</h2><span class="rule"></span>
@@ -1536,7 +1657,9 @@ footer {
       </div>
       <div class="stack" id="sequences"></div>
     </section>
+    </div>
 
+    <div class="pane">
     <section id="allBlock" hidden>
       <div class="head">
         <span class="nick"></span><h2>All lights</h2><span class="rule"></span>
@@ -1563,12 +1686,15 @@ footer {
       </div>
     </section>
 
-    <div id="devices"></div>
-
     <footer>
       <button class="ghost" id="reread">Read the lights</button>
       <button class="ghost" id="rediscover">Search for devices</button>
     </footer>
+    </div>
+
+    <div class="pane" id="devices"></div>
+
+   </div>
   </div>
 </div>
 
@@ -1801,8 +1927,8 @@ function renderDevices() {
     var head = el('div', 'head');
     head.appendChild(el('span', 'nick'));
     head.appendChild(el('h2', null, driver.label));
-    head.appendChild(el('span', 'rule'));
     head.appendChild(el('span', 'count', String(driver.count)));
+    head.appendChild(el('span', 'rule'));
     section.appendChild(head);
 
     mine.forEach(function (device) { section.appendChild(deviceCard(device)); });

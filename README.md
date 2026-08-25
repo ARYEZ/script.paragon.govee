@@ -985,6 +985,30 @@ slashes in the margins, and the same condensed uppercase type. A light that
 reports itself on wears a teal edge rather than an orange one, so the colour is
 doing work rather than decorating.
 
+### On a tablet
+
+Built for a 16:9 panel — a tablet on a wall or a shelf, in landscape. That
+shape is wide and short, so height is the scarce thing and the page does not
+scroll on one at all. The header stays put and the screen divides into columns
+that scroll inside themselves:
+
+```
+PARAGON HOME                                    v2.27.0   SIGN OUT
+------------------------------------------------------------------
+ SCENES              ALL LIGHTS           GOVEE 5
+ [ Movie Night ]     [ On ][ Off ][ Tog ]  [ Back Office Left Low ]
+ [ Paused      ]     Brightness 60%        [ Lounge Strip         ]
+ [ Lights Up   ]     colour swatches       TUYA 2
+ SEQUENCES           warm / neutral / cool [ Desk Plug            ]
+ [ Bedtime     ]     read / search         KASA 1
+```
+
+Three columns on a 1080p panel, two on a smaller or portrait one, one on a
+phone. The scene buttons size themselves against the height of the screen: a
+fixed size either leaves a third of a 1080p panel empty or pushes the sequences
+off the bottom of a 720p one. Type and targets grow on a large screen too,
+because a panel on a wall is read from further away than a phone in a hand.
+
 The typeface is **Saira Condensed**, and it ships with the add-on under
 `resources/fonts/` rather than being fetched from a font host. Two reasons: a
 remote that needs the internet to look right looks wrong on the LAN it was

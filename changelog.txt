@@ -1,3 +1,17 @@
+v2.31.0
+- A driver's section in the web remote folds away. Tap the heading to open or
+  close it; the count beside the name says how much is in there either way.
+- A section with more than six devices starts closed. Thirty Govee bulbs left
+  open bury the plugs and the blasters under a screen and a half of scrolling,
+  where two plugs cost nothing to show. Whatever you open or close after that
+  is remembered.
+- Like the full screen preference, that is kept in the browser rather than in
+  a Kodi setting: it is how this panel is arranged, not how the house is, and
+  the phone that occasionally opens the same address has its own idea of which
+  sections it wants.
+- The whole-house controls are untouched -- they are three buttons and a
+  slider, and there is nothing to fold away.
+
 v2.30.0
 - Broadlink blasters have their own section in the web remote now, with a
   button for every code they have been taught. They were the one thing left

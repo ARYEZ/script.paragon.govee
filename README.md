@@ -1128,6 +1128,16 @@ playback lighting already used, and it is what keeps one thread at a time in the
 scene engine. The cost is up to half a second before a command starts, which is
 the tick interval.
 
+### Long sections fold away
+
+Tap a driver's heading to open or close it, and the count beside the name says
+how much is in there either way. A section with more than six devices starts
+closed: thirty Govee bulbs left open bury the plugs and the blasters under a
+screen and a half of scrolling, where two plugs cost nothing to show.
+
+What you open or close is remembered by that browser — the tablet on the wall
+and the phone in your pocket each keep their own idea of it.
+
 ### Blasters
 
 Blasters get their own section, with a button for every code they have been

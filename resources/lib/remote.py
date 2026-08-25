@@ -1388,6 +1388,31 @@ section { margin-top: 26px; }
   background: repeating-linear-gradient(114deg,
       var(--orange) 0 3px, transparent 3px 6px);
 }
+/* A driver heading is a button as well as a heading, so it needs every one
+   of the button rules above taken back off it. */
+button.head {
+  width: 100%;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  min-height: 0;
+  text-align: left;
+  cursor: pointer;
+}
+button.head:active { background: none; border-color: transparent; }
+.head .caret {
+  width: 8px; height: 8px; flex: none;
+  margin: -3px 2px 0 2px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg);
+  transition: transform .15s ease;
+}
+button.head[aria-expanded="true"] .caret {
+  transform: rotate(-135deg);
+  margin-top: 3px;
+}
 .head .rule { flex: 1; height: 1px; background: var(--line); }
 /* Beside the heading rather than out at the far end of the rule: at the end
    of a column that scrolls, the scrollbar was slicing it in half. */
@@ -1818,6 +1843,28 @@ var busy = false;
    occasionally opens the same address should not inherit it. */
 var FULLSCREEN_KEY = 'paragon.fullscreen';
 
+/* How many devices a driver may have before its section starts closed. Below
+   this it costs nothing to show them; above it, one long section buries every
+   other one under it. Whatever you then open or close is remembered, and like
+   the full screen preference it lives in this browser rather than in a Kodi
+   setting -- it is how this panel is arranged, not how the house is. */
+var COLLAPSE_ABOVE = 6;
+var SECTION_KEY = 'paragon.section.';
+
+function sectionOpen(driver) {
+  try {
+    var saved = localStorage.getItem(SECTION_KEY + driver.id);
+    if (saved !== null) { return saved === '1'; }
+  } catch (error) { /* storage off; fall through to the default */ }
+  return driver.count <= COLLAPSE_ABOVE;
+}
+
+function rememberSection(id, open) {
+  try {
+    localStorage.setItem(SECTION_KEY + id, open ? '1' : '0');
+  } catch (error) { /* nothing to be done about it */ }
+}
+
 function fullscreenAvailable() {
   var el = document.documentElement;
   return !!(el.requestFullscreen || el.webkitRequestFullscreen);
@@ -2133,15 +2180,30 @@ function renderDevices() {
     });
     if (!mine.length) { return; }
 
+    var open = sectionOpen(driver);
     var section = el('section');
-    var head = el('div', 'head');
+
+    var head = el('button', 'head');
+    head.setAttribute('aria-expanded', open ? 'true' : 'false');
     head.appendChild(el('span', 'nick'));
     head.appendChild(el('h2', null, driver.label));
     head.appendChild(el('span', 'count', String(driver.count)));
     head.appendChild(el('span', 'rule'));
-    section.appendChild(head);
+    head.appendChild(el('span', 'caret'));
 
-    mine.forEach(function (device) { section.appendChild(deviceCard(device)); });
+    var body = el('div');
+    body.hidden = !open;
+    mine.forEach(function (device) { body.appendChild(deviceCard(device)); });
+
+    head.addEventListener('click', function () {
+      var opening = body.hidden;
+      body.hidden = !opening;
+      head.setAttribute('aria-expanded', opening ? 'true' : 'false');
+      rememberSection(driver.id, opening);
+    });
+
+    section.appendChild(head);
+    section.appendChild(body);
     box.appendChild(section);
   });
   document.getElementById('allBlock').hidden = !(state.devices || []).length;

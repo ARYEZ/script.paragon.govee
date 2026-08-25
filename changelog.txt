@@ -1,3 +1,18 @@
+v2.26.0
+- The web remote now looks like the rest of the Paragon TV project rather than
+  like a generic dark page: the near-black ground, the orange-to-red accent,
+  the diagonal slashes in the margins, and the condensed uppercase type the
+  other Paragon apps are set in.
+- A device that reports itself on wears a teal edge instead of an orange one,
+  so the colour says something rather than just decorating.
+- The typeface, Saira Condensed, ships with the add-on and is served from the
+  Kodi box. Nothing is fetched from a font host: a remote that needs the
+  internet to look right looks wrong on the LAN it was built for, and asking
+  a font service for it would tell that service this house's address. Under
+  the SIL Open Font License; see resources/fonts/OFL.txt.
+- Only the two shipped font files are ever served, matched by name against a
+  list rather than by building a path out of what the URL asked for.
+
 v2.25.0
 - A web remote, for the phone in your pocket. Under Settings -> Remote, switch
   it on and the background service serves one page and a JSON API on your LAN:

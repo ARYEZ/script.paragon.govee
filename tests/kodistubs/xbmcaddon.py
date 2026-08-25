@@ -15,7 +15,12 @@ FOREIGN = {}
 PROFILES = {}
 PATHS = {}
 
-_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# The add-on's own folder, which is what Kodi reports for 'path' -- the
+# directory holding addon.xml, not the tests beside it. It pointed one level
+# short until the web remote needed to find the font files shipped under
+# resources/, which nothing off-device had ever read before.
+_PATH = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _PROFILE = os.path.join(tempfile.gettempdir(), 'paragon-home-test-profile')
 
 _INFO = {

@@ -978,6 +978,20 @@ at a settings screen while typing into a phone. Then open
 `http://<that address>:8778`, enter the PIN once, and the phone stays signed in
 for a month.
 
+### How it looks
+
+Like the rest of Paragon TV: near-black, the orange-to-red accent, the diagonal
+slashes in the margins, and the same condensed uppercase type. A light that
+reports itself on wears a teal edge rather than an orange one, so the colour is
+doing work rather than decorating.
+
+The typeface is **Saira Condensed**, and it ships with the add-on under
+`resources/fonts/` rather than being fetched from a font host. Two reasons: a
+remote that needs the internet to look right looks wrong on the LAN it was
+built for, and asking a font service for it would tell that service the address
+of your house. It is served from the Kodi box, only by exact filename, and it
+is under the [SIL Open Font License](resources/fonts/OFL.txt).
+
 ### The PIN, and what stands behind it
 
 A port open on the LAN with no lock on it means anything on your network can
@@ -1192,7 +1206,7 @@ button that appears to do nothing is worse.
 ## Development
 
 ```
-python3 tests/test_paragon_home.py      # 667 tests
+python3 tests/test_paragon_home.py      # 671 tests
 python3 tests/check_py2.py              # Python 2.7 syntax gate
 python3 tests/validate_addon.py         # manifest and settings cross-check
 python3 tools/make_assets.py            # regenerate icon.png / fanart.png
@@ -1250,6 +1264,7 @@ resources/lib/scenes.py       scene model and application
 resources/lib/paragon_home.py  the add-on session
 resources/lib/gui.py          dialog-driven control panel
 resources/lib/remote.py       the web remote: server, API and page
+resources/fonts/              the typeface the remote's page is set in
 resources/lib/satellite.py    copying the master's setup down
 ```
 

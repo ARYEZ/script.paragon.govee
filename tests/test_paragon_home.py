@@ -9211,6 +9211,7 @@ class RemoteClient(object):
             raw = response.read()
             status = response.status
             content_type = response.getheader('Content-Type') or ''
+            policy = response.getheader('Content-Security-Policy') or ''
             cookie = response.getheader('Set-Cookie')
         finally:
             connection.close()
@@ -9222,7 +9223,7 @@ class RemoteClient(object):
         except ValueError:
             data = {}
         return {'status': status, 'data': data, 'body': raw,
-                'type': content_type}
+                'type': content_type, 'csp': policy}
 
     def login(self, pin):
         return self.call('POST', '/api/login', {'pin': pin})
@@ -9367,14 +9368,61 @@ class TestWebRemote(unittest.TestCase):
         self.assertIn(b'Paragon Home', answer['body'])
 
     def test_the_page_asks_for_nothing_from_anywhere_else(self):
-        """No CDN, no font, no icon: there is nothing here to serve them."""
-        for marker in (b'http://', b'https://', b'//cdn'):
-            self.assertNotIn(marker, self.lib.PAGE.encode('utf-8'))
+        """No CDN and no font host: the typeface is served from this box.
+
+        A page that reaches out to a font service looks wrong on a LAN with
+        no way out, and tells that service the address of this house.
+        """
+        page = self.lib.PAGE.encode('utf-8')
+
+        for marker in (b'http://', b'https://', b'//cdn', b'gstatic'):
+            self.assertNotIn(marker, page)
+        self.assertIn(b"url('/font/paragon-bold.woff2')", page)
 
     def test_an_unknown_route_says_so_rather_than_serving_the_page(self):
         client = self.serve()
         self.assertEqual(client.call('GET', '/wp-admin')['status'], 404)
         self.assertEqual(client.call('POST', '/api/nope', {})['status'], 404)
+
+    # -- the typeface ------------------------------------------------------
+
+    def test_the_font_is_served_from_this_box(self):
+        """Shipped with the add-on, so the page looks right with no internet."""
+        client = self.serve()
+
+        answer = client.call('GET', '/font/paragon-bold.woff2', guard=False)
+
+        self.assertEqual(answer['status'], 200)
+        self.assertEqual(answer['type'], 'font/woff2')
+        # wOF2, the magic number every WOFF2 file opens with.
+        self.assertEqual(answer['body'][:4], b'wOF2')
+
+    def test_only_the_shipped_fonts_are_served(self):
+        client = self.serve()
+
+        self.assertEqual(
+            client.call('GET', '/font/anything.woff2')['status'], 404)
+
+    def test_a_font_name_cannot_walk_out_of_its_directory(self):
+        """Above resources/fonts sit the Tuya keys and the Kasa password."""
+        client = self.serve()
+
+        for escape in ('/font/../../../settings.xml',
+                       '/font/..%2f..%2ftuya_keys.json',
+                       '/font/....//paragon-bold.woff2',
+                       '/font//etc/passwd'):
+            answer = client.call('GET', escape)
+            self.assertEqual(answer['status'], 404, escape)
+            self.assertNotIn(b'root:', answer['body'])
+
+    def test_the_page_policy_allows_the_font_and_nothing_else(self):
+        client = self.serve()
+
+        answer = client.call('GET', '/', guard=False)
+        policy = answer.get('csp') or ''
+
+        self.assertIn("default-src 'none'", policy)
+        self.assertIn("font-src 'self'", policy)
 
     # -- getting in --------------------------------------------------------
 

@@ -113,6 +113,22 @@ IMMEDIATE = ('on', 'off', 'toggle', 'brightness', 'color', 'temp', 'scene',
 BACKGROUND = ('sequence', 'refresh', 'sync')
 ACTIONS = IMMEDIATE + BACKGROUND
 
+# The typeface the page is set in, shipped with the add-on rather than fetched
+# from a font host: this is a media player on a LAN, and a remote that needs
+# the internet to look right is a remote that looks wrong when the internet is
+# down. Saira Condensed, under the SIL Open Font License -- see
+# resources/fonts/OFL.txt.
+#
+# A tuple of exact names, not a directory listing: the name arrives in a URL,
+# and joining a caller's string onto a path is how "/font/../../settings.xml"
+# becomes a way to read the Kasa password.
+FONT_DIR = os.path.join(utils.ADDON_PATH, 'resources', 'fonts')
+FONTS = ('paragon-medium.woff2', 'paragon-bold.woff2')
+
+# A year. The files only change when the add-on is updated, and that changes
+# the URL below with them.
+FONT_CACHE = 'public, max-age=31536000, immutable'
+
 # What has to be true of a device before the page draws a row for it. Anything
 # else -- an infrared blaster -- would get a row with nothing on it.
 CONTROLLABLE = frozenset([CAP_POWER, CAP_BRIGHTNESS, CAP_COLOR,
@@ -664,14 +680,15 @@ class _Handler(BaseHTTPRequestHandler):
 
     # -- answering ---------------------------------------------------------
 
-    def _send(self, status, body, content_type, extra=None):
+    def _send(self, status, body, content_type, extra=None, cache=None):
         body = to_bytes(body)
         self.send_response(status)
         self.send_header('Content-Type', content_type)
         self.send_header('Content-Length', str(len(body)))
-        # Nothing here is worth caching, and a cached /api/state is a page
-        # showing lights that are no longer on.
-        self.send_header('Cache-Control', 'no-store')
+        # Nothing here is worth caching by default, and a cached /api/state is
+        # a page showing lights that are no longer on. The font is the
+        # exception, and says so for itself.
+        self.send_header('Cache-Control', cache or 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
         # The page loads nothing from anywhere else, so nothing may leak the
         # address of this box to anywhere else either.
@@ -686,6 +703,30 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(status, json.dumps(payload),
                    'application/json; charset=utf-8', extra)
 
+    def _send_font(self, name):
+        """Serve one of the shipped font files, and nothing else.
+
+        Membership of FONTS is the whole check, deliberately done before any
+        path is built: `os.path.join` with a caller's string happily walks up
+        out of the fonts directory, and everything above it is this user's
+        Tuya keys and Kasa password.
+        """
+        if name not in FONTS:
+            return self._send_json(404, {'ok': False,
+                                         'message': 'No such font'})
+        try:
+            handle = open(os.path.join(FONT_DIR, name), 'rb')
+            try:
+                data = handle.read()
+            finally:
+                handle.close()
+        except (OSError, IOError) as exc:
+            # The page has a fallback stack, so a missing file is a plainer
+            # remote rather than a broken one.
+            utils.debug('Web remote: cannot read font %s: %s' % (name, exc))
+            return self._send_json(404, {'ok': False, 'message': 'Missing'})
+        return self._send(200, data, 'font/woff2', cache=FONT_CACHE)
+
     def _send_page(self):
         self._send(200, PAGE, 'text/html; charset=utf-8', [
             # The page is one file that references nothing outside itself.
@@ -693,7 +734,8 @@ class _Handler(BaseHTTPRequestHandler):
             ('Content-Security-Policy',
              "default-src 'none'; style-src 'unsafe-inline'; "
              "script-src 'unsafe-inline'; connect-src 'self'; "
-             "img-src data:; form-action 'none'; frame-ancestors 'none'"),
+             "font-src 'self'; img-src data:; form-action 'none'; "
+             "frame-ancestors 'none'"),
         ])
 
     # -- the two checks a cross-origin page cannot pass --------------------
@@ -761,6 +803,8 @@ class _Handler(BaseHTTPRequestHandler):
         if path == '/favicon.ico':
             # An empty answer rather than a 404 on every single page load.
             return self._send(204, '', 'image/x-icon')
+        if path.startswith('/font/'):
+            return self._send_font(path[len('/font/'):])
         if path == '/api/state':
             if not self._allowed():
                 return None
@@ -1060,119 +1104,472 @@ PAGE = """<!DOCTYPE html>
 <meta name="referrer" content="no-referrer">
 <title>Paragon Home</title>
 <style>
+/* The typeface ships with the add-on and is served from this box, so the page
+   looks right on a LAN with no way out to the internet. */
+@font-face {
+  font-family: 'Paragon';
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+  src: url('/font/paragon-medium.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Paragon';
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+  src: url('/font/paragon-bold.woff2') format('woff2');
+}
+
 :root {
-  --bg: #131118; --card: #1d1a25; --line: #2e2938; --text: #ece9f1;
-  --muted: #9a94a8; --accent: #8b5cf6; --good: #34d399; --bad: #fb7185;
+  --bg: #0a0a0b;
+  --card: #161619;
+  --card-2: #1c1c21;
+  --line: #2a2a30;
+  --line-lit: #3a3a44;
+  --orange: #ff5b1a;
+  --orange-lit: #ff7f36;
+  --red: #e01b24;
+  --teal: #2dd8b8;
+  --text: #f2f2f4;
+  --muted: #8b8b93;
+  --dim: #5f5f68;
+  --hot: linear-gradient(100deg, #ff6a1f 0%, #e0202a 100%);
+  --display: 'Paragon', 'Saira Condensed', 'Oswald', 'Roboto Condensed',
+             'Arial Narrow', sans-serif;
+  --body: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
+
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-/* An explicit display beats the hidden attribute, and .badge has one -- so a
-   box that is not a satellite showed an empty chip where the badge would be. */
+/* An explicit display beats the hidden attribute, and several rules below set
+   one -- so this has to win, or a hidden block shows up empty. */
 [hidden] { display: none !important; }
+
 body {
-  margin: 0; padding: 16px 16px 40px; background: var(--bg); color: var(--text);
-  font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  padding-bottom: calc(40px + env(safe-area-inset-bottom));
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--body);
+  font-size: 15px;
+  line-height: 1.45;
+  min-height: 100vh;
 }
-h1 { font-size: 20px; margin: 0; letter-spacing: .2px; }
-h2 { font-size: 13px; margin: 26px 0 10px; color: var(--muted);
-     text-transform: uppercase; letter-spacing: 1.2px; font-weight: 600; }
-p { margin: 4px 0; }
-.muted { color: var(--muted); font-size: 13px; }
-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+
+/* The slashes. Bold diagonals in the gutters, faint behind the content, which
+   is what the rest of the Paragon apps look like. Pure gradient: an image
+   would be another thing to serve and another thing to get wrong. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: -25% -15%;
+  z-index: -2;
+  background: repeating-linear-gradient(114deg,
+      transparent 0 44px,
+      rgba(224, 26, 36, .60) 44px 58px,
+      transparent 58px 74px,
+      rgba(255, 91, 26, .34) 74px 81px,
+      transparent 81px 148px,
+      rgba(150, 18, 24, .55) 148px 170px,
+      transparent 170px 214px,
+      rgba(255, 60, 30, .18) 214px 220px,
+      transparent 220px 300px);
+  -webkit-mask-image: linear-gradient(90deg, #000 0%, rgba(0,0,0,.14) 30%,
+                                      rgba(0,0,0,.14) 70%, #000 100%);
+  mask-image: linear-gradient(90deg, #000 0%, rgba(0,0,0,.14) 30%,
+                              rgba(0,0,0,.14) 70%, #000 100%);
+}
+/* Darkens the slashes towards the bottom so a long page does not turn into
+   wallpaper, and keeps text over them readable. */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(180deg, rgba(10,10,11,.30) 0%,
+                              rgba(10,10,11,.72) 55%, rgba(10,10,11,.88) 100%);
+}
+
+/* -- type ---------------------------------------------------------------- */
+
+h1, h2, .display, button, .label, .tag {
+  font-family: var(--display);
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+}
+
+h1 { font-size: 26px; margin: 0; letter-spacing: 1.6px; }
+h2 { font-size: 14px; margin: 0; color: var(--text); letter-spacing: 2px; }
+
+.label {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 1.6px;
+  font-weight: 700;
+}
+
+.stat {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 34px;
+  line-height: 1;
+  color: var(--orange);
+  letter-spacing: .5px;
+}
+.stat .unit { font-size: 16px; color: var(--muted); margin-left: 2px; }
+
+/* -- chrome -------------------------------------------------------------- */
+
+.bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: rgba(9, 9, 10, .93);
+  border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  padding: 12px 16px calc(12px + env(safe-area-inset-top)) 16px;
+  padding-top: max(12px, env(safe-area-inset-top));
+}
+.bar::after {
+  content: '';
+  display: block;
+  height: 2px;
+  background: var(--hot);
+  margin: 12px -16px -13px -16px;
+}
+.bar-in {
+  max-width: 680px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* PARAGON HOME, with the slash mark the rest of the family carries. */
+.mark { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.slashes {
+  width: 20px; height: 22px; flex: none;
+  background: repeating-linear-gradient(114deg,
+      var(--orange) 0 3px, transparent 3px 7px);
+}
+.wordmark { white-space: nowrap; }
+.wordmark .b { color: var(--orange); }
+
+.wrap {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 0 16px calc(44px + env(safe-area-inset-bottom));
+}
+
+.meta {
+  display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap; margin: 14px 0 2px;
+}
+.tag {
+  font-size: 10px; letter-spacing: 1.4px; color: var(--dim);
+}
+.badge {
+  display: inline-block;
+  font-family: var(--display);
+  text-transform: uppercase;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  color: var(--orange);
+  border: 1px solid rgba(255, 91, 26, .45);
+  background: rgba(255, 91, 26, .08);
+  border-radius: 2px;
+  padding: 3px 8px;
+}
+
+/* -- sections ------------------------------------------------------------ */
+
+section { margin-top: 26px; }
+.head { display: flex; align-items: center; gap: 10px; margin-bottom: 11px; }
+.head .nick {
+  width: 12px; height: 14px; flex: none;
+  background: repeating-linear-gradient(114deg,
+      var(--orange) 0 3px, transparent 3px 6px);
+}
+.head .rule { flex: 1; height: 1px; background: var(--line); }
+.head .count { font-family: var(--display); font-size: 11px;
+               letter-spacing: 1.4px; color: var(--dim); }
+
+/* -- surfaces ------------------------------------------------------------ */
+
+.card {
+  position: relative;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 14px;
+}
+/* The bright top edge every panel in the Paragon apps wears. */
+.card::before {
+  content: '';
+  position: absolute;
+  left: -1px; right: -1px; top: -1px;
+  height: 2px;
+  background: var(--hot);
+  border-radius: 3px 3px 0 0;
+}
+.card.plain::before { display: none; }
+/* A device that reports itself on wears the teal edge rather than the orange
+   one, so the colour carries the state instead of just being decoration. */
+.card.lit::before {
+  background: linear-gradient(100deg, #2dd8b8 0%, #17a08c 100%);
+}
+
+.grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; }
+.stack { display: flex; flex-direction: column; gap: 9px; }
+.row { display: flex; gap: 9px; }
+.row > * { flex: 1; }
+
+/* -- controls ------------------------------------------------------------ */
+
 button {
-  font: inherit; color: var(--text); background: var(--card);
-  border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
-  cursor: pointer; text-align: left; min-height: 50px;
+  font-family: var(--display);
+  text-transform: uppercase;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 1.5px;
+  color: var(--text);
+  background: var(--card-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 13px 14px;
+  min-height: 46px;
+  cursor: pointer;
+  text-align: center;
+  transition: border-color .12s, background .12s;
 }
-button:active { border-color: var(--accent); transform: scale(.985); }
-button.primary { background: var(--accent); border-color: var(--accent);
-                 color: #fff; text-align: center; font-weight: 600; }
-button.ghost { background: none; padding: 10px 12px; min-height: 0;
-               font-size: 13px; color: var(--muted); }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
-.row { display: flex; gap: 10px; }
-.row > button { flex: 1; text-align: center; }
-.list { display: flex; flex-direction: column; gap: 10px; }
-.list button { display: block; width: 100%; }
-.list .sub, .card .sub { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }
-.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px;
-        padding: 14px; margin-bottom: 10px; }
-.card .name { font-weight: 600; }
-.card .controls { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
-.card .controls button { padding: 10px 14px; min-height: 0; text-align: center; }
-input[type=password], input[type=text] {
-  width: 100%; font: inherit; padding: 16px; border-radius: 12px; color: var(--text);
-  background: var(--card); border: 1px solid var(--line); letter-spacing: 6px;
-  text-align: center; margin: 14px 0;
+button:active { border-color: var(--orange); background: #24242a; }
+button.hot {
+  background: var(--hot);
+  border-color: transparent;
+  color: #fff;
 }
-input[type=range] { width: 100%; accent-color: var(--accent); height: 42px; }
-input[type=color] { width: 48px; height: 40px; padding: 0; background: none;
-                    border: 1px solid var(--line); border-radius: 10px; }
-.swatches { display: flex; flex-wrap: wrap; gap: 10px; }
-.swatch { width: 46px; height: 46px; border-radius: 50%; border: 2px solid var(--line); padding: 0; }
-.status { min-height: 22px; font-size: 13px; color: var(--muted); margin: 12px 0 0; }
-.status.bad { color: var(--bad); }
-.status.good { color: var(--good); }
-.badge { display: inline-block; font-size: 11px; color: var(--accent);
-         border: 1px solid var(--accent); border-radius: 999px; padding: 1px 8px; margin-top: 6px; }
-.screen { max-width: 620px; margin: 0 auto; }
-#login { padding-top: 12vh; text-align: center; }
-footer { display: flex; gap: 10px; margin-top: 26px; border-top: 1px solid var(--line); padding-top: 12px; }
+button.hot:active { filter: brightness(1.14); }
+button.ghost {
+  background: none;
+  border-color: var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  min-height: 38px;
+  padding: 9px 12px;
+}
+button.wide { width: 100%; }
+
+/* A scene or sequence: a panel you press, with the same lit top edge. */
+button.tile {
+  position: relative;
+  text-align: left;
+  padding: 15px 14px 14px;
+  background: var(--card);
+  overflow: hidden;
+}
+button.tile::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; right: 0;
+  height: 2px;
+  background: var(--hot);
+  opacity: .85;
+}
+button.tile .sub {
+  display: block;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 1.3px;
+  color: var(--dim);
+  margin-top: 5px;
+}
+
+input[type=password] {
+  width: 100%;
+  font-family: var(--display);
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: 10px;
+  text-align: center;
+  text-indent: 10px;
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 12px;
+  margin: 7px 0 14px;
+}
+input[type=password]:focus { outline: none; border-color: var(--orange); }
+
+input[type=range] {
+  width: 100%;
+  accent-color: var(--orange);
+  height: 34px;
+  background: none;
+}
+input[type=color] {
+  width: 44px; height: 40px; flex: none;
+  padding: 0;
+  background: var(--card-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+}
+input[type=color]::-webkit-color-swatch-wrapper { padding: 4px; }
+input[type=color]::-webkit-color-swatch { border: none; border-radius: 2px; }
+input[type=color]::-moz-color-swatch { border: none; border-radius: 2px; }
+
+.swatches { display: flex; flex-wrap: wrap; gap: 9px; }
+.swatch {
+  width: 40px; height: 40px; min-height: 0;
+  padding: 0; flex: none;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, .14);
+}
+.swatch:active { border-color: var(--text); }
+
+/* -- devices ------------------------------------------------------------- */
+
+.dev { margin-bottom: 9px; }
+.dev .name {
+  font-family: var(--display);
+  text-transform: uppercase;
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: 1.2px;
+}
+.dev .state { margin-top: 2px; }
+.dev .state.on { color: var(--teal); }
+.dev .controls { display: flex; gap: 8px; margin-top: 12px; }
+.dev .controls button { flex: 1; font-size: 12px; padding: 10px 8px;
+                        min-height: 40px; }
+.dev .dim { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
+.dev .dim .stat { font-size: 22px; min-width: 54px; }
+
+/* -- status -------------------------------------------------------------- */
+
+.status {
+  font-family: var(--display);
+  text-transform: uppercase;
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 1.6px;
+  color: var(--muted);
+  min-height: 18px;
+  margin: 14px 0 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--line);
+}
+.status:empty { border-left-color: transparent; }
+.status.good { color: var(--teal); border-left-color: var(--teal); }
+.status.bad { color: #ff5f5f; border-left-color: #ff5f5f; }
+.status.busy { color: var(--orange); border-left-color: var(--orange); }
+
+footer {
+  display: flex; gap: 9px;
+  margin-top: 30px; padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+/* -- signing in ---------------------------------------------------------- */
+
+#login { max-width: 380px; margin: 0 auto; padding: 16vh 20px 40px; }
+#login .mark { justify-content: center; margin-bottom: 22px; }
+#login .slashes { width: 26px; height: 30px; }
+#login h1 { font-size: 30px; }
+#login .lede {
+  text-align: center; color: var(--muted); font-size: 13px; margin: 0;
+}
+#login .status { text-align: left; margin-top: 14px; }
+
+@media (min-width: 560px) {
+  .grid { grid-template-columns: repeat(3, 1fr); }
+}
 </style>
 </head>
 <body>
 
-<div id="login" class="screen">
-  <h1>Paragon Home</h1>
-  <p class="muted">Settings &rarr; Remote on the Kodi box has the PIN.</p>
-  <input id="pin" type="password" inputmode="numeric" autocomplete="one-time-code" maxlength="12" placeholder="PIN">
-  <button id="signin" class="primary" style="width:100%">Sign in</button>
-  <p id="loginerror" class="status"></p>
+<div id="login" hidden>
+  <div class="mark">
+    <span class="slashes"></span>
+    <h1 class="wordmark">Paragon <span class="b">Home</span></h1>
+  </div>
+  <p class="lede">Settings &rarr; Remote on the Kodi box has the PIN.</p>
+  <p class="label" style="margin:26px 0 0">Enter PIN</p>
+  <input id="pin" type="password" inputmode="numeric" autocomplete="one-time-code" maxlength="12">
+  <button id="signin" class="hot wide">Sign in</button>
+  <p class="status" id="loginerror"></p>
 </div>
 
-<div id="remote" class="screen" hidden>
-  <header>
-    <div>
-      <h1 id="title">Paragon Home</h1>
-      <p class="muted" id="subtitle"></p>
+<div id="remote" hidden>
+  <div class="bar">
+    <div class="bar-in">
+      <div class="mark">
+        <span class="slashes"></span>
+        <h1 class="wordmark">Paragon <span class="b">Home</span></h1>
+      </div>
+      <button class="ghost" id="signout">Sign out</button>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div class="meta">
+      <span class="tag" id="version"></span>
       <span class="badge" id="badge" hidden></span>
     </div>
-    <button class="ghost" id="signout">Sign out</button>
-  </header>
-  <p class="status" id="status"></p>
+    <p class="status" id="status"></p>
 
-  <section id="scenesBlock" hidden>
-    <h2>Scenes</h2>
-    <div class="grid" id="scenes"></div>
-  </section>
+    <section id="scenesBlock" hidden>
+      <div class="head">
+        <span class="nick"></span><h2>Scenes</h2><span class="rule"></span>
+      </div>
+      <div class="grid" id="scenes"></div>
+    </section>
 
-  <section id="sequencesBlock" hidden>
-    <h2>Sequences</h2>
-    <div class="list" id="sequences"></div>
-  </section>
+    <section id="sequencesBlock" hidden>
+      <div class="head">
+        <span class="nick"></span><h2>Sequences</h2><span class="rule"></span>
+      </div>
+      <div class="stack" id="sequences"></div>
+    </section>
 
-  <section id="allBlock" hidden>
-    <h2>All lights</h2>
-    <div class="row">
-      <button data-act="on">On</button>
-      <button data-act="off">Off</button>
-      <button data-act="toggle">Toggle</button>
-    </div>
-    <input type="range" id="allBright" min="1" max="100" value="60" aria-label="Brightness">
-    <div class="swatches" id="palette"></div>
-    <div class="row" style="margin-top:10px">
-      <button data-temp="2700">Warm</button>
-      <button data-temp="4000">Neutral</button>
-      <button data-temp="5600">Cool</button>
-    </div>
-  </section>
+    <section id="allBlock" hidden>
+      <div class="head">
+        <span class="nick"></span><h2>All lights</h2><span class="rule"></span>
+      </div>
+      <div class="card">
+        <div class="row">
+          <button data-act="on">On</button>
+          <button data-act="off">Off</button>
+          <button data-act="toggle">Toggle</button>
+        </div>
+        <p class="label" style="margin:16px 0 0">Brightness</p>
+        <div class="dev dim">
+          <span class="stat" id="allBrightValue">60<span class="unit">%</span></span>
+          <input type="range" id="allBright" min="1" max="100" value="60" aria-label="Brightness">
+        </div>
+        <p class="label" style="margin:10px 0 9px">Colour</p>
+        <div class="swatches" id="palette"></div>
+        <p class="label" style="margin:16px 0 9px">White</p>
+        <div class="row">
+          <button data-temp="2700">Warm</button>
+          <button data-temp="4000">Neutral</button>
+          <button data-temp="5600">Cool</button>
+        </div>
+      </div>
+    </section>
 
-  <div id="devices"></div>
+    <div id="devices"></div>
 
-  <footer>
-    <button class="ghost" id="reread">Read the lights</button>
-    <button class="ghost" id="rediscover">Search for devices</button>
-  </footer>
+    <footer>
+      <button class="ghost" id="reread">Read the lights</button>
+      <button class="ghost" id="rediscover">Search for devices</button>
+    </footer>
+  </div>
 </div>
 
 <script>
@@ -1241,13 +1638,12 @@ function act(action, extra) {
   busy = true;
   var body = {action: action};
   for (var key in (extra || {})) { body[key] = extra[key]; }
-  say('Working...');
+  say('Working', 'busy');
   api('/api/action', 'POST', body).then(function (data) {
     busy = false;
     if (data.status === 401) { showLogin(); return; }
     say(data.message || '', data.ok ? 'good' : 'bad');
-    // The action changed something; ask what it looks like now. Short delay
-    // so the loop has had its tick before we ask.
+    // Ask what it looks like now, once the loop has had its tick.
     setTimeout(load, 600);
   });
 }
@@ -1256,7 +1652,14 @@ function load() {
   return api('/api/state').then(function (data) {
     if (data.status === 401) { showLogin(); return; }
     if (data.status !== 200) {
-      say(data.message || 'No answer from the Kodi box', 'bad');
+      // Both screens start hidden, so an error has to land somewhere the
+      // phone can see it -- otherwise this is a black page and no reason.
+      showLogin();
+      if (data.status !== 401) {
+        var problem = document.getElementById('loginerror');
+        problem.textContent = data.message || 'No answer from the Kodi box';
+        problem.className = 'status bad';
+      }
       return;
     }
     if (!data.ready) { setTimeout(load, 800); return; }
@@ -1268,7 +1671,7 @@ function load() {
 }
 
 function tile(label, sub, handler) {
-  var node = el('button', null);
+  var node = el('button', 'tile');
   node.appendChild(el('span', null, label));
   if (sub) { node.appendChild(el('span', 'sub', sub)); }
   node.addEventListener('click', handler);
@@ -1315,28 +1718,26 @@ function renderPalette() {
 }
 
 function describe(device) {
-  if (!device.power) { return device.model || ''; }
-  var text = device.power === 'on' ? 'On' : 'Off';
-  if (device.power === 'on' && device.brightness) {
-    text += ' - ' + device.brightness + '%';
-  }
-  return text;
+  if (!device.power) { return device.model || 'Ready'; }
+  if (device.power !== 'on') { return 'Off'; }
+  return device.brightness ? 'On at ' + device.brightness + '%' : 'On';
 }
 
 function deviceCard(device) {
-  var card = el('div', 'card');
+  var card = el('div', 'card dev' + (device.power === 'on' ? ' lit' : ''));
   card.appendChild(el('div', 'name', device.name));
-  card.appendChild(el('span', 'sub', describe(device)));
+  var state_line = el('div', 'label state', describe(device));
+  if (device.power === 'on') { state_line.className = 'label state on'; }
+  card.appendChild(state_line);
 
   var caps = device.caps || [];
   var controls = el('div', 'controls');
 
   if (caps.indexOf('power') >= 0) {
-    ['on', 'off', 'toggle'].forEach(function (verb) {
-      var node = el('button', null, verb === 'toggle' ? 'Toggle'
-                    : verb.charAt(0).toUpperCase() + verb.slice(1));
+    [['on', 'On'], ['off', 'Off'], ['toggle', 'Toggle']].forEach(function (pair) {
+      var node = el('button', null, pair[1]);
       node.addEventListener('click', function () {
-        act(verb, {target: device.id});
+        act(pair[0], {target: device.id});
       });
       controls.appendChild(node);
     });
@@ -1345,7 +1746,9 @@ function deviceCard(device) {
   if (caps.indexOf('color') >= 0) {
     var picker = el('input');
     picker.type = 'color';
-    picker.value = '#ffffff';
+    // The first speed-dial colour rather than white: the well shows whatever
+    // it is set to, and a white block reads as a gap in the card.
+    picker.value = '#' + (((state.palette || [])[0] || {}).hex || 'FFB46B');
     picker.setAttribute('aria-label', device.name + ' colour');
     picker.addEventListener('change', function () {
       act('color', {target: device.id, value: picker.value.replace('#', '')});
@@ -1356,18 +1759,30 @@ function deviceCard(device) {
   card.appendChild(controls);
 
   if (caps.indexOf('brightness') >= 0) {
+    var start = device.brightness || 60;
+    var dim = el('div', 'dim');
+    var readout = el('span', 'stat');
+    readout.appendChild(document.createTextNode(String(start)));
+    readout.appendChild(el('span', 'unit', '%'));
+
     var slider = el('input');
     slider.type = 'range';
     slider.min = 1;
     slider.max = 100;
-    slider.value = device.brightness || 60;
+    slider.value = start;
     slider.setAttribute('aria-label', device.name + ' brightness');
+    slider.addEventListener('input', function () {
+      readout.firstChild.nodeValue = slider.value;
+    });
     // On change rather than input: a dragged slider fires input continuously,
     // and every one of those would be a packet at a bulb.
     slider.addEventListener('change', function () {
       act('brightness', {target: device.id, value: slider.value});
     });
-    card.appendChild(slider);
+
+    dim.appendChild(readout);
+    dim.appendChild(slider);
+    card.appendChild(dim);
   }
 
   return card;
@@ -1381,8 +1796,15 @@ function renderDevices() {
       return device.driver === driver.id;
     });
     if (!mine.length) { return; }
+
     var section = el('section');
-    section.appendChild(el('h2', null, driver.label + ' (' + driver.count + ')'));
+    var head = el('div', 'head');
+    head.appendChild(el('span', 'nick'));
+    head.appendChild(el('h2', null, driver.label));
+    head.appendChild(el('span', 'rule'));
+    head.appendChild(el('span', 'count', String(driver.count)));
+    section.appendChild(head);
+
     mine.forEach(function (device) { section.appendChild(deviceCard(device)); });
     box.appendChild(section);
   });
@@ -1390,11 +1812,10 @@ function renderDevices() {
 }
 
 function render() {
-  document.getElementById('title').textContent = state.name || 'Paragon Home';
-  document.getElementById('subtitle').textContent = 'v' + (state.version || '');
+  document.getElementById('version').textContent = 'v' + (state.version || '');
   var badge = document.getElementById('badge');
   if (state.satellite && state.satellite.mode) {
-    badge.textContent = 'Satellite, following ' + (state.satellite.master || 'the master');
+    badge.textContent = 'Satellite - following ' + (state.satellite.master || 'the master');
     badge.hidden = false;
   } else {
     badge.hidden = true;
@@ -1418,9 +1839,16 @@ document.getElementById('reread').addEventListener('click', function () {
 document.getElementById('rediscover').addEventListener('click', function () {
   act('refresh', {});
 });
-document.getElementById('allBright').addEventListener('change', function () {
-  act('brightness', {value: this.value});
+
+var allBright = document.getElementById('allBright');
+var allBrightValue = document.getElementById('allBrightValue');
+allBright.addEventListener('input', function () {
+  allBrightValue.firstChild.nodeValue = allBright.value;
 });
+allBright.addEventListener('change', function () {
+  act('brightness', {value: allBright.value});
+});
+
 Array.prototype.forEach.call(document.querySelectorAll('[data-act]'), function (node) {
   node.addEventListener('click', function () { act(node.dataset.act, {}); });
 });

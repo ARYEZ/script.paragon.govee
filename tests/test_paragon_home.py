@@ -75,6 +75,13 @@ def palette_row(panel, name):
     return [e['name'] for e in panel.app.palette].index(name)
 
 
+def utils_read(name):
+    """What is actually on disk for `name`, or None. For asserting absence."""
+    import addon_utils
+
+    return addon_utils.read_json(name, default=None)
+
+
 def menu_row(open_menu, prefix):
     """Index of a menu row by its label prefix, and the labels it sat among.
 
@@ -7216,6 +7223,160 @@ class TestSatelliteMode(unittest.TestCase):
         self.assertTrue(app.controller.calls)
 
     # -- the menu ----------------------------------------------------------
+
+    # -- what a satellite does not own -------------------------------------
+    #
+    # Everything in SHARED_FILES is overwritten by the master's copy at
+    # start-up and every few minutes, and that copy has no idea anything was
+    # edited here. So a satellite must refuse to write them at all: accepting
+    # the change and deleting it a quarter of an hour later, silently, is the
+    # worst of the available answers.
+
+    def test_a_satellite_cannot_save_a_sequence(self):
+        import sequences as sequence_lib
+
+        app = self.app()
+
+        self.assertIsNone(
+            app.save_sequence(sequence_lib.make_sequence('Ignition')))
+        self.assertEqual(app.sequences, [])
+
+    def test_a_refused_sequence_is_not_left_in_memory(self):
+        """Half-saving would show it in the menu and lose it at the restart."""
+        import sequences as sequence_lib
+
+        app = self.app()
+        app._sequences = []
+
+        app.save_sequence(sequence_lib.make_sequence('Ignition'))
+
+        self.assertEqual([s['name'] for s in app.sequences], [])
+        self.assertIsNone(utils_read('sequences.json'))
+
+    def test_a_satellite_cannot_delete_a_sequence_it_was_given(self):
+        app = self.app()
+        app._sequences = [{'name': 'Ignition', 'steps': []}]
+
+        self.assertFalse(app.delete_sequence({'name': 'Ignition'}))
+        self.assertEqual([s['name'] for s in app.sequences], ['Ignition'])
+
+    def test_a_satellite_cannot_save_a_scene(self):
+        app = self.app()
+        before = len(app.scenes)
+
+        self.assertIsNone(app.save_scene({'name': 'Warshade'}))
+        self.assertEqual(len(app.scenes), before)
+
+    def test_a_satellite_cannot_rename_or_forget_a_device(self):
+        app = self.app()
+        app._devices = [Device('AA:BB', name='Master Lamp', lan=True)]
+
+        self.assertFalse(app.rename_device(app.devices[0], 'My Lamp'))
+        self.assertFalse(app.set_device_enabled(app.devices[0], False))
+        self.assertFalse(app.forget_device(app.devices[0]))
+
+        self.assertEqual(app.devices[0].name, 'Master Lamp')
+        self.assertTrue(app.devices[0].enabled)
+        self.assertEqual(len(app.devices), 1)
+
+    def test_a_satellite_cannot_edit_the_palette(self):
+        app = self.app()
+        before = [entry['name'] for entry in app.palette]
+
+        self.assertIsNone(app.save_color('Ember', (255, 90, 26)))
+        self.assertFalse(app.remove_color(app.palette[0]))
+        self.assertFalse(app.reset_palette())
+
+        self.assertEqual([entry['name'] for entry in app.palette], before)
+
+    def test_a_satellite_says_where_to_type_a_tuya_key(self):
+        """Typed here it would be overwritten by the master's copy."""
+        app = self.app()
+        device = Device('wp9abc', name='Office Plug', driver='tuya')
+        app._devices = [device]
+
+        try:
+            app.set_local_key(device, '0123456789abcdef')
+        except ControlError as exc:
+            self.assertIn('master', str(exc))
+        else:
+            self.fail('a satellite accepted a Tuya key')
+
+    def test_a_satellite_still_refreshes_its_device_cache(self):
+        """The one shared file it may write: that one is a cache, not a choice.
+
+        Blocking it would leave a satellite unable to learn the addresses of
+        the very lights the master told it about.
+        """
+        app = self.app()
+        app._devices = [Device('AA:BB', name='Master Lamp', lan=True)]
+
+        self.assertTrue(app.save_devices())
+
+    # -- and the master still can ------------------------------------------
+
+    def test_the_master_can_do_all_of_it(self):
+        """Or the guard would be a way of breaking the box that works."""
+        import sequences as sequence_lib
+
+        app = self.app(satellite=False)
+        app._devices = [Device('AA:BB', name='Master Lamp', lan=True)]
+
+        self.assertIsNotNone(
+            app.save_sequence(sequence_lib.make_sequence('Ignition')))
+        self.assertIsNotNone(app.save_scene({'name': 'Warshade'}))
+        self.assertIsNotNone(app.save_color('Ember', (255, 90, 26)))
+        self.assertTrue(app.rename_device(app.devices[0], 'My Lamp'))
+        self.assertTrue(app.delete_sequence({'name': 'Ignition'}))
+
+    # -- and the menus do not offer what cannot be done --------------------
+
+    def test_the_menu_offers_no_sequence_editing_on_a_satellite(self):
+        import gui
+
+        app = self.app()
+        app._sequences = [{'name': 'Ignition', 'steps': []}]
+        labels = menu_row(lambda: gui.ControlPanel(app).sequence_menu(),
+                          'Ignition')[1]
+
+        self.assertFalse([row for row in labels
+                          if row.startswith(('New sequence', 'Manage'))],
+                         'editing offered on a satellite: %s' % labels)
+
+    def test_the_menu_offers_sequence_editing_on_the_master(self):
+        import gui
+
+        app = self.app(satellite=False)
+        labels = menu_row(lambda: gui.ControlPanel(app).sequence_menu(),
+                          'New sequence')[1]
+
+        self.assertTrue(labels)
+
+    def test_the_menu_offers_no_scene_editing_on_a_satellite(self):
+        import gui
+
+        app = self.app()
+        labels = menu_row(lambda: gui.ControlPanel(app).scene_menu(),
+                          'All Off')[1]
+
+        self.assertFalse([row for row in labels
+                          if row.startswith(('Capture', 'Manage'))],
+                         'editing offered on a satellite: %s' % labels)
+
+    def test_the_device_menu_offers_no_edits_on_a_satellite(self):
+        import gui
+
+        app = self.app()
+        device = Device('AA:BB', name='Master Lamp', lan=True)
+        app._devices = [device]
+        app.controller = RecordingController()
+        labels = menu_row(lambda: gui.ControlPanel(app).device_menu(device),
+                          'Show status')[1]
+
+        self.assertFalse([row for row in labels
+                          if row.startswith(('Rename', 'Forget', 'Disable',
+                                             'Enable', 'Set local key'))],
+                         'editing offered on a satellite: %s' % labels)
 
     def test_the_menu_offers_no_reracks_on_a_satellite(self):
         import gui

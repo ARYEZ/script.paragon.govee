@@ -1,3 +1,28 @@
+v2.32.0
+- A satellite can no longer edit anything the master owns. It never should
+  have been able to: the devices, scenes, sequences, palette and Tuya keys are
+  copied down from the master at start-up and every few minutes, and that copy
+  is a plain overwrite. Anything built on a satellite was deleted within the
+  sync interval, silently, with nothing anywhere saying why.
+- What that covered: new and edited sequences, new and edited scenes,
+  capturing a scene from the lights, renaming a device, disabling one,
+  forgetting one, editing the colour palette, and typing in a Tuya key. All of
+  it looked like it worked.
+- The rule is enforced on the session now rather than in the menus, so nothing
+  can write a shared file on a satellite whichever way it is reached. The
+  menus then stop offering what cannot be done, so you are not shown a door
+  that is locked.
+- Running things by hand is untouched: a scene, a sequence, a light, a plug, a
+  learned code, from the menu or a keymap or the web remote. That was always
+  the point of a satellite and it still is.
+- Device discovery still writes on a satellite. devices.json is also where a
+  refresh records what it found and at which address -- a cache rather than a
+  choice -- and refusing it would leave a satellite unable to reach the very
+  lights the master told it about. The choices inside it are guarded on their
+  own.
+- Only reracks were protected before. That was the one satellite check in the
+  whole control panel.
+
 v2.31.0
 - A driver's section in the web remote folds away. Tap the heading to open or
   close it; the count beside the name says how much is in there either way.

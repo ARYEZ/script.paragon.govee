@@ -502,7 +502,10 @@ class ControlPanel(object):
             entries = self.app.palette
             options = self._palette_rows()
             options.append('Custom hex...')
-            options.append('Manage colours...')
+            # A custom hex is used once and not saved, so it stays. Managing
+            # the palette writes a file the master owns.
+            if self.app.owns_data:
+                options.append('Manage colours...')
 
             choice = _select('%s - colour' % heading, options)
             if choice == BACK:
@@ -661,16 +664,22 @@ class ControlPanel(object):
             scenes = self.app.scenes
             options = ['%s  -  %s' % (s['name'], scene_lib.describe(s))
                        for s in scenes]
-            options.append('Capture lights as a new scene...')
-            options.append('Manage scenes...')
+            # Same rule as the sequences: the master owns the scene list, so
+            # a satellite offers no way to add to it. Capture especially --
+            # setting a room up by hand and losing the result a quarter of an
+            # hour later is the worst version of this.
+            editable = self.app.owns_data
+            if editable:
+                options.append('Capture lights as a new scene...')
+                options.append('Manage scenes...')
 
             choice = _select('Scenes', options)
             if choice == BACK:
                 return
-            if choice == len(scenes):
+            if editable and choice == len(scenes):
                 self.capture_scene()
                 continue
-            if choice == len(scenes) + 1:
+            if editable and choice == len(scenes) + 1:
                 self.manage_scenes()
                 continue
             self.app.apply_scene(scenes[choice])
@@ -1420,12 +1429,18 @@ class ControlPanel(object):
         keyed = hasattr(driver, 'set_local_key')
         testable = hasattr(driver, 'test_connection')
 
-        rows = [
-            ('Rename (currently "%s")' % device.name,
-             lambda: self._rename_device(device)),
-            ('Disable' if device.enabled else 'Enable',
-             lambda: self._toggle_enabled(device)),
-        ]
+        # The device list travels down from the master too -- names, the
+        # enabled flag, all of it -- so a satellite shows what a device is and
+        # what it can do, and none of the ways to change it.
+        owns = self.app.owns_data
+        rows = []
+        if owns:
+            rows.extend([
+                ('Rename (currently "%s")' % device.name,
+                 lambda: self._rename_device(device)),
+                ('Disable' if device.enabled else 'Enable',
+                 lambda: self._toggle_enabled(device)),
+            ])
 
         if emitter:
             # An IR blaster has no light to flash and nothing to identify by,
@@ -1434,7 +1449,10 @@ class ControlPanel(object):
                          % len(self.app.controller.commands(device)),
                          lambda: self.command_menu(device)))
         else:
-            if keyed:
+            # The keys travel down from the master with everything else, so
+            # one typed in here would be overwritten by the master's copy --
+            # or by the master not having one.
+            if keyed and owns:
                 rows.append(('Set local key%s'
                              % (' (needed)' if self.app.needs_local_key(device)
                                 else ''),
@@ -1459,8 +1477,9 @@ class ControlPanel(object):
             rows.append(('Switch on', lambda: self._switch(device, True)))
             rows.append(('Switch off', lambda: self._switch(device, False)))
 
-        rows.append(('Forget this device',
-                     lambda: self._forget_device(device)))
+        if owns:
+            rows.append(('Forget this device',
+                         lambda: self._forget_device(device)))
 
         choice = _select(device.name, [label for label, _handler in rows])
         if choice == BACK:
@@ -1469,16 +1488,14 @@ class ControlPanel(object):
 
     def _rename_device(self, device):
         name = _dialog().input('Device name', device.name)
-        if name and name.strip():
-            device.name = name.strip()
-            self.app.save_devices()
+        if name and self.app.rename_device(device, name):
             utils.notify('Renamed to %s' % device.name)
 
     def _toggle_enabled(self, device):
-        device.enabled = not device.enabled
-        self.app.save_devices()
-        utils.notify('%s %s' % (device.name,
-                                'enabled' if device.enabled else 'disabled'))
+        if self.app.set_device_enabled(device, not device.enabled):
+            utils.notify('%s %s' % (device.name,
+                                    'enabled' if device.enabled else
+                                    'disabled'))
 
     def _switch(self, device, on):
         """Power one device from its own menu.
@@ -1576,9 +1593,14 @@ class ControlPanel(object):
                         sequence_lib.describe_schedule(sequence), summary)
                 rows.append(('%s  -  %s' % (sequence['name'], summary),
                              lambda r=sequence: self.run_sequence(r)))
-            rows.append(('New sequence...', self.new_sequence))
-            if sequences:
-                rows.append(('Manage sequences...', self.manage_sequences))
+            # A satellite copies its sequences from the master and cannot
+            # save its own, so it is not offered the chance to write one that
+            # would be gone at the next sync. Running one by hand is
+            # untouched -- that is the whole point of a satellite.
+            if self.app.owns_data:
+                rows.append(('New sequence...', self.new_sequence))
+                if sequences:
+                    rows.append(('Manage sequences...', self.manage_sequences))
 
             choice = _select('Sequences', [label for label, _h in rows])
             if choice == BACK:

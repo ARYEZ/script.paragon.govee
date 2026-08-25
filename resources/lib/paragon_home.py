@@ -97,12 +97,20 @@ class ParagonHome(object):
         return [d.ip for d in self.devices if d.ip]
 
     def save_tuya_keys(self):
-        utils.write_json(self.KEY_FILE, self._tuya_keys or {})
+        if self._master_owns('Tuya keys'):
+            return False
+        return utils.write_json(self.KEY_FILE, self._tuya_keys or {})
 
     def set_local_key(self, device, key):
         """Store a Tuya local key. Returns False if it is not 16 characters."""
         from devices import ControlError
 
+        # Before asking which device it is: on a satellite the answer is the
+        # same for all of them. The key travels down with everything else, so
+        # one typed here is overwritten by the master's copy -- or by the
+        # master not having one.
+        if not self.owns_data:
+            raise ControlError('Enter Tuya keys on the master, not here')
         driver = self.controller.driver_for(device)
         if driver is None or not hasattr(driver, 'set_local_key'):
             raise ControlError('%s does not use a local key' % device.name)
@@ -186,11 +194,66 @@ class ParagonHome(object):
     def enabled_devices(self):
         return [d for d in self.devices if d.enabled]
 
+    # -- who owns the shared data ------------------------------------------
+
+    @property
+    def owns_data(self):
+        """Whether this box owns the devices, scenes, sequences and palette.
+
+        False on a satellite. Everything in satellite.SHARED_FILES is copied
+        down from the master at start-up and every few minutes, and that copy
+        is a plain overwrite -- it has no idea anything was edited here. So a
+        scene built on a satellite is not merely unofficial, it is deleted
+        within the sync interval, silently.
+
+        Refusing the write is the kinder answer. Being told no is a small
+        annoyance; watching an evening's work disappear a quarter of an hour
+        later, with nothing anywhere saying why, is not.
+        """
+        return not self.satellite_mode
+
+    def _master_owns(self, what):
+        """True when this box may not save `what`, saying so in the log."""
+        if self.owns_data:
+            return False
+        utils.log('Satellite: refused to save %s -- the master owns it'
+                  % what)
+        return True
+
     def save_devices(self):
-        utils.write_json(DEVICE_CACHE, [d.to_dict() for d in self.devices])
+        """Write the device cache. The one shared file a satellite may write.
+
+        devices.json travels down from the master like the rest, but this is
+        also where discovery records what it found and at which address --
+        a cache rather than a choice. Refusing it would leave a satellite
+        unable to reach the very lights the master told it about. The choices
+        inside it -- the name, the enabled flag -- are guarded on their own,
+        just above.
+        """
+        return utils.write_json(DEVICE_CACHE,
+                                [d.to_dict() for d in self.devices])
+
+    def rename_device(self, device, name):
+        """Rename a device. Returns True if the new name was kept."""
+        name = (name or '').strip()
+        if not name or self._master_owns('a device name'):
+            return False
+        device.name = name
+        self.save_devices()
+        return True
+
+    def set_device_enabled(self, device, enabled):
+        """Include or exclude a device. Returns True if the change stuck."""
+        if self._master_owns('which devices are enabled'):
+            return False
+        device.enabled = bool(enabled)
+        self.save_devices()
+        return True
 
     def forget_device(self, device):
         """Remove a light from the cache for good."""
+        if self._master_owns('the device list'):
+            return False
         if device in self.devices:
             self._devices.remove(device)
             self.save_devices()
@@ -305,13 +368,19 @@ class ParagonHome(object):
             raw = utils.read_json(palette_lib.PALETTE_FILE, default=None)
             if raw is None:
                 self._palette = palette_lib.default_palette()
-                self.save_palette()
+                # Not on a satellite: the master's palette is on its way, and
+                # seeding through the guard would only log a refusal on every
+                # start-up until it lands.
+                if self.owns_data:
+                    self.save_palette()
             else:
                 self._palette = palette_lib.normalise_all(raw)
         return self._palette
 
     def save_palette(self):
-        utils.write_json(palette_lib.PALETTE_FILE, self._palette or [])
+        if self._master_owns('the colour palette'):
+            return False
+        return utils.write_json(palette_lib.PALETTE_FILE, self._palette or [])
 
     def color_by_name(self, name):
         return palette_lib.find(self.palette, name)
@@ -323,7 +392,7 @@ class ParagonHome(object):
         order is not shuffled by an edit.
         """
         entry = palette_lib.normalise({'name': name, 'color': list(rgb)})
-        if entry is None:
+        if entry is None or self._master_owns('the colour palette'):
             return None
 
         existing = palette_lib.find(self.palette, entry['name'])
@@ -337,6 +406,8 @@ class ParagonHome(object):
         return entry
 
     def remove_color(self, entry):
+        if self._master_owns('the colour palette'):
+            return False
         if entry in self.palette:
             self._palette.remove(entry)
             self.save_palette()
@@ -344,14 +415,18 @@ class ParagonHome(object):
         return False
 
     def move_color(self, index, offset):
+        if self._master_owns('the colour palette'):
+            return index
         new_index = palette_lib.move(self.palette, index, offset)
         if new_index != index:
             self.save_palette()
         return new_index
 
     def reset_palette(self):
+        if self._master_owns('the colour palette'):
+            return False
         self._palette = palette_lib.default_palette()
-        self.save_palette()
+        return self.save_palette()
 
     # -- cycling -----------------------------------------------------------
     #
@@ -480,7 +555,9 @@ class ParagonHome(object):
         return self._scenes
 
     def save_scenes(self):
-        utils.write_json(scene_lib.SCENE_FILE, self._scenes or [])
+        if self._master_owns('scenes'):
+            return False
+        return utils.write_json(scene_lib.SCENE_FILE, self._scenes or [])
 
     def scene_by_name(self, name):
         return scene_lib.find(self.scenes, name)
@@ -551,6 +628,10 @@ class ParagonHome(object):
         """Add or replace a scene by name. Returns the normalised scene."""
         cleaned = scene_lib.normalise(scene)
         if cleaned is None:
+            return None
+        # Before the list is touched, not after: a scene added in memory and
+        # refused on disk would show in the menu and be gone next start-up.
+        if self._master_owns('scenes'):
             return None
         existing = scene_lib.find(self.scenes, cleaned['name'])
         if existing is not None:
@@ -630,7 +711,9 @@ class ParagonHome(object):
         return self._sequences
 
     def save_sequences(self):
-        utils.write_json(sequence_lib.SEQUENCE_FILE, self.sequences)
+        if self._master_owns('sequences'):
+            return False
+        return utils.write_json(sequence_lib.SEQUENCE_FILE, self.sequences)
 
     def sequence_by_name(self, name):
         return sequence_lib.find(self.sequences, name)
@@ -639,6 +722,8 @@ class ParagonHome(object):
         """Add or replace a sequence by name. Returns the cleaned sequence."""
         cleaned = sequence_lib.normalise(sequence)
         if cleaned is None:
+            return None
+        if self._master_owns('sequences'):
             return None
         existing = sequence_lib.find(self.sequences, cleaned['name'])
         if existing is not None:
@@ -649,6 +734,8 @@ class ParagonHome(object):
         return cleaned
 
     def delete_sequence(self, sequence):
+        if self._master_owns('sequences'):
+            return False
         existing = sequence_lib.find(self.sequences, sequence.get('name'))
         if existing is None:
             return False

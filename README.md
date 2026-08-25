@@ -945,6 +945,22 @@ lights carry on working — they are just a little out of date. A file that
 arrives truncated or unparseable is discarded rather than written, because
 half a scene list is worse than yesterday's whole one.
 
+### The master owns the setup
+
+A satellite copies the devices, scenes, sequences, palette and Tuya keys down
+from its master, and that copy is a plain overwrite — it has no idea whether
+anything was changed here. So a satellite **cannot edit any of them**, and the
+menus do not offer it: no new sequences, no new scenes, no capture, no
+renaming or forgetting a device, no palette edits, no Tuya keys. Make those
+changes on the master and they arrive here within the sync interval.
+
+Being refused is the kinder answer. Before v2.32.0 all of it appeared to work
+and was deleted a quarter of an hour later with nothing saying why.
+
+Everything you *run* is unaffected — a scene, a sequence, a light, a plug, a
+learned code, from the menu or a keymap or the web remote. That is what a
+satellite is for.
+
 ### One thing worth knowing
 
 The Tuya keys are copied too, so a sequence step naming a plug works from a
@@ -1274,7 +1290,7 @@ button that appears to do nothing is worse.
 ## Development
 
 ```
-python3 tests/test_paragon_home.py      # 682 tests
+python3 tests/test_paragon_home.py      # 695 tests
 python3 tests/check_py2.py              # Python 2.7 syntax gate
 python3 tests/validate_addon.py         # manifest and settings cross-check
 python3 tools/make_assets.py            # regenerate icon.png / fanart.png

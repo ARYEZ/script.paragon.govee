@@ -1635,17 +1635,20 @@ footer button { flex: 1 1 auto; }
      take whatever is left. Splitting the slack between both blocks instead
      opened a gap in the middle of the column, because a grid row will not
      grow past its cap however much room is going spare. */
-  #scenesBlock { flex: 0 0 auto; }
-  #sequencesBlock { flex: 1; }
-  /* Sized against the height of the panel rather than fixed: at 1080 the
-     scenes want to be generous, at 720 the same number would push the
-     sequences off the bottom of the screen entirely. The plain value first
-     is what a browser without clamp() falls back to. */
+  /* Both blocks take the height their contents want, and what is left over
+     collects at the bottom of the column. Handing the slack to one of them
+     instead only works while it is the lower of the two: a stretchy block on
+     top pushes the other one down the screen and opens a gap in the middle.
+
+     Both are sized against the height of the panel rather than fixed. At 1080
+     they want to be generous; at 720 the same sizes would push the scenes off
+     the bottom of the screen entirely. The plain value first is what a
+     browser without clamp() falls back to. */
+  #sequencesBlock, #scenesBlock { flex: 0 0 auto; }
+  #sequences button { height: 150px; }
+  #sequences button { height: clamp(96px, 15vh, 150px); }
   #scenes { grid-auto-rows: 150px; }
   #scenes { grid-auto-rows: clamp(86px, 13.5vh, 150px); }
-  #sequences { flex: 1; }
-  #sequences button { flex: 1; max-height: 150px; }
-  #sequences button { max-height: clamp(96px, 15vh, 150px); }
 }
 
 /* Read from across the room, and tapped standing up. */
@@ -1707,18 +1710,18 @@ footer button { flex: 1 1 auto; }
    <div class="deck">
 
     <div class="pane">
-    <section id="scenesBlock" hidden>
-      <div class="head">
-        <span class="nick"></span><h2>Scenes</h2><span class="rule"></span>
-      </div>
-      <div class="grid" id="scenes"></div>
-    </section>
-
     <section id="sequencesBlock" hidden>
       <div class="head">
         <span class="nick"></span><h2>Sequences</h2><span class="rule"></span>
       </div>
       <div class="stack" id="sequences"></div>
+    </section>
+
+    <section id="scenesBlock" hidden>
+      <div class="head">
+        <span class="nick"></span><h2>Scenes</h2><span class="rule"></span>
+      </div>
+      <div class="grid" id="scenes"></div>
     </section>
     </div>
 

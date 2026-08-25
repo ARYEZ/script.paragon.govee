@@ -999,12 +999,12 @@ that scroll inside themselves:
 ```
 PARAGON HOME                                    v2.27.0   SIGN OUT
 ------------------------------------------------------------------
- SCENES              ALL LIGHTS           GOVEE 5
- [ Movie Night ]     [ On ][ Off ][ Tog ]  [ Back Office Left Low ]
- [ Paused      ]     Brightness 60%        [ Lounge Strip         ]
- [ Lights Up   ]     colour swatches       TUYA 2
- SEQUENCES           warm / neutral / cool [ Desk Plug            ]
- [ Bedtime     ]     read / search         KASA 1
+ SEQUENCES           ALL LIGHTS           GOVEE 5
+ [ Bedtime     ]     [ On ][ Off ][ Tog ]  [ Back Office Left Low ]
+ [ Wake Up     ]     Brightness 60%        [ Lounge Strip         ]
+ SCENES              colour swatches       TUYA 2
+ [ Movie Night ]     warm / neutral / cool [ Desk Plug            ]
+ [ Paused      ]     read / search         KASA 1
 ```
 
 Three columns on a 1080p panel, two on a smaller or portrait one, one on a

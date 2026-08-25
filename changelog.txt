@@ -1,3 +1,10 @@
+v2.29.1
+- Sequences sit above scenes in the web remote now, rather than below them.
+- Both blocks take the height their contents want, and the leftover collects
+  at the bottom of the column. Handing the spare height to one of them only
+  worked while it was the lower of the two -- a stretchy block on top pushes
+  the other down the screen and opens a gap in the middle.
+
 v2.29.0
 - The web remote can run full screen, with no browser wrapped around it.
 - Two ways there. Add it to the tablet's home screen and it launches without

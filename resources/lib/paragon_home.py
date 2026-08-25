@@ -84,7 +84,9 @@ class ParagonHome(object):
         }
 
     def save_codes(self):
-        utils.write_json(self.CODE_FILE, self._codes or {})
+        if self._master_owns('learned commands'):
+            return False
+        return utils.write_json(self.CODE_FILE, self._codes or {})
 
     def known_ips(self):
         """Addresses of every device already known, whatever its brand.
@@ -164,15 +166,25 @@ class ParagonHome(object):
         return driver.test_connection(device)
 
     def start_learning(self, device):
+        if not self.owns_data:
+            from devices import ControlError
+
+            # The codes travel down from the master with everything else, so
+            # one learned here is overwritten at the next sync.
+            raise ControlError('Learn commands on the master, not here')
         return self._emitter(device).start_learning(device)
 
     def collect_learned(self, device):
         return self._emitter(device).collect_learned(device)
 
     def save_command(self, device, name, hex_code):
+        if self._master_owns('learned commands'):
+            return False
         return self._emitter(device).save_command(device, name, hex_code)
 
     def forget_command(self, device, name):
+        if self._master_owns('learned commands'):
+            return False
         return self._emitter(device).forget_command(device, name)
 
     @property
@@ -310,7 +322,18 @@ class ParagonHome(object):
         User choices that live only on our side -- the friendly name and the
         enabled flag -- are carried across so a refresh never silently undoes
         them.
+
+        A satellite does not do this. Discovery invents device entries, and
+        the master decides which devices this house has: a satellite that
+        found one for itself would be listing something the master had not
+        approved, until the next sync deleted it again. It copies the list
+        instead, addresses and all.
         """
+        if not self.owns_data:
+            utils.log('Satellite: discovery is the master\'s job')
+            return [], ['This box takes its devices from the master. '
+                        'Search on the master, or copy from it now.']
+
         found, warnings = self.controller.discover(
             timeout=self.discovery_timeout)
 
@@ -1062,8 +1085,17 @@ class ParagonHome(object):
             self._scenes = None
             self._sequences = None
             self._palette = None
-            self._codes = utils.read_json(self.CODE_FILE, default={}) or {}
-            self._tuya_keys = utils.read_json(self.KEY_FILE, default={}) or {}
+            # Emptied and refilled rather than replaced. The drivers were
+            # handed these very dicts when the hub was built, so rebinding
+            # the attribute leaves each driver holding the copy from before
+            # the sync -- a Tuya key that arrived in this pull would sit in
+            # the session unused until Kodi was restarted.
+            self._codes.clear()
+            self._codes.update(
+                utils.read_json(self.CODE_FILE, default={}) or {})
+            self._tuya_keys.clear()
+            self._tuya_keys.update(
+                utils.read_json(self.KEY_FILE, default={}) or {})
             self._stamp_sync(at)
         return copied, problems
 

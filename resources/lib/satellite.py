@@ -42,12 +42,19 @@ MASTER_PROFILE = ('/storage/.kodi/userdata/addon_data/%s' % utils.ADDON_ID)
 # its local key, so a sequence step naming one would fail on a satellite that
 # did not have it. It is a credential, and this copies it to every satellite
 # -- which is the same trust boundary as the passwordless SSH that fetched it.
+#
+# broadlink_codes.json is here for exactly that reason and was missed: a
+# sequence step that fires a learned infrared code fails just as flatly on a
+# satellite that never learned it, and a satellite cannot learn one for
+# itself. A satellite is a copy of the master, and half a copy is a sequence
+# that works in one room and not the next.
 SHARED_FILES = (
     'devices.json',
     'scenes.json',
     'sequences.json',
     'palette.json',
     'tuya_keys.json',
+    'broadlink_codes.json',
 )
 
 # What a satellite never copies: the master's reracks and its record of what
@@ -118,7 +125,8 @@ def pull(master_ip, run=None, write=None, wanted=None):
             # tuya_keys.json is absent on a house with no Tuya plugs, and
             # palette.json until the colours are first edited. Neither is a
             # problem worth showing.
-            if name in ('tuya_keys.json', 'palette.json'):
+            if name in ('tuya_keys.json', 'palette.json',
+                        'broadlink_codes.json'):
                 continue
             problems.append('%s could not be read' % name)
             continue

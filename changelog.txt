@@ -1,3 +1,24 @@
+v2.33.0
+- A satellite is a complete copy of the master now, not almost one.
+- Learned infrared codes travel down with everything else. They never did,
+  and they should have from the start: a sequence step that fires a code
+  failed flatly on a satellite that had never learned it, and a satellite
+  cannot learn one for itself. Half a copy is a sequence that works in one
+  room and not the next.
+- A satellite no longer searches for devices. Discovery invents entries, and
+  the master decides which devices the house has -- a satellite that found one
+  for itself would be listing something the master had not approved, until the
+  next copy deleted it again. The Refresh devices row is replaced by Copy from
+  the master now, and start-up discovery is skipped whatever the setting says.
+- Learning and deleting an infrared code are refused on a satellite, and the
+  blaster's menu offers neither. Firing one is untouched.
+- Fixed: a Tuya key arriving in a copy reached the session but not the driver
+  that needed it, so a plug whose key had just been copied down stayed
+  unusable until Kodi was restarted. The drivers are handed those dictionaries
+  when the hub is built, and the copy was replacing them rather than refilling
+  them. Learned codes would have had the same fault the moment they started
+  being copied.
+
 v2.32.0
 - A satellite can no longer edit anything the master owns. It never should
   have been able to: the devices, scenes, sequences, palette and Tuya keys are

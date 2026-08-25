@@ -7313,6 +7313,71 @@ class TestSatelliteMode(unittest.TestCase):
 
         self.assertTrue(app.save_devices())
 
+    def test_a_satellite_cannot_learn_or_delete_a_command(self):
+        """The codes come down with everything else, so it only fires them."""
+        app = self.app()
+        device = Device('EE:FF', name='Hall RM', driver='broadlink')
+        app._devices = [device]
+
+        self.assertFalse(app.save_command(device, 'TV Power', 'abcd'))
+        self.assertFalse(app.forget_command(device, 'TV Power'))
+        self.assertFalse(app.save_codes())
+
+        try:
+            app.start_learning(device)
+        except ControlError as exc:
+            self.assertIn('master', str(exc))
+        else:
+            self.fail('a satellite went into learning mode')
+
+    def test_learned_commands_travel_down_with_everything_else(self):
+        """A sequence step firing a code fails on a box that has not got it."""
+        app = self.app()
+
+        copied, _problems = app.sync_from_master(run=self.master(**{
+            'broadlink_codes.json': json.dumps(
+                {'EE:FF': {'TV Power': 'abcd'}})}))
+
+        self.assertIn('broadlink_codes.json', copied)
+        self.assertEqual(app._codes, {'EE:FF': {'TV Power': 'abcd'}})
+
+    def test_a_house_with_no_blaster_is_not_a_problem_to_report(self):
+        app = self.app()
+
+        copied, problems = app.sync_from_master(
+            run=self.master(**{'broadlink_codes.json': None}))
+
+        self.assertNotIn('broadlink_codes.json', copied)
+        self.assertEqual(problems, [])
+
+    def test_a_sync_reaches_the_drivers_and_not_just_the_session(self):
+        """The hub was handed these very dicts; rebinding orphans them."""
+        app = self.app()
+        codes, keys = app._codes, app._tuya_keys
+
+        app.sync_from_master(run=self.master(**{
+            'broadlink_codes.json': json.dumps({'EE:FF': {'TV': 'abcd'}}),
+            'tuya_keys.json': json.dumps({'wp9abc': '0123456789abcdef'})}))
+
+        # Still the same objects the drivers are holding, with the new
+        # contents in them.
+        self.assertIs(app._codes, codes)
+        self.assertIs(app._tuya_keys, keys)
+        self.assertEqual(codes, {'EE:FF': {'TV': 'abcd'}})
+        self.assertEqual(keys, {'wp9abc': '0123456789abcdef'})
+
+    def test_a_satellite_does_not_search_for_devices_of_its_own(self):
+        """Discovery invents entries; the master decides what the house has."""
+        app = self.app()
+        app._devices = [Device('AA:BB', name='Master Lamp', lan=True)]
+        app.controller = RecordingController()
+
+        found, warnings = app.refresh_devices()
+
+        self.assertEqual(found, [])
+        self.assertIn('master', warnings[0])
+        self.assertEqual(app.controller.calls, [])
+
     # -- and the master still can ------------------------------------------
 
     def test_the_master_can_do_all_of_it(self):
@@ -7328,6 +7393,7 @@ class TestSatelliteMode(unittest.TestCase):
         self.assertIsNotNone(app.save_color('Ember', (255, 90, 26)))
         self.assertTrue(app.rename_device(app.devices[0], 'My Lamp'))
         self.assertTrue(app.delete_sequence({'name': 'Ignition'}))
+        self.assertTrue(app.save_codes())
 
     # -- and the menus do not offer what cannot be done --------------------
 
@@ -7377,6 +7443,34 @@ class TestSatelliteMode(unittest.TestCase):
                           if row.startswith(('Rename', 'Forget', 'Disable',
                                              'Enable', 'Set local key'))],
                          'editing offered on a satellite: %s' % labels)
+
+    def test_the_menu_offers_a_copy_rather_than_a_search_on_a_satellite(self):
+        import gui
+
+        app = self.app()
+        app._devices = []
+        labels = menu_row(lambda: gui.ControlPanel(app).main_menu(),
+                          'Copy from the master')[1]
+
+        self.assertFalse([row for row in labels
+                          if row.startswith('Refresh devices')],
+                         'a satellite offered a device search: %s' % labels)
+
+    def test_the_command_menu_offers_no_learning_on_a_satellite(self):
+        import gui
+
+        app = self.app()
+        device = Device('EE:FF', name='Hall RM', driver='broadlink')
+        app._devices = [device]
+        recorder = RecordingController()
+        recorder.command_map = {'EE:FF': ['TV Power']}
+        app.controller = recorder
+        labels = menu_row(lambda: gui.ControlPanel(app).command_menu(device),
+                          'TV Power')[1]
+
+        self.assertIn('Test connection', labels)
+        self.assertFalse([row for row in labels if row.startswith('Learn')],
+                         'learning offered on a satellite: %s' % labels)
 
     def test_the_menu_offers_no_reracks_on_a_satellite(self):
         import gui

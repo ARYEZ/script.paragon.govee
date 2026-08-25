@@ -185,7 +185,11 @@ class ControlPanel(object):
         else:
             rows.append(('Reracks...', self.rerack_menu))
         rows.extend([
-            ('Refresh devices', self.refresh_devices),
+            # A satellite does not search: the master decides which devices
+            # the house has, and this is the row that gets them.
+            ('Refresh devices', self.refresh_devices)
+            if not self.app.satellite_mode
+            else ('Copy from the master now', self._sync_now),
             # Stays at the top level rather than inside a driver: the time you
             # need it is when a driver found nothing and so has no menu.
             ('Diagnose device search...', self.diagnose_menu),
@@ -2227,21 +2231,27 @@ class ControlPanel(object):
         while True:
             names = self.app.controller.commands(device)
             rows = list(names)
-            rows.append('Learn a new command...')
+            # A satellite copies the codes down from the master along with
+            # everything else, so it can fire them and nothing more.
+            owns = self.app.owns_data
+            if owns:
+                rows.append('Learn a new command...')
             rows.append('Test connection')
 
             choice = _select('%s - commands' % device.name, rows)
             if choice == BACK:
                 return
-            if choice == len(names):
-                self.learn_command(device)
-                continue
-            if choice == len(names) + 1:
-                self.test_device(device)
+            extra = choice - len(names)
+            if extra >= 0:
+                if owns and extra == 0:
+                    self.learn_command(device)
+                else:
+                    self.test_device(device)
                 continue
 
             name = names[choice]
-            action = _select(name, ['Send it now', 'Delete'])
+            action = _select(name, ['Send it now', 'Delete'] if owns
+                             else ['Send it now'])
             if action == 0:
                 try:
                     self.app.controller.send_command(device, name)

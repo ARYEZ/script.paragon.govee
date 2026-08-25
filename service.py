@@ -465,7 +465,11 @@ class GoveeService(xbmc.Monitor):
         except Exception as exc:
             utils.log('Web remote failed to start: %s' % exc, xbmc.LOGERROR)
 
-        if utils.get_bool('discover_on_startup', False):
+        # Not on a satellite, whatever the setting says: the master decides
+        # which devices the house has, and the copy above has just brought
+        # that list down. Searching here would only log a refusal.
+        if utils.get_bool('discover_on_startup', False) \
+                and self.app.owns_data:
             try:
                 devices, warnings = self.app.refresh_devices()
                 utils.log('Startup discovery found %d device(s)' % len(devices))

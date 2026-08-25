@@ -947,12 +947,17 @@ half a scene list is worse than yesterday's whole one.
 
 ### The master owns the setup
 
-A satellite copies the devices, scenes, sequences, palette and Tuya keys down
-from its master, and that copy is a plain overwrite — it has no idea whether
-anything was changed here. So a satellite **cannot edit any of them**, and the
-menus do not offer it: no new sequences, no new scenes, no capture, no
-renaming or forgetting a device, no palette edits, no Tuya keys. Make those
-changes on the master and they arrive here within the sync interval.
+A satellite copies the devices, scenes, sequences, palette, Tuya keys and
+learned infrared codes down from its master, and that copy is a plain
+overwrite — it has no idea whether anything was changed here. So a satellite
+**cannot edit any of them**, and the menus do not offer it: no new sequences,
+no new scenes, no capture, no renaming or forgetting a device, no palette
+edits, no Tuya keys, no learning an infrared code. Make those changes on the
+master and they arrive here within the sync interval.
+
+A satellite does not search for devices either. Discovery invents entries, and
+the master decides which devices the house has — so **Refresh devices** is
+replaced by **Copy from the master now**.
 
 Being refused is the kinder answer. Before v2.32.0 all of it appeared to work
 and was deleted a quarter of an hour later with nothing saying why.
@@ -1192,6 +1197,9 @@ LibreELEC   /storage/.kodi/userdata/addon_data/script.paragon.home/
 | `broadlink_codes.json` | learned infrared codes |
 | `tuya_keys.json` | Tuya local keys |
 | `remote.json` | the web remote's API token |
+
+A satellite copies everything above down from its master except
+`remote.json`, the rerack presets and the per-box run state.
 | `settings.xml` | the add-on's settings, including the Kasa account |
 | `cycle.json`, `*_state.json` | what is running and what has already run today |
 
@@ -1290,7 +1298,7 @@ button that appears to do nothing is worse.
 ## Development
 
 ```
-python3 tests/test_paragon_home.py      # 695 tests
+python3 tests/test_paragon_home.py      # 702 tests
 python3 tests/check_py2.py              # Python 2.7 syntax gate
 python3 tests/validate_addon.py         # manifest and settings cross-check
 python3 tools/make_assets.py            # regenerate icon.png / fanart.png

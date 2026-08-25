@@ -1,3 +1,11 @@
+v2.33.1
+- The remote's layout no longer depends on having enough devices to fill the
+  screen. An auto margin stops a flex item stretching, so on a wide screen the
+  page was sized to its contents rather than to the panel -- invisible in a
+  house with thirty lights, and a narrow ribbon down the middle of the screen
+  in one with three. Found while building the same page for Paragon TV, which
+  has less on it.
+
 v2.33.0
 - A satellite is a complete copy of the master now, not almost one.
 - Learned infrared codes travel down with everything else. They never did,

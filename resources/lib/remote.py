@@ -1350,6 +1350,13 @@ h2 { font-size: 14px; margin: 0; color: var(--text); letter-spacing: 2px; }
    width it actually has and each column scrolls on its own, so the panel on
    the wall never moves under the finger that is reaching for it. */
 .wrap {
+  /* width before max-width, and both before the auto margins. On a wide
+     screen this sits inside a flex column, and an auto margin stops a flex
+     item stretching -- so without the explicit width it shrinks to fit its
+     contents. It has never shown here because a houseful of devices makes
+     wide enough content to fill the screen anyway; a house with three would
+     have found the page stranded in a ribbon down the middle. */
+  width: 100%;
   max-width: 680px;
   margin: 0 auto;
   padding: 14px 16px calc(30px + env(safe-area-inset-bottom));

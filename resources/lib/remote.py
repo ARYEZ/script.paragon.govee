@@ -1134,7 +1134,27 @@ PAGE = """<!DOCTYPE html>
   --text: #f2f2f4;
   --muted: #8b8b93;
   --dim: #5f5f68;
+  /* Secondary text sitting on the ember band. --dim is fine against the page
+     but only reaches 2.5:1 against the warm part of a card, which is under
+     the 3:1 floor for text you are meant to be able to read -- and the
+     schedule under a sequence name is exactly what gets read from across a
+     room. */
+  --sub: #a2938f;
   --hot: linear-gradient(100deg, #ff6a1f 0%, #e0202a 100%);
+  /* The wash every panel carries: dark in the top-left corner, warming
+     through an ember band around two thirds across, cooling again at the far
+     edge. A flat diagonal rather than a glow, because a radial bloom is sized
+     against the element it sits in -- so the small device cards looked right
+     and the tall ones turned into a brown smear.
+
+     Opaque stops rather than a tint over a base colour: a translucent orange
+     over near-black grey desaturates into mud, where naming the colours
+     outright keeps the ember an ember. */
+  --wash: linear-gradient(118deg,
+      #16141a 0%, #1d1519 32%, #3f1b1a 66%, #2c1619 85%, #17131b 100%);
+  /* The same light in the colour a lit device answers in. */
+  --wash-lit: linear-gradient(118deg,
+      #121a1c 0%, #12231f 32%, #133429 66%, #12261f 85%, #11191b 100%);
   --display: 'Paragon', 'Saira Condensed', 'Oswald', 'Roboto Condensed',
              'Arial Narrow', sans-serif;
   --body: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -1320,7 +1340,8 @@ section { margin-top: 26px; }
 
 .card {
   position: relative;
-  background: var(--card);
+  background-color: var(--card);
+  background-image: var(--wash);
   border: 1px solid var(--line);
   border-radius: 3px;
   padding: 14px;
@@ -1336,7 +1357,9 @@ section { margin-top: 26px; }
 }
 .card.plain::before { display: none; }
 /* A device that reports itself on wears the teal edge rather than the orange
-   one, so the colour carries the state instead of just being decoration. */
+   one, so the colour carries the state instead of just being decoration --
+   and the wash inside it turns with the edge. */
+.card.lit { background-image: var(--wash-lit); }
 .card.lit::before {
   background: linear-gradient(100deg, #2dd8b8 0%, #17a08c 100%);
 }
@@ -1386,9 +1409,11 @@ button.tile {
   position: relative;
   text-align: left;
   padding: 15px 14px 14px;
-  background: var(--card);
+  background-color: var(--card);
+  background-image: var(--wash);
   overflow: hidden;
 }
+button.tile:active { background-color: #1d1d22; }
 button.tile::before {
   content: '';
   position: absolute;
@@ -1402,7 +1427,7 @@ button.tile .sub {
   font-size: 10px;
   font-weight: 500;
   letter-spacing: 1.3px;
-  color: var(--dim);
+  color: var(--sub);
   margin-top: 5px;
 }
 

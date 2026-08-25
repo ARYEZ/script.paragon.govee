@@ -981,9 +981,13 @@ for a month.
 ### How it looks
 
 Like the rest of Paragon TV: near-black, the orange-to-red accent, the diagonal
-slashes in the margins, and the same condensed uppercase type. A light that
-reports itself on wears a teal edge rather than an orange one, so the colour is
-doing work rather than decorating.
+slashes in the margins, and the same condensed uppercase type. Every panel
+carries a gradient across it -- dark in one corner, warming through an ember
+band about two thirds across, cooling again at the far edge.
+
+A light that reports itself on takes both the edge and the gradient in teal
+instead, so the colour is doing work rather than decorating: you can tell what
+is lit from across the room without reading a word.
 
 ### On a tablet
 

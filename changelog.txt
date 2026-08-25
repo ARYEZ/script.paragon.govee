@@ -1,3 +1,14 @@
+v2.28.0
+- Every panel in the web remote now carries a gradient, the way the Govee
+  desktop app's cards do -- dark in one corner, warming through an ember band
+  about two thirds across, cooling again at the far edge. In our colours
+  rather than their cyan.
+- A device reporting itself on takes the same gradient in teal, so the state
+  still reads at a glance from across a room.
+- The schedule line under a sequence name was grey on grey and only reached
+  2.5:1 against the warm part of a card, under the 3:1 floor for text meant to
+  be read. It is a warm off-white now, at 5.1:1.
+
 v2.27.0
 - The web remote is laid out for a tablet now rather than a phone. A 16:9
   panel is wide and short, so the height is the scarce thing: the page no

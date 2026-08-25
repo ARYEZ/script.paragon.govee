@@ -1,0 +1,13 @@
+# Git decides whether a file is text by looking for a NUL byte near the start
+# of it, and a guess is a poor thing to hang a Windows checkout on: autocrlf
+# applied to a binary wrongly called text rewrites every 0x0A inside it. The
+# result is a font the browser quietly refuses and an icon Kodi will not draw,
+# with nothing anywhere saying why -- and it happens on the checkout, so the
+# repository still looks perfectly fine.
+*.woff2 binary
+*.woff  binary
+*.ttf   binary
+*.otf   binary
+*.png   binary
+*.jpg   binary
+*.zip   binary

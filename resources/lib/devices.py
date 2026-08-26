@@ -58,7 +58,7 @@ class Device(object):
     def __init__(self, device_id, name='', model='', ip='', lan=False,
                  cloud=False, supports=None, temp_range=None, enabled=True,
                  driver=DEFAULT_DRIVER, devtype=None, native_id=None,
-                 driver_data=None):
+                 driver_data=None, power_only=False):
         # device_id is upper-cased so matching is case-insensitive, which is
         # what a Govee or Broadlink MAC wants. Tuya ids are lower-case strings
         # that go on the wire verbatim, and upper-casing one would produce an
@@ -74,6 +74,14 @@ class Device(object):
         self.supports = list(supports or [])
         self.temp_range = temp_range or [DEFAULT_TEMP_MIN, DEFAULT_TEMP_MAX]
         self.enabled = bool(enabled)
+        # Switched by this add-on, but never coloured or dimmed by it: a
+        # strip that is driven by something else, or one whose colour is set
+        # once by hand and meant to stay put. The device still answers to
+        # power and still reports its state; it simply stops being a light as
+        # far as everything that decides how the room looks is concerned, and
+        # so is passed over by scenes exactly as a plug is. See
+        # Hub.capabilities, which is where this is actually enforced.
+        self.power_only = bool(power_only)
         # Vendor type code, when the driver needs one on the wire. Broadlink
         # puts it in every packet header, so it has to survive a restart --
         # guessing it would build packets the device ignores.
@@ -125,6 +133,7 @@ class Device(object):
             'supports': self.supports,
             'temp_range': self.temp_range,
             'enabled': self.enabled,
+            'power_only': self.power_only,
             'devtype': self.devtype,
             'native_id': self.native_id,
             'driver_data': self.driver_data,
@@ -143,6 +152,7 @@ class Device(object):
             supports=data.get('supports'),
             temp_range=data.get('temp_range'),
             enabled=data.get('enabled', True),
+            power_only=data.get('power_only', False),
             devtype=data.get('devtype'),
             native_id=data.get('native_id'),
             driver_data=data.get('driver_data'),

@@ -41,11 +41,13 @@ import xbmcaddon  # noqa: E402
 import xbmcgui  # noqa: E402
 
 import devices as devices_mod  # noqa: E402
+import hub as hub_mod  # noqa: E402
 import govee_cloud  # noqa: E402
 import govee_lan  # noqa: E402
 import scenes as scene_lib  # noqa: E402
-from devices import (CAP_COMMANDS, ControlError, Device,  # noqa: E402
-                     GoveeController)
+from devices import (CAP_BRIGHTNESS, CAP_COLOR,  # noqa: E402
+                     CAP_COLOR_TEMP, CAP_COMMANDS, CAP_POWER, CAP_STATE,
+                     ControlError, Device, GoveeController)
 
 PROFILE = xbmcaddon._PROFILE
 
@@ -268,12 +270,15 @@ class RecordingController(object):
         brightness, which is one of the things this stub exists to watch.
         """
         if self.caps is not None:
-            return set(self.caps)
+            return hub_mod.narrow(self.caps, device)
         if (getattr(device, 'driver', None) or '') == 'broadlink':
             # What the blaster driver really answers: commands and nothing
             # else, whether or not any have been learned yet.
             return set([CAP_COMMANDS])
-        return GoveeController.capabilities(device)
+        # Through the Hub's own narrowing, not around it. A double that says
+        # a device can be coloured where the Hub says it cannot would hide
+        # exactly the kind of bug it is here to catch.
+        return hub_mod.narrow(GoveeController.capabilities(device), device)
 
     def commands(self, device):
         return list(self.command_map.get(device.device_id, []))
@@ -6006,6 +6011,169 @@ class TestDriverSeam(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # Device model and transport selection
 # ---------------------------------------------------------------------------
+
+class TestPowerOnlyDevices(unittest.TestCase):
+    """A light this add-on switches but never styles.
+
+    The case: a strip whose colour is set by something else, or set once by
+    hand and meant to stay. It should answer to every on and off the house
+    does, and no scene should ever repaint it.
+    """
+
+    def setUp(self):
+        clean_profile()
+        xbmcaddon.reset()
+        xbmcgui.reset()
+        for name in ('addon_utils', 'paragon_home', 'sequences', 'gui'):
+            if name in sys.modules:
+                del sys.modules[name]
+
+    def tearDown(self):
+        clean_profile()
+
+    def hub(self):
+        import hub as hub_mod
+
+        return hub_mod.Hub(drivers=[GoveeController()])
+
+    def app(self, satellite=False):
+        from paragon_home import ParagonHome
+
+        xbmcaddon.SETTINGS['satellite_mode'] = 'true' if satellite else 'false'
+        xbmcaddon.SETTINGS['master_ip'] = '10.0.0.99' if satellite else ''
+        app = ParagonHome()
+        app.controller = RecordingController()
+        return app
+
+    def strip(self, power_only=True):
+        return Device('AA:BB', name='Kitchen Lightstrip', lan=True,
+                      power_only=power_only)
+
+    def test_it_is_narrowed_to_switching_and_reporting(self):
+        hub = self.hub()
+
+        self.assertEqual(sorted(hub.capabilities(self.strip())),
+                         [CAP_POWER, CAP_STATE])
+        self.assertEqual(
+            sorted(hub.capabilities(self.strip(power_only=False))),
+            [CAP_BRIGHTNESS, CAP_COLOR, CAP_COLOR_TEMP, CAP_POWER, CAP_STATE])
+
+    def test_a_scene_does_not_count_it_as_a_light(self):
+        """Which is what keeps scenes off it: scene_targets only ever
+        collects lights, so this falls out of every scene at once rather than
+        needing to be excluded from each."""
+        hub = self.hub()
+
+        self.assertFalse(scene_lib.is_a_light(self.strip(), hub))
+        self.assertTrue(scene_lib.is_a_light(self.strip(power_only=False),
+                                             hub))
+
+    def test_a_colour_scene_passes_over_it(self):
+        hub = self.hub()
+        strip = self.strip()
+        bulb = Device('CC:DD', name='Lamp', lan=True)
+        scene = scene_lib.make_scene('Sunset', power=scene_lib.POWER_ON,
+                                     color=[255, 100, 0], brightness=40)
+
+        targets = scene_lib.scene_targets(scene, [strip, bulb], hub)
+
+        self.assertEqual([d.name for d in targets], ['Lamp'])
+
+    def test_an_all_off_scene_passes_over_it_too(self):
+        """A scene is a statement about how the room looks. Switching this one
+        is the job of the all-lights control, a sequence or the remote -- the
+        same division a plug already lives under."""
+        hub = self.hub()
+        strip = self.strip()
+        scene = scene_lib.make_scene('All Off', power=scene_lib.POWER_OFF)
+
+        self.assertEqual(scene_lib.scene_targets(scene, [strip], hub), [])
+
+    def test_switching_it_still_works(self):
+        """The whole point. It comes out of scenes, not out of the house."""
+        sent = []
+        lights = RecordingController()
+        lights.DRIVER_ID = 'govee'
+        lights.turn = lambda device, on: sent.append((device.name, on))
+        import hub as hub_mod
+        hub = hub_mod.Hub(drivers=[lights])
+
+        hub.turn(self.strip(), True)
+
+        self.assertEqual(sent, [('Kitchen Lightstrip', True)])
+
+    def test_a_bulk_colour_command_skips_it_rather_than_failing(self):
+        """"Make all the lights red" does not consult capabilities -- it sends
+        the same instruction to everything enabled. Skipping quietly is right:
+        a colour command that passes over this strip has done what was asked,
+        not gone wrong."""
+        sent = []
+        lights = RecordingController()
+        lights.DRIVER_ID = 'govee'
+        lights.set_color = lambda device, r, g, b: sent.append(device.name)
+        lights.set_brightness = lambda device, percent: sent.append(device.name)
+        lights.set_color_temp = lambda device, kelvin: sent.append(device.name)
+        import hub as hub_mod
+        hub = hub_mod.Hub(drivers=[lights])
+        strip = self.strip()
+
+        hub.set_color(strip, 255, 0, 0)
+        hub.set_brightness(strip, 50)
+        hub.set_color_temp(strip, 4000)
+
+        self.assertEqual(sent, [])
+
+        hub.set_color(self.strip(power_only=False), 255, 0, 0)
+        self.assertEqual(sent, ['Kitchen Lightstrip'])
+
+    def test_the_choice_survives_a_refresh(self):
+        """Discovery rebuilds the device from what came back off the wire, so
+        anything chosen on this side has to be carried across or a refresh
+        silently undoes it -- as it would have for the name and the enabled
+        flag."""
+        app = self.app()
+        strip = Device('AA:BB', name='Kitchen Lightstrip', lan=True,
+                       ip='10.0.0.9')
+        app._devices = [strip]
+        app.set_device_power_only(strip, True)
+        app.controller.discover = lambda timeout=3.0: (
+            [Device('AA:BB', name='H6159 (AABB)', model='H6159', lan=True,
+                    ip='10.0.0.9')], [])
+
+        found, _warnings = app.refresh_devices()
+
+        self.assertTrue(found[0].power_only)
+        self.assertEqual(found[0].name, 'Kitchen Lightstrip')
+
+    def test_it_is_written_down(self):
+        app = self.app()
+        strip = Device('AA:BB', name='Kitchen Lightstrip', lan=True)
+        app._devices = [strip]
+
+        self.assertTrue(app.set_device_power_only(strip, True))
+
+        import addon_utils
+
+        saved = addon_utils.read_json(devices_mod.DEVICE_CACHE, default=[])
+        self.assertTrue(saved[0]['power_only'])
+
+    def test_a_satellite_cannot_change_it(self):
+        """It is a choice about the setup, and the master owns those."""
+        app = self.app(satellite=True)
+        app._devices = [Device('AA:BB', name='Kitchen Lightstrip', lan=True)]
+
+        self.assertFalse(app.set_device_power_only(app.devices[0], True))
+        self.assertFalse(app.devices[0].power_only)
+
+    def test_it_round_trips_through_json(self):
+        strip = self.strip()
+        restored = Device.from_dict(json.loads(json.dumps(strip.to_dict())))
+        self.assertTrue(restored.power_only)
+
+    def test_an_older_cache_reads_as_an_ordinary_light(self):
+        """Every device written before this existed has no such key."""
+        self.assertFalse(Device.from_dict({'device_id': 'AA:BB'}).power_only)
+
 
 class TestDeviceModel(unittest.TestCase):
 

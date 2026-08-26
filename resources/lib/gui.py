@@ -1445,6 +1445,14 @@ class ControlPanel(object):
                 ('Disable' if device.enabled else 'Enable',
                  lambda: self._toggle_enabled(device)),
             ])
+            if CAP_POWER in capabilities or device.power_only:
+                # Only offered for something that switches, and shown for a
+                # device already set this way so it can be set back -- the
+                # narrowing hides the very capabilities that put the row here.
+                rows.append(
+                    ('Let scenes control this light' if device.power_only
+                     else 'Switch only (no colour or brightness)',
+                     lambda: self._toggle_power_only(device)))
 
         if emitter:
             # An IR blaster has no light to flash and nothing to identify by,
@@ -1489,6 +1497,16 @@ class ControlPanel(object):
         if choice == BACK:
             return
         rows[choice][1]()
+
+    def _toggle_power_only(self, device):
+        wanted = not device.power_only
+        if not self.app.set_device_power_only(device, wanted):
+            return
+        if wanted:
+            utils.notify('%s is switched only; scenes will pass over it'
+                         % device.name)
+        else:
+            utils.notify('%s is a light again' % device.name)
 
     def _rename_device(self, device):
         name = _dialog().input('Device name', device.name)

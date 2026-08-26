@@ -29,7 +29,27 @@ for something with no colour -- a plug, an IR blaster -- implements the verbs
 it has and reports the rest as absent.
 """
 
-from devices import CAP_COMMANDS, ControlError, DEFAULT_DRIVER
+from devices import (CAP_COMMANDS, CAP_POWER, CAP_STATE, ControlError,
+                     DEFAULT_DRIVER)
+
+# What a power-only device is allowed to be asked for. Switching, and saying
+# what it is doing -- everything about how it looks is somebody else's job.
+POWER_ONLY_CAPABILITIES = frozenset([CAP_POWER, CAP_STATE])
+
+
+def narrow(capabilities, device):
+    """A driver's answer, cut down by what the user has said about `device`.
+
+    A function rather than a method so that anything standing in for the Hub
+    -- the test double, most of all -- narrows by calling this instead of by
+    reimplementing it. A stand-in that says a device can be coloured when the
+    Hub says it cannot is a stub that hides the bug it was put there to
+    catch.
+    """
+    caps = set(capabilities or [])
+    if getattr(device, 'power_only', False):
+        return caps & POWER_ONLY_CAPABILITIES
+    return caps
 
 
 class Hub(object):
@@ -94,10 +114,20 @@ class Hub(object):
     # -- capabilities ------------------------------------------------------
 
     def capabilities(self, device):
+        """What this device can be asked to do.
+
+        A device marked power-only is narrowed here to switching and
+        reporting, whatever its driver says it is capable of. This is the one
+        place it needs doing: every decision in the add-on about what a device
+        is for goes through this answer -- which controls the menus offer,
+        whether a scene counts it as a light, whether the web remote draws a
+        colour picker for it. Enforcing it here rather than at each of those
+        means a path added later inherits it instead of having to remember it.
+        """
         driver = self.driver_for(device)
         if driver is None:
             return set()
-        return driver.capabilities(device)
+        return narrow(driver.capabilities(device), device)
 
     def commands(self, device):
         driver = self.driver_for(device)
@@ -131,13 +161,33 @@ class Hub(object):
         return self._require(device).turn(device, on)
 
     def set_brightness(self, device, percent):
+        if self._look_only(device):
+            return None
         return self._require(device).set_brightness(device, percent)
 
     def set_color(self, device, red, green, blue):
+        if self._look_only(device):
+            return None
         return self._require(device).set_color(device, red, green, blue)
 
     def set_color_temp(self, device, kelvin):
+        if self._look_only(device):
+            return None
         return self._require(device).set_color_temp(device, kelvin)
+
+    @staticmethod
+    def _look_only(device):
+        """Whether this verb is one a power-only device does not accept.
+
+        Nothing that reads capabilities first will ever reach here, and that
+        is most of the add-on. What does reach here is the handful of bulk
+        verbs that send the same instruction to every enabled device without
+        asking -- "make all the lights red" from a remote button, say. Those
+        should pass over this device rather than fail on it, so this returns
+        quietly instead of raising: a colour command that skips one strip has
+        not gone wrong, it has done what was asked.
+        """
+        return bool(getattr(device, 'power_only', False))
 
     def get_state(self, device):
         driver = self.driver_for(device)

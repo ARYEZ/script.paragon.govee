@@ -132,6 +132,19 @@ temperature. **Manage devices** lets you rename a light, exclude one from
 "All Lights", or flash it to work out which physical unit it is
 (ten flashes, cancellable, and the light is put back as it was).
 
+#### Switch a light without styling it
+
+**Manage devices → the light → Switch only (no colour or brightness)** for a
+strip that something else drives, or one you have set by hand and want left
+alone. It still goes on and off with everything else in the house; nothing in
+this add-on will ever colour it or dim it again.
+
+What it does is stop the light being a light as far as scenes are concerned —
+the same footing a plug is already on, which is why every scene passes over it
+at once rather than each one having to be told. "Make all the lights red"
+skips it too. The menu row turns into **Let scenes control this light** to put
+it back.
+
 ### Naming your lights
 
 LAN discovery has no names to work with, so lights start out as `H6008 (1E3E)`

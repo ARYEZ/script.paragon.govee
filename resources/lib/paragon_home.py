@@ -262,6 +262,22 @@ class ParagonHome(object):
         self.save_devices()
         return True
 
+    def set_device_power_only(self, device, power_only):
+        """Switch this device only, never colour or dim it. Returns True if
+        the change stuck.
+
+        For a light this add-on should be able to turn on and off but has no
+        business styling -- one driven by something else, or one set by hand
+        and meant to stay as it was set. It stops being a light as far as
+        scenes are concerned, exactly as a plug already is, while remaining
+        part of every on and off the house does.
+        """
+        if self._master_owns('how a device is controlled'):
+            return False
+        device.power_only = bool(power_only)
+        self.save_devices()
+        return True
+
     def forget_device(self, device):
         """Remove a light from the cache for good."""
         if self._master_owns('the device list'):
@@ -319,9 +335,9 @@ class ParagonHome(object):
     def refresh_devices(self):
         """Re-discover and merge into the cache. Returns (devices, warnings).
 
-        User choices that live only on our side -- the friendly name and the
-        enabled flag -- are carried across so a refresh never silently undoes
-        them.
+        User choices that live only on our side -- the friendly name, the
+        enabled flag, whether this one is switched but never styled -- are
+        carried across so a refresh never silently undoes them.
 
         A satellite does not do this. Discovery invents device entries, and
         the master decides which devices this house has: a satellite that
@@ -346,6 +362,7 @@ class ParagonHome(object):
             if old is None:
                 continue
             device.enabled = old.enabled
+            device.power_only = old.power_only
             # Only keep a hand-set name; a placeholder should be replaced by
             # whatever this discovery turned up.
             if old.name and not old.name.startswith(old.model + ' ('):

@@ -1,3 +1,18 @@
+2.34.0 (Aryez - 2025)
+    Added: a light can be marked "Switch only (no colour or brightness)" in
+        Manage devices. This add-on will still turn it on and off with
+        everything else in the house, and will never colour it or dim it --
+        for a strip that something else drives, or one set by hand and meant
+        to stay as it was set.
+    It stops being a light as far as scenes are concerned, exactly as a plug
+        already is, so every scene passes over it at once rather than each
+        one needing to be told. A bulk "make all the lights red" skips it
+        quietly rather than failing on it.
+    The choice is carried across a device refresh, the way the name and the
+        enabled flag already were, so re-discovering the house does not
+        silently undo it. On a satellite it is the master's to make, like
+        every other choice about the setup.
+
 v2.33.1
 - The remote's layout no longer depends on having enough devices to fill the
   screen. An auto margin stops a flex item stretching, so on a wide screen the

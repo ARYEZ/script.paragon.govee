@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.join(HERE, 'kodistubs'))
 sys.path.insert(0, os.path.join(ROOT, 'resources', 'lib'))
 sys.path.insert(0, ROOT)
 
+import xbmc  # noqa: E402
 import xbmcaddon  # noqa: E402
 import xbmcgui  # noqa: E402
 
@@ -6023,6 +6024,186 @@ def touch_later(app, filename):
     path = addon_utils.profile_file(filename)
     stamp = os.stat(path)
     os.utime(path, (stamp.st_mtime + 5, stamp.st_mtime + 5))
+
+
+class TestTheTelevisionHalf(unittest.TestCase):
+    """Paragon TV, driven from the remote that lives here.
+
+    The whole of it used to live inside Paragon TV. It reads that add-on from
+    the outside now -- its properties on Kodi's home window, its settings2.xml
+    and the file its Overlay writes -- so the two can be worked on apart.
+    """
+
+    def setUp(self):
+        clean_profile()
+        xbmcaddon.reset()
+        xbmcgui.reset()
+        xbmc.reset_rpc()
+        for name in ('addon_utils', 'paragon_home', 'sequences', 'gui',
+                     'tv', 'remote'):
+            if name in sys.modules:
+                del sys.modules[name]
+        self.tvprofile = os.path.join(tempfile.gettempdir(), 'ptv-under-test')
+        if os.path.isdir(self.tvprofile):
+            shutil.rmtree(self.tvprofile)
+
+    def tearDown(self):
+        clean_profile()
+        if os.path.isdir(self.tvprofile):
+            shutil.rmtree(self.tvprofile)
+
+    def install_tv(self, channels=((1, 3, 'Action'),)):
+        os.makedirs(self.tvprofile)
+        lines = ['<settings>']
+        for number, kind, name in channels:
+            lines.append('<setting id="Channel_%d_type" value="%d" />'
+                         % (number, kind))
+            lines.append('<setting id="Channel_%d_1" value="%s" />'
+                         % (number, name))
+        lines.append('</settings>')
+        handle = open(os.path.join(self.tvprofile, 'settings2.xml'), 'w')
+        try:
+            handle.write('\n'.join(lines))
+        finally:
+            handle.close()
+        xbmcaddon.install('script.paragontv', {},
+                          profile=self.tvprofile,
+                          path='/home/user/script.paragontv')
+        import tv
+
+        return tv
+
+    # -- a box with no television ------------------------------------------
+
+    def test_a_box_without_paragon_tv_simply_has_no_television_half(self):
+        """A house with lights and no television is a perfectly good house.
+
+        Kodi raises for an add-on that is not installed, and that is the
+        answer rather than an error.
+        """
+        import tv
+
+        self.assertFalse(tv.installed())
+        self.assertEqual(tv.snapshot(), {'ready': False, 'installed': False})
+        self.assertEqual(tv.profile_dir(), '')
+        self.assertEqual(tv.channels(), [])
+
+    def test_a_television_action_on_a_box_without_one_says_so(self):
+        import remote as remote_lib
+
+        answer = remote_lib._perform_tv('press', {'button': 'up'})
+
+        self.assertFalse(answer['ok'])
+        self.assertIn('not installed', answer['message'])
+        self.assertEqual(xbmc.rpc_calls, [])
+
+    # -- a box with one ----------------------------------------------------
+
+    def test_it_reads_the_channels_out_of_paragon_tvs_own_settings(self):
+        """Read exactly as Paragon TV reads them, and never written."""
+        tv = self.install_tv(((1, 3, 'Action'), (2, 4, 'Horror')))
+
+        self.assertEqual([c['name'] for c in tv.channels()],
+                         ['Action TV', 'Horror Movies'])
+
+    def test_it_reads_the_channel_from_the_window_property(self):
+        """Which is the one thing Paragon TV publishes for this."""
+        tv = self.install_tv()
+        xbmcgui.Window(tv.HOME_WINDOW).setProperty(tv.PROP_CHANNEL, '4')
+
+        self.assertEqual(tv.current_channel(), 4)
+
+    def test_a_key_press_reaches_kodi(self):
+        tv = self.install_tv()
+
+        ok, _message = tv.press('up')
+
+        self.assertTrue(ok)
+        self.assertEqual([c['method'] for c in xbmc.rpc_calls], ['Input.Up'])
+
+    def test_the_logos_come_from_paragon_tvs_folder_not_ours(self):
+        """This used to walk up from __file__, which found the logos because
+        the code was inside that add-on. From here that would find Paragon
+        Home's resources folder, which has no channel logos in it.
+        """
+        tv = self.install_tv()
+
+        folder = tv.logo_dir().replace(os.sep, '/')
+
+        self.assertIn('script.paragontv', folder)
+        self.assertNotIn('script.paragon.home', folder)
+
+    def test_the_utility_scripts_come_from_paragon_tvs_folder_too(self):
+        tv = self.install_tv()
+        xbmcgui.Window(tv.HOME_WINDOW).setProperty(tv.PROP_CHANNEL, '')
+
+        ok, _message = tv.run_task('bumpers')
+
+        self.assertTrue(ok)
+        self.assertEqual(len(xbmc.BUILTINS), 1)
+        self.assertIn('script.paragontv', xbmc.BUILTINS[0])
+        self.assertIn('nfo_renamer_bumpers.py', xbmc.BUILTINS[0])
+
+    def test_what_is_on_every_channel_comes_from_the_file_the_overlay_writes(self):
+        """The one piece that cannot move.
+
+        Only Paragon TV's Overlay can work out what is playing on a channel
+        nobody is watching -- it holds the playlists and the reference points.
+        So it writes that down and this reads it.
+        """
+        tv = self.install_tv()
+        handle = open(os.path.join(self.tvprofile, tv.SNAPSHOT_FILE), 'w')
+        try:
+            handle.write(json.dumps({
+                'at': int(time.time()),
+                'channels': [{'number': 1, 'title': 'Mad Max',
+                              'episode': '', 'elapsed': 60,
+                              'duration': 1800, 'paused': False}]}))
+        finally:
+            handle.close()
+
+        on_now = tv.read_now_on()
+
+        self.assertEqual(on_now[1]['title'], 'Mad Max')
+
+    def test_the_snapshot_carries_the_television_under_its_own_key(self):
+        """Its own key, because it is its own add-on and a box may not have
+        it."""
+        import remote as remote_lib
+        from paragon_home import ParagonHome
+
+        self.install_tv()
+        app = ParagonHome()
+        app.controller = RecordingController()
+
+        state = remote_lib.snapshot(app)
+
+        self.assertIn('tv', state)
+        self.assertTrue(state['tv']['installed'])
+        # And the lights are still where they were.
+        self.assertIn('scenes', state)
+        self.assertIn('devices', state)
+
+    def test_the_television_actions_are_named_apart_from_the_lights(self):
+        """So neither half can be reached by the other's name, and the server
+        can tell at a glance which thread an action belongs on."""
+        import remote as remote_lib
+
+        for action in remote_lib.TV_ACTIONS:
+            self.assertTrue(action.startswith('tv.'), action)
+        for action in remote_lib.IMMEDIATE + remote_lib.BACKGROUND:
+            self.assertFalse(action.startswith('tv.'), action)
+
+    def test_the_keys_that_are_pressed_in_runs_skip_the_queue(self):
+        """Measured at 950ms on the loop's queue against 2ms straight
+        through. A direction key that answers a second later is a key that
+        gets pressed twice."""
+        import remote as remote_lib
+
+        for action in ('tv.press', 'tv.seek', 'tv.text', 'tv.channelup'):
+            self.assertIn(action, remote_lib.TV_DIRECT)
+        # Building a window is the loop's job.
+        self.assertIn('tv.launch', remote_lib.TV_QUEUED)
 
 
 class TestNoticingOutsideChanges(unittest.TestCase):

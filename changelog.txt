@@ -1,3 +1,16 @@
+2.35.0 (Aryez - 2025)
+    Added: the web remote has a television half. The page now has two tabs --
+        Home for the lights, scenes and sequences, TV for Paragon TV -- and
+        the TV tab is simply not there on a box without Paragon TV installed.
+    The television half is the whole of the remote that was built inside
+        Paragon TV: what is on, the artwork, the channel list with its logos,
+        the direction cross and playback keys, the scrubber, typing into a box
+        on screen, and the maintenance jobs. One address now, and one PIN.
+    It reads Paragon TV from the outside -- its properties on Kodi's home
+        window, its own settings2.xml, and the file its Overlay writes -- the
+        way this add-on already read its Rerack schedule. Nothing of Paragon
+        TV's is written.
+
 2.34.1 (Aryez - 2025)
     Fixed: a sequence or scene edited in the add-on's own menus did not reach
         the web remote until Kodi was restarted. Kodi gives a script its own

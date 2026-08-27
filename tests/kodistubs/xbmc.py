@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Minimal xbmc stub, enough to import and drive the add-on off-device."""
 
+import json
 import os
 import tempfile
 
@@ -25,6 +26,50 @@ def translatePath(path):
     if path.startswith('special://profile'):
         return _PROFILE
     return path
+
+
+# Every JSON-RPC request the code under test made, newest last, as dicts.
+rpc_calls = []
+
+# What executeJSONRPC answers with, by method name. A test sets what Kodi
+# would say; anything not named here comes back as a bare success, which is
+# what the Input.* methods really answer with.
+rpc_results = {}
+
+# Methods that should come back as an error, by name -- for testing what the
+# remote does when Kodi refuses.
+rpc_errors = {}
+
+
+def executeJSONRPC(request):
+    """Kodi's JSON-RPC, in process.
+
+    The real one is synchronous and returns a JSON string, which is what makes
+    it usable from the service loop without a socket in sight.
+    """
+    try:
+        payload = json.loads(request)
+    except (ValueError, TypeError):
+        return json.dumps({'jsonrpc': '2.0', 'id': None,
+                           'error': {'code': -32700, 'message': 'Parse error'}})
+
+    rpc_calls.append(payload)
+    method = payload.get('method')
+
+    if method in rpc_errors:
+        return json.dumps({'jsonrpc': '2.0', 'id': payload.get('id'),
+                           'error': rpc_errors[method]})
+
+    result = rpc_results.get(method, 'OK')
+    return json.dumps({'jsonrpc': '2.0', 'id': payload.get('id'),
+                       'result': result})
+
+
+def reset_rpc():
+    del rpc_calls[:]
+    del BUILTINS[:]
+    rpc_results.clear()
+    rpc_errors.clear()
 
 
 def getCondVisibility(condition):
@@ -95,6 +140,37 @@ class Player(object):
     def isPlayingAudio(self):
         return self.playing_audio
 
+    playing_file = ''
+    playing_title = ''
+    elapsed = 0.0
+    total = 0.0
+
+    def getPlayingFile(self):
+        if not self.isPlaying():
+            raise RuntimeError('Kodi is not playing any file')
+        return self.playing_file
+
+    def getVideoInfoTag(self):
+        if not self.isPlaying():
+            raise RuntimeError('Kodi is not playing any file')
+        return _InfoTag(self.playing_title)
+
+    def getTime(self):
+        if not self.isPlaying():
+            raise RuntimeError('Kodi is not playing any file')
+        return self.elapsed
+
+    def getTotalTime(self):
+        if not self.isPlaying():
+            raise RuntimeError('Kodi is not playing any file')
+        return self.total
+
+
+
+# Every builtin the code under test asked Kodi to run, newest last.
+BUILTINS = []
+
 
 def executebuiltin(command):
+    BUILTINS.append(command)
     LOG_LINES.append((LOGDEBUG, 'builtin: %s' % command))

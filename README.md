@@ -1308,6 +1308,21 @@ button that appears to do nothing is worse.
 
 ---
 
+## The television
+
+If Paragon TV is installed on the same box, the remote grows a **TV** tab:
+what is on, the artwork, the channel list, a full direction pad and playback
+keys, a draggable progress bar, a box for typing into a search field on the
+television, and the maintenance jobs from its utility menu.
+
+It reads Paragon TV from the outside and writes none of its files. One thing
+cannot be read from out here -- what is playing on a channel nobody is
+watching, which only Paragon TV's own Overlay can work out. It writes that
+down every few seconds and this reads the file; that hook is all Paragon TV
+carries for the remote's sake.
+
+No Paragon TV on the box means no TV tab. Nothing is disabled; it is absent.
+
 ## Development
 
 ```

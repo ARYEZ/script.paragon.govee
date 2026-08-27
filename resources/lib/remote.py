@@ -42,10 +42,12 @@ import threading
 import time
 
 import xbmc
+import xbmcvfs
 
 import addon_utils as utils
 import scenes as scene_lib
 import sequences as sequence_lib
+import tv
 from compat import (BaseHTTPRequestHandler, HTTPServer, ThreadingMixIn,
                     same_secret, to_bytes, to_text)
 from devices import (CAP_BRIGHTNESS, CAP_COLOR, CAP_COLOR_TEMP, CAP_COMMANDS,
@@ -111,7 +113,24 @@ IMMEDIATE = ('on', 'off', 'toggle', 'brightness', 'color', 'temp', 'scene',
 # own timeout, so a master that is off can take longer than a handler is
 # willing to wait. Discovery is the same shape.
 BACKGROUND = ('sequence', 'refresh', 'sync')
-ACTIONS = IMMEDIATE + BACKGROUND
+
+# The television half. Every one of these hands its work to Kodi and returns
+# -- executeJSONRPC is the call Kodi's own web server makes from its own
+# request threads, and executebuiltin queues onto the application thread by
+# definition -- so they touch nothing of this session and run on the
+# request's own thread rather than waiting for the loop's next turn.
+#
+# That is not a nicety. The loop turns once a second, and a direction key
+# that answers a second later is a key that gets pressed twice; measured at
+# 950ms on the queue against 2ms here.
+TV_DIRECT = ('tv.press', 'tv.channel', 'tv.channelup', 'tv.channeldown',
+             'tv.seek', 'tv.text')
+# Starting the television builds a window and is pressed once; a maintenance
+# job runs for minutes. Neither is worth taking off the loop.
+TV_QUEUED = ('tv.launch', 'tv.task')
+TV_ACTIONS = TV_DIRECT + TV_QUEUED
+
+ACTIONS = IMMEDIATE + BACKGROUND + TV_ACTIONS
 
 # Everything the page loads from disk, as a table of whole routes rather than
 # a directory to look in. The path is never built from what the URL asked for:
@@ -429,6 +448,42 @@ class Commands(object):
 # Doing the work
 # ---------------------------------------------------------------------------
 
+def _perform_tv(what, params):
+    """Run one television action. Returns the same shape as everything else.
+
+    Kept apart from the lights entirely: this half talks to Paragon TV
+    through Kodi and never touches the session, which is what lets most of it
+    run on the request's own thread.
+    """
+    if not tv.installed():
+        return {'ok': False, 'message': 'Paragon TV is not installed'}
+
+    if what == 'launch':
+        ok, message = tv.start_paragon_tv()
+    elif what == 'channel':
+        ok, message = tv.tune(params.get('number') or params.get('value'))
+    elif what == 'channelup':
+        if tv.current_channel() is None:
+            return {'ok': False, 'message': 'Paragon TV is not running'}
+        ok, message = tv.channel_up()
+    elif what == 'channeldown':
+        if tv.current_channel() is None:
+            return {'ok': False, 'message': 'Paragon TV is not running'}
+        ok, message = tv.channel_down()
+    elif what == 'press':
+        ok, message = tv.press(to_text(params.get('button') or ''))
+    elif what == 'seek':
+        ok, message = tv.seek(params.get('percent'))
+    elif what == 'text':
+        ok, message = tv.send_text(to_text(params.get('text') or ''),
+                                   params.get('done', True))
+    elif what == 'task':
+        ok, message = tv.run_task(to_text(params.get('name') or ''))
+    else:
+        return {'ok': False, 'message': 'Unknown television action'}
+    return {'ok': ok, 'message': message}
+
+
 def perform(app, action, params, sleep_func=None, on_step=None):
     """Run one action against the live session. Returns a result dict.
 
@@ -438,6 +493,9 @@ def perform(app, action, params, sleep_func=None, on_step=None):
     indistinguishable from a light that is simply out of reach.
     """
     params = params or {}
+
+    if action.startswith('tv.'):
+        return _perform_tv(action[3:], params)
 
     def outcome(result, message):
         done, errors = result
@@ -633,6 +691,9 @@ def snapshot(app, states=None, allow_sequences=True):
         'palette': [{'name': entry.get('name', ''),
                      'hex': _hex(entry.get('color'))}
                     for entry in app.palette],
+        # The television half. Its own key, because it is its own add-on and
+        # this box may well not have it.
+        'tv': tv.snapshot(),
     }
 
 
@@ -733,6 +794,72 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(status, json.dumps(payload),
                    'application/json; charset=utf-8', extra)
 
+    def _send_tv_art(self):
+        """The artwork for whatever Paragon TV is playing.
+
+        Takes no argument, deliberately: the page cannot name a file. It
+        serves whatever the television currently says is on, and the ?k= the
+        page hangs on the address is ignored -- it is there so a new show
+        fetches a new picture rather than the browser reusing the old one.
+        """
+        path = tv.now_art()
+        if not path:
+            return self._send_json(404, {'ok': False, 'message': 'No artwork'})
+        content_type = tv.ART_TYPES.get(os.path.splitext(path)[1].lower())
+        if content_type is None:
+            return self._send_json(404, {'ok': False, 'message': 'No artwork'})
+        return self._send_picture(path, content_type, tv.ART_MAX_BYTES)
+
+    def _send_tv_logo(self):
+        """A channel's logo, named by channel number.
+
+        The caller says which channel, not which file. The number is looked
+        up in Paragon TV's configured channels and the name that comes back
+        is turned into a path here, so the set of files this can ever serve
+        is the set of logos belonging to channels that exist.
+        """
+        query = self.path.split('?', 1)[1] if '?' in self.path else ''
+        number = 0
+        for pair in query.split('&'):
+            key, _, value = pair.partition('=')
+            if key == 'c':
+                try:
+                    number = int(value)
+                except ValueError:
+                    number = 0
+                break
+
+        name = ''
+        for entry in tv.channels():
+            if entry['number'] == number:
+                name = entry['name']
+                break
+        path = tv.channel_logo(name) if name else ''
+        if not path:
+            return self._send_json(404, {'ok': False, 'message': 'No logo'})
+        return self._send_picture(path, 'image/png', tv.LOGO_MAX_BYTES)
+
+    def _send_picture(self, path, content_type, limit):
+        """Hand over one picture, through Kodi's filesystem.
+
+        Through the VFS rather than open(): Paragon TV's paths may name a
+        file on a share, and Python cannot open smb://.
+        """
+        try:
+            handle = xbmcvfs.File(path)
+            try:
+                reader = getattr(handle, 'readBytes', None) or handle.read
+                data = bytes(bytearray(reader(limit + 1)))
+            finally:
+                handle.close()
+        except Exception as exc:
+            utils.log('Web remote: cannot read %s: %s'
+                      % (path, exc))
+            return self._send_json(404, {'ok': False, 'message': 'Not there'})
+        if not data or len(data) > limit:
+            return self._send_json(404, {'ok': False, 'message': 'Not there'})
+        return self._send(200, data, content_type, cache=STATIC_CACHE)
+
     def _send_static(self, route):
         """Serve one of the files the page loads. Whole-route match only."""
         parts, content_type = STATIC_FILES[route]
@@ -805,9 +932,16 @@ class _Handler(BaseHTTPRequestHandler):
             return True
         return origin.split('//')[-1] == self._header('Host').strip()
 
-    def _allowed(self, needs_session=True):
-        """Gatekeeping for every /api route. Answers the caller if refused."""
-        if not self._custom_header():
+    def _allowed(self, needs_session=True, needs_header=True):
+        """Gatekeeping for the routes behind the PIN. Answers if refused.
+
+        `needs_header` is off for things a browser fetches on the page's
+        behalf rather than through its own code -- a picture, in practice. A
+        background image or an img cannot carry a custom header, so demanding
+        one there refuses the page's own request. The header guards requests
+        that change something; fetching a still does not.
+        """
+        if needs_header and not self._custom_header():
             self._send_json(403, {'ok': False,
                                   'message': 'Missing %s' % GUARD_HEADER})
             return False
@@ -854,6 +988,17 @@ class _Handler(BaseHTTPRequestHandler):
             return self._send_static(path)
         if path == '/manifest.webmanifest':
             return self._send_manifest()
+        if path in ('/tv/art', '/tv/logo'):
+            # Signed in, but no custom header: a browser fetching a picture
+            # for the page cannot carry one.
+            if not self._allowed(needs_header=False):
+                return None
+            if not tv.installed():
+                return self._send_json(404, {'ok': False,
+                                             'message': 'No Paragon TV'})
+            if path == '/tv/art':
+                return self._send_tv_art()
+            return self._send_tv_logo()
         if path == '/api/state':
             if not self._allowed():
                 return None
@@ -926,6 +1071,16 @@ class _Handler(BaseHTTPRequestHandler):
             return self._send_json(403, {
                 'ok': False,
                 'message': 'Sequences are switched off for the remote'})
+
+        if action in TV_DIRECT:
+            # Straight through -- see TV_DIRECT for why this is safe, and for
+            # what the queue was costing.
+            try:
+                answer = _perform_tv(action[3:], payload)
+            except Exception as exc:
+                log('Web remote: %s failed: %s' % (action, exc), xbmc.LOGERROR)
+                answer = {'ok': False, 'message': str(exc)}
+            return self._send_json(200, answer)
 
         job = remote.commands.submit(action, payload)
         if job is None:
@@ -1190,6 +1345,17 @@ PAGE = """<!DOCTYPE html>
   --orange: #ff5b1a;
   --orange-lit: #ff7f36;
   --red: #e01b24;
+  /* The channel you are watching, in the colours Paragon TV's own selection
+     wears. Sampled straight out of its ptvButtonFocus.png, which runs crimson
+     pink at the left through red to orange at the right, and lifted a little
+     because that texture is shown at full brightness on a television and
+     these sit on a dark page. Used only by the television half. */
+  --live-1: #ec0844;
+  --live-2: #e0362c;
+  --live-3: #ff6f1e;
+  --live: linear-gradient(100deg,
+      var(--live-1) 0%, var(--live-2) 45%, var(--live-3) 100%);
+  --live-ink: #ff5c86;
   --teal: #2dd8b8;
   --text: #f2f2f4;
   --muted: #8b8b93;
@@ -1744,6 +1910,373 @@ footer button { flex: 1 1 auto; }
 @media (min-width: 560px) {
   .grid { grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); }
 }
+
+/* -- the two halves ------------------------------------------------------ */
+
+/* Tabs rather than one long page: the lights and the television each want a
+   screenful, and stacked they would mean scrolling past one to reach the
+   other on the very panel that is meant to answer at a glance. */
+.tabs { display: flex; gap: 6px; margin-left: 18px; }
+.tabs button {
+  font-family: var(--display);
+  text-transform: uppercase;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 1.6px;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 6px 12px;
+  min-height: 0;
+  cursor: pointer;
+}
+.tabs button.on { color: var(--text); border-bottom-color: var(--orange); }
+
+/* -- where the two halves differ ---------------------------------------- */
+
+/* `lit` means two things on this page, and they are not the same thing.
+   On the lights it means a device reports itself on, and it wears the teal
+   the rest of that half uses. On the television it means the channel you are
+   watching, and it wears the ember Paragon TV draws behind its own
+   selection. Scoped to the panel rather than renamed, because within each
+   half the word is right.
+
+   Everything below is taken from Paragon TV's own remote unchanged, and only
+   narrowed to #tvPanel. */
+#tvPanel .card.lit { background-image: var(--hot); }
+#tvPanel .card.lit::before { display: none; }
+
+/* Everything on that card sits on a bright ground, so the ink inverts.
+   Measured rather than assumed: white on the orange end of this gradient is
+   2.9:1, under the floor even for large text, while this near-black is 7.2:1
+   there and still 4.9:1 at the red end. */
+#tvPanel .card.lit,
+#tvPanel .card.lit .num,
+#tvPanel .card.lit .who .name,
+#tvPanel .card.lit .who .sub { color: #1c0a04; }
+
+/* A logo is a picture and cannot be re-inked, and most of these wordmarks
+   are white. The light behind them that makes a dark mark readable on a dark
+   card becomes a shadow here, doing the same job the other way up. */
+#tvPanel .card.lit .logo {
+  filter: drop-shadow(0 1px 1px rgba(28, 10, 4, .65))
+          drop-shadow(0 0 4px rgba(28, 10, 4, .45));
+}
+
+/* Two columns, not the lights' three: what is on wants width, because its
+   height follows it. */
+@media (min-width: 860px) {
+  #tvPanel .deck { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+
+/* -- what is on ---------------------------------------------------------- */
+
+/* The size you can read from a sofa, in the selection colours the television
+   itself uses. Big enough that the gradient across it actually reads as one,
+   which is the whole reason the number rather than the label carries it. */
+.onair { text-align: center; padding: 24px 16px; }
+
+/* The show's own artwork, behind the card rather than above it: a landscape
+   still is decoration, and the channel number is the thing being read. Held
+   down by a wash so white text stays white text over whatever the picture
+   happens to be -- some of it is bright. */
+.onair { position: relative; overflow: hidden; }
+.onair .art {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  opacity: .62;
+  z-index: 0;
+}
+.onair .art::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  /* Weighted to the bottom, where the writing is, rather than spread evenly.
+     An even wash has to be dark everywhere to survive the brightest still,
+     which costs the picture exactly what showing it was for. This leaves the
+     top of the frame nearly clear and puts the darkness under the text.
+
+     It is measured against a daylight still, not a moody one: the same text
+     over a sunlit lawn came out at 1.0:1 -- not hard to read, invisible. */
+  background: linear-gradient(180deg, rgba(10,10,11,.12) 0%,
+                              rgba(10,10,11,.38) 42%,
+                              rgba(10,10,11,.80) 74%,
+                              rgba(10,10,11,.93) 100%);
+}
+/* And the writing carries its own edge, because no scrim can be told what is
+   behind it. The number has its own drop-shadow already -- and needs one
+   rather than a text-shadow, see below. */
+.onair.hasart .name, .onair.hasart .show {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .95), 0 2px 10px rgba(0, 0, 0, .8);
+}
+.onair.hasart .show { color: #ddd2ce; }
+.onair > *:not(.art) { position: relative; z-index: 1; }
+/* A card with a picture behind it needs its own floor: the wash on .card is
+   built for text, not for a still. */
+.onair.hasart { background-image: none; background-color: #0d0c0e; }
+
+/* Once there is room for it, the card takes the shape of the thing inside it.
+   The artwork covers the card, and the card was as tall as its four lines of
+   text -- about three and a half to one -- so a sixteen by nine still had a
+   third of its height cut away, top and bottom. Give the card the still's own
+   shape and the crop has nothing left to remove.
+
+   Only where there is width to spend. On a phone the card is the full width
+   of the screen and sixteen by nine would push everything below it off the
+   bottom; that layout is right as it is. And only when there is a picture --
+   an empty card held open to sixteen by nine is a hole. */
+@media (min-width: 860px) {
+  .onair.hasart {
+    aspect-ratio: 16 / 9;
+    display: flex;
+    flex-direction: column;
+    /* Sat at the foot of the frame, not across the middle of it. A still is
+       usually composed around its centre -- that is where the faces are --
+       and it is also where a scrim does the most damage. Both problems go
+       away by moving the writing down to the edge. */
+    justify-content: flex-end;
+  }
+}
+.onair .num {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 82px;
+  line-height: .9;
+  color: var(--live-3);
+  letter-spacing: 1px;
+  /* Lifted off the artwork behind it. Three passes: a tight dark edge so the
+     numeral has an outline against a busy still, and two softer ones for the
+     drop.
+
+     drop-shadow rather than text-shadow, and that is not a preference. A
+     text shadow is painted above the element's background and below the
+     text -- and with background-clip on the text, the gradient *is* that
+     background, so the shadow lands on top of it and dulls the colour inside
+     the numeral. drop-shadow works on what the element actually rendered, so
+     the gradient stays as bright as it was. Rendered both to be sure. */
+  /* Two tight passes rather than one: drop-shadow has no spread, so a
+     thicker outline is made by stacking. The number sits over the brightest
+     part of a channel tile -- these are posters, and they are meant to be
+     loud -- where it measured 2:1 against the picture behind it. */
+  filter: drop-shadow(0 0 3px rgba(0, 0, 0, .95))
+          drop-shadow(0 1px 2px rgba(0, 0, 0, .95))
+          drop-shadow(0 4px 8px rgba(0, 0, 0, .85))
+          drop-shadow(0 10px 22px rgba(0, 0, 0, .6));
+}
+/* The gradient painted through the numeral itself. Guarded, and with a flat
+   colour set above it, so a browser without background-clip on text shows an
+   orange number rather than an invisible one.
+
+   inline-block matters: a gradient is painted across the element's box, and
+   this number's box was the full width of the card. One digit in the middle
+   of seven hundred pixels samples a slice barely wider than the glyph, so it
+   came out flat. Shrunk to the digit, the gradient spans the digit. */
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .onair .num {
+    display: inline-block;
+    background-image: var(--live);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+}
+.onair .name {
+  font-family: var(--display);
+  text-transform: uppercase;
+  font-weight: 700;
+  font-size: 19px;
+  letter-spacing: 1.6px;
+  margin-top: 10px;
+}
+.onair .show { color: var(--sub); font-size: 14px; margin-top: 10px; }
+.onair.off .num { color: var(--dim); font-size: 40px; letter-spacing: 3px; }
+.onair.off .name { color: var(--muted); }
+/* The bar is also the scrubber, so it needs to be something a thumb can hit.
+   The bar itself stays four pixels; the padding around it is the target, and
+   `content-box` keeps that padding from being drawn as bar. */
+.progress {
+  height: 4px; border-radius: 2px; background: var(--line);
+  margin-top: 18px;
+  position: relative;
+  padding: 14px 0;
+  background-clip: content-box;
+  box-sizing: content-box;
+  cursor: pointer;
+  /* Or a drag along the bar scrolls the page instead of scrubbing. */
+  touch-action: none;
+}
+.progress > span {
+  display: block; height: 4px; background: var(--hot);
+  border-radius: 2px;
+}
+/* The handle. Only while there is something to scrub. */
+.progress .grip {
+  position: absolute;
+  top: 50%;
+  width: 14px; height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  background: var(--text);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .7);
+  pointer-events: none;
+}
+.progress.scrubbing .grip { transform: scale(1.35); }
+.progress.scrubbing > span { background: var(--live); }
+
+/* -- the remote ---------------------------------------------------------- */
+
+.pad { padding: 12px 12px 8px; }
+.pad > * + * { margin-top: 7px; }
+
+/* The cross. Named areas rather than nth-child sums, so the shape is legible
+   here and a key can be moved without renumbering the ones after it. */
+.dpad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-areas:
+    '.    up    .'
+    'left ok    right'
+    '.    down  .';
+  gap: 8px;
+  max-width: 330px;
+  margin: 0 auto;
+}
+.dpad .up { grid-area: up; }
+.dpad .left { grid-area: left; }
+.dpad .ok { grid-area: ok; }
+.dpad .right { grid-area: right; }
+.dpad .down { grid-area: down; }
+
+.keys { display: grid; gap: 8px; }
+.keys.two { grid-template-columns: repeat(2, 1fr); }
+.keys.three { grid-template-columns: repeat(3, 1fr); }
+.keys.four { grid-template-columns: repeat(4, 1fr); }
+.keys.six { grid-template-columns: repeat(6, 1fr); }
+/* The field takes the room; Send takes what it needs. */
+.typeRow { display: flex; gap: 8px; }
+.typeRow input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--body);
+  font-size: 16px;
+  padding: 0 12px;
+  min-height: 46px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line-lit);
+  border-radius: 3px;
+}
+.typeRow input:focus {
+  outline: none;
+  border-color: var(--orange);
+}
+.typeRow button { flex: 0 0 auto; padding-left: 22px; padding-right: 22px; }
+
+/* Whole words rather than glyphs, so they get room to be read -- but three
+   across, because nine of them in twos is five rows and the panel only has
+   room for three. */
+.keys.jobs { grid-template-columns: repeat(3, 1fr); }
+.keys.jobs button.key { font-size: 12px; min-height: 44px; }
+/* The one that takes the box away with it. Not shouting -- just not the same
+   as the six beside it. */
+.keys.jobs button.key.grave { border-color: rgba(224, 27, 36, .55); }
+
+/* Sized for a thumb on a wall panel, not a mouse -- and no larger, because
+   the whole remote has to sit under the artwork without either of them being
+   pushed off the bottom of a 1080-high panel. */
+button.key {
+  min-height: 46px;
+  padding: 8px 5px;
+  font-size: 12px;
+  letter-spacing: .8px;
+}
+.dpad button.key { min-height: 54px; font-size: 17px; }
+.dpad .ok { font-size: 15px; }
+/* Pressed state matters more here than anywhere else on the page: these are
+   the buttons someone taps twenty times in a row, and without an answer they
+   tap again thinking it missed. */
+button.key:active { background: var(--card-2); border-color: var(--orange); }
+.hint {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.4;
+  letter-spacing: .6px;
+  color: var(--dim);
+  text-align: center;
+}
+button.key.lit { border-color: var(--orange); color: var(--orange); }
+
+/* -- the channel list ---------------------------------------------------- */
+
+/* A channel: the number leading, what is on it beside, and the one that is
+   on wearing the selection colours Paragon TV uses for the same thing. */
+button.chan {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px; width: 100%; text-align: left;
+  letter-spacing: normal; min-height: 0;
+}
+/* Centred rather than on the baseline: a logo's baseline is its bottom edge,
+   so baselines put the number level with the foot of the logo on the rows
+   that have one and level with the name on the rows that do not. */
+.chan { display: flex; align-items: center; gap: 12px; padding: 12px 14px; }
+.chan .num {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 22px;
+  color: var(--orange);
+  min-width: 42px;
+  letter-spacing: .5px;
+}
+/* No colour of its own: on the ember card the number is white like the rest
+   of that row, and it is the card that says which channel is on. */
+.chan .who { min-width: 0; }
+.chan .who .name {
+  font-family: var(--display);
+  text-transform: uppercase;
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 1.1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chan .who .sub {
+  font-family: var(--display);
+  text-transform: uppercase;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.3px;
+  color: var(--sub);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chan .who { flex: 1; }
+
+/* The channel's own logo where its name would be, the way the EPG shows it.
+   These are wordmarks on transparent with a good deal of empty space around
+   them, so the box is taller than the text it ends up drawing. Left-aligned
+   on its own line so a wide wordmark and a narrow one still start in the
+   same place as the names of the channels that have no logo at all. */
+.chan .logo {
+  display: block;
+  height: 34px;
+  width: auto;
+  max-width: 100%;
+  object-fit: contain;
+  object-position: left center;
+  /* Most of these wordmarks are white, but a few are nearly black -- Paragon
+     TV shows them on its own dark grid and they are hard to read there too.
+     A faint light behind the mark rescues those without touching the white
+     ones, which have nothing darker than themselves to stand out against. */
+  filter: drop-shadow(0 0 1px rgba(255, 255, 255, .5))
+          drop-shadow(0 0 4px rgba(255, 255, 255, .22));
+}
 </style>
 </head>
 <body>
@@ -1767,6 +2300,10 @@ footer button { flex: 1 1 auto; }
         <span class="slashes"></span>
         <h1 class="wordmark">Paragon <span class="b">Home</span></h1>
       </div>
+      <div class="tabs" id="tabs" hidden>
+        <button data-tab="home" class="on">Home</button>
+        <button data-tab="tv">TV</button>
+      </div>
       <p class="status" id="status"></p>
       <div class="barside">
         <span class="tag" id="version"></span>
@@ -1778,6 +2315,7 @@ footer button { flex: 1 1 auto; }
   </div>
 
   <div class="wrap">
+   <div id="homePanel">
    <div class="deck">
 
     <div class="pane">
@@ -1831,6 +2369,135 @@ footer button { flex: 1 1 auto; }
 
     <div class="pane" id="devices"></div>
 
+   </div>
+   </div>
+
+   <!-- The television, on its own tab. Only there when Paragon TV is
+        installed on this box; a house with lights and no television never
+        sees it. -->
+   <div id="tvPanel" hidden>
+   <div class="deck">
+    <div class="pane">
+    <!-- Only while the television has a box open waiting to be typed into.
+         There is nowhere for the text to go otherwise. -->
+    <section id="tv_typing" hidden>
+      <div class="head">
+        <span class="nick"></span><h2>Type on the TV</h2>
+        <span class="rule"></span>
+        <span class="tag" id="tv_typingKind"></span>
+      </div>
+      <div class="card pad">
+        <form class="typeRow" id="tv_typeForm">
+          <input id="tv_typeField" type="text" autocomplete="off"
+                 autocapitalize="off" autocorrect="off" spellcheck="false"
+                 placeholder="Type here, then Send">
+          <button class="key hot" id="tv_typeSend" type="submit">Send</button>
+        </form>
+      </div>
+    </section>
+
+    <section>
+      <div class="head">
+        <span class="nick"></span><h2>On now</h2><span class="rule"></span>
+      </div>
+      <div class="card onair" id="tv_onair">
+        <div class="art" id="tv_onairArt" hidden></div>
+        <div class="num" id="tv_onairNum">--</div>
+        <div class="name" id="tv_onairName">Checking</div>
+        <div class="show" id="tv_onairShow"></div>
+        <div class="progress" id="tv_onairBar" hidden><span></span><i class="grip"></i></div>
+      </div>
+      <div id="tv_launchRow" hidden style="margin-top:10px">
+        <button class="hot wide" id="tv_launch">Start Paragon TV</button>
+      </div>
+      <div class="row" id="tv_tuneRow" hidden style="margin-top:10px">
+        <button id="tv_chanDown">Channel down</button>
+        <button id="tv_chanUp">Channel up</button>
+      </div>
+    </section>
+
+    <section id="tv_controls">
+      <div class="head">
+        <span class="nick"></span><h2>Remote</h2>
+        <span class="rule"></span>
+        <span class="tag" id="tv_volNow"></span>
+      </div>
+
+      <div class="card pad">
+        <!-- The cross, laid out as it sits under a thumb rather than in
+             source order: the middle row is left, OK, right. -->
+        <div class="dpad">
+          <button class="key up" data-press="up" aria-label="Up">&#9650;</button>
+          <button class="key left" data-press="left" aria-label="Left">&#9664;</button>
+          <button class="key ok" data-press="select">OK</button>
+          <button class="key right" data-press="right" aria-label="Right">&#9654;</button>
+          <button class="key down" data-press="down" aria-label="Down">&#9660;</button>
+        </div>
+
+        <div class="keys six">
+          <button class="key" data-press="back">Back</button>
+          <button class="key" data-press="home">Home</button>
+          <button class="key" data-press="info">Info</button>
+          <button class="key" data-press="context">Menu</button>
+          <button class="key" data-press="osd">OSD</button>
+          <button class="key" data-press="codec">Stats</button>
+        </div>
+
+        <div class="keys six">
+          <button class="key" data-press="previous" aria-label="Previous">&#9198;</button>
+          <button class="key" data-press="rewind" aria-label="Rewind">&#9194;</button>
+          <button class="key hot" data-press="playpause" id="tv_playKey"
+                  aria-label="Play or pause">&#9654;&#65038;</button>
+          <button class="key" data-press="stop" aria-label="Stop">&#9632;</button>
+          <button class="key" data-press="forward" aria-label="Fast forward">&#9193;</button>
+          <button class="key" data-press="next" aria-label="Next">&#9197;</button>
+        </div>
+
+        <div class="keys three">
+          <button class="key" data-press="mute" id="tv_muteKey">Mute</button>
+          <button class="key" data-press="volumedown" aria-label="Volume down">&minus;</button>
+          <button class="key" data-press="volumeup" aria-label="Volume up">+</button>
+        </div>
+
+        <!-- Said out loud, because a keyboard that works and says nothing is
+             a keyboard nobody tries. -->
+        <p class="hint">Keyboard: arrows, Enter, Backspace &middot; space
+          plays &middot; PgUp/PgDn changes channel &middot; H I C O T &middot;
+          M and &plusmn;</p>
+
+      </div>
+    </section>
+
+    <!-- Only with the television off. These rewrite the files the channels
+         are built from and re-read the library underneath them, which is not
+         something to do to a channel that is playing. -->
+    <section id="tv_jobs" hidden>
+      <div class="head">
+        <span class="nick"></span><h2>Maintenance</h2>
+        <span class="rule"></span>
+        <span class="tag">TV OFF ONLY</span>
+      </div>
+      <div class="card pad">
+        <div class="keys jobs" id="tv_jobList"></div>
+        <p class="hint">These run on the Kodi box and take a few minutes.
+          Watch the television for what they are doing.</p>
+      </div>
+    </section>
+    </div>
+
+    <div class="pane">
+    <section>
+      <div class="head">
+        <span class="nick"></span><h2>Channels</h2>
+        <span class="count" id="tv_channelCount"></span>
+        <span class="rule"></span>
+      </div>
+      <div class="stack" id="tv_channels"></div>
+      <p class="label" id="tv_noChannels" hidden
+         style="margin-top:12px">No channels configured yet</p>
+    </section>
+    </div>
+   </div>
    </div>
   </div>
 </div>
@@ -2216,6 +2883,554 @@ function renderDevices() {
   document.getElementById('allBlock').hidden = !(state.devices || []).length;
 }
 
+/* ------------------------------------------------------------------ *
+ * The television.
+ *
+ * Lifted out of Paragon TV's own remote, which is where all of this was
+ * written. It reads state.tv rather than the top of the state, its actions
+ * carry a tv. prefix so the server can tell the two halves apart, and its
+ * elements are prefixed so nothing collides with the lights -- and is
+ * otherwise the same code, doing the same thing.
+ * ------------------------------------------------------------------ */
+
+function tvState() {
+  return state.tv || {};
+}
+
+var armed = null;
+
+
+var scrubAt = null;
+var scrubHold = null;
+
+
+var pressSettle = null;
+
+
+var lastKeyAt = 0;
+
+
+var CHANNEL_KEYS = {PageUp: 'channelup', PageDown: 'channeldown'};
+
+
+var KEYMAP = {
+  ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
+  Enter: 'select',
+  Backspace: 'back',
+  h: 'home', i: 'info', c: 'context', o: 'osd', t: 'codec',
+  ' ': 'playpause', k: 'playpause',
+  s: 'stop', x: 'stop',
+  n: 'next', p: 'previous',
+  f: 'forward', r: 'rewind',
+  m: 'mute', '+': 'volumeup', '=': 'volumeup',
+  '-': 'volumedown', _: 'volumedown'
+};
+
+/* Channel keys are the television's own, so they are not in KEYMAP -- they
+   are actions rather than buttons. */
+var CHANNEL_KEYS = {PageUp: 'channelup', PageDown: 'channeldown'};
+
+
+/* -- drawing -------------------------------------------------------------- */
+
+function clock(seconds) {
+  seconds = Math.max(0, Math.floor(seconds || 0));
+  var mins = Math.floor(seconds / 60);
+  var secs = seconds % 60;
+  if (mins < 60) { return mins + ':' + (secs < 10 ? '0' : '') + secs; }
+  var hours = Math.floor(mins / 60);
+  mins = mins % 60;
+  return hours + ':' + (mins < 10 ? '0' : '') + mins;
+}
+
+function renderArt() {
+  var art = document.getElementById('tv_onairArt');
+  var card = document.getElementById('tv_onair');
+  var key = tvState().running && tvState().art ? (tvState().art_key || '1') : '';
+
+  if (!key) {
+    art.hidden = true;
+    art.style.backgroundImage = '';
+    art.dataset.key = '';
+    card.classList.remove('hasart');
+    return;
+  }
+  // Only when it has actually changed. The page asks for news every few
+  // seconds and a still does not need fetching every few seconds.
+  if (art.dataset.key !== key) {
+    art.dataset.key = key;
+    // Double quotes inside, so nothing needs escaping: this string is
+    // inside a Python literal, and a backslash here would be eaten before
+    // the browser ever saw it.
+    art.style.backgroundImage =
+      'url("/tv/art?k=' + encodeURIComponent(key) + '")';
+  }
+  art.hidden = false;
+  card.classList.add('hasart');
+}
+
+function renderOnAir() {
+  var card = document.getElementById('tv_onair');
+  var num = document.getElementById('tv_onairNum');
+  var name = document.getElementById('tv_onairName');
+  var show = document.getElementById('tv_onairShow');
+  var bar = document.getElementById('tv_onairBar');
+
+  renderArt();
+
+  if (!tvState().running) {
+    card.className = 'card onair off';
+    num.textContent = 'OFF';
+    name.textContent = 'Paragon TV is not running';
+    show.textContent = '';
+    bar.hidden = true;
+    document.getElementById('tv_launchRow').hidden = false;
+    document.getElementById('tv_tuneRow').hidden = true;
+    return;
+  }
+
+  card.className = 'card onair';
+  if (tvState().art) { card.classList.add('hasart'); }
+  num.textContent = String(tvState().channel);
+  name.textContent = tvState().channel_name || ('Channel ' + tvState().channel);
+  document.getElementById('tv_launchRow').hidden = true;
+  document.getElementById('tv_tuneRow').hidden = false;
+
+  var now = tvState().now || {};
+  if (now.playing && now.title) {
+    show.textContent = now.title;
+  } else if (now.playing) {
+    show.textContent = 'Playing';
+  } else {
+    show.textContent = 'Nothing playing';
+  }
+
+  if (now.playing && now.total > 0) {
+    bar.hidden = false;
+    var at = Math.min(100, (now.elapsed / now.total) * 100);
+    // A poll every five seconds must not yank the bar out from under a
+    // finger, nor snap it back to a stale position in the moment between
+    // letting go and Kodi being asked. scrubAt holds the local answer until
+    // the box has caught up.
+    if (scrubAt !== null) { at = scrubAt; }
+    setBar(at);
+    var left = now.total - now.elapsed;
+    if (scrubAt !== null) { left = now.total * (1 - scrubAt / 100); }
+    show.textContent += '  -  ' + clock(left) + ' left';
+  } else {
+    bar.hidden = true;
+  }
+}
+
+function setBar(percent) {
+  var bar = document.getElementById('tv_onairBar');
+  percent = Math.max(0, Math.min(100, percent));
+  bar.firstChild.style.width = percent + '%';
+  bar.querySelector('.grip').style.left = percent + '%';
+}
+
+function scrubPercent(event) {
+  var bar = document.getElementById('tv_onairBar');
+  var box = bar.getBoundingClientRect();
+  if (!box.width) { return 0; }
+  return Math.max(0, Math.min(100,
+    ((event.clientX - box.left) / box.width) * 100));
+}
+
+function wireScrubber() {
+  var bar = document.getElementById('tv_onairBar');
+
+  bar.addEventListener('pointerdown', function (event) {
+    if (bar.hidden) { return; }
+    // Captured, so the drag keeps working past the ends of the bar and off
+    // the edge of the card -- which is where a finger ends up when somebody
+    // means "the very start".
+    bar.setPointerCapture(event.pointerId);
+    bar.classList.add('scrubbing');
+    if (scrubHold) { clearTimeout(scrubHold); scrubHold = null; }
+    scrubAt = scrubPercent(event);
+    setBar(scrubAt);
+    event.preventDefault();
+  });
+
+  bar.addEventListener('pointermove', function (event) {
+    if (!bar.classList.contains('scrubbing')) { return; }
+    scrubAt = scrubPercent(event);
+    setBar(scrubAt);
+  });
+
+  function release(event) {
+    if (!bar.classList.contains('scrubbing')) { return; }
+    bar.classList.remove('scrubbing');
+    var to = scrubPercent(event);
+    scrubAt = to;
+    setBar(to);
+    api('/api/action', 'POST', {action: 'tv.seek', percent: to})
+      .then(function (data) {
+        if (data.status === 401) { showLogin(); return; }
+        if (!data.ok && data.message) { say(data.message, 'bad'); }
+        // Hold the shown position until the box has had time to move and be
+        // asked again. Two seconds covers a poll at five with a read at one.
+        load();
+        scrubHold = setTimeout(function () {
+          scrubAt = null;
+          scrubHold = null;
+          load();
+        }, 2000);
+      });
+  }
+
+  bar.addEventListener('pointerup', release);
+  bar.addEventListener('pointercancel', function () {
+    // The gesture was taken away rather than finished -- a system swipe, a
+    // call arriving. Put the bar back rather than seeking somewhere nobody
+    // chose.
+    bar.classList.remove('scrubbing');
+    scrubAt = null;
+    render();
+  });
+}
+
+function tvKeyPressed(event) {
+  // Never while somebody is typing. The PIN field is the whole reason: a
+  // six-digit PIN typed into a page that reads every keystroke as a remote
+  // press would be six presses and no sign-in.
+  var target = event.target || {};
+  var tag = (target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || target.isContentEditable) {
+    return;
+  }
+  // Nor before signing in, nor with a modifier -- ctrl+R is a page reload and
+  // has no business being a rewind.
+  if (document.getElementById('remote').hidden) { return; }
+  if (event.ctrlKey || event.metaKey || event.altKey) { return; }
+
+  var button = KEYMAP[event.key];
+  var channel = CHANNEL_KEYS[event.key];
+  if (!button && !channel) { return; }
+
+  // Held down, a key repeats about thirty times a second. A remote repeats
+  // too, which is wanted -- but not that fast, and not one request per
+  // repeat. This is roughly the rate a real remote walks a menu at.
+  var now = Date.now();
+  if (event.repeat && now - lastKeyAt < 120) { event.preventDefault(); return; }
+  lastKeyAt = now;
+
+  // The arrows scroll the page and space scrolls it a screenful. Neither is
+  // wanted once they mean something else.
+  event.preventDefault();
+
+  var name = button || channel;
+  // Light the button on screen, so a keyboard press looks like what it is.
+  var onScreen = document.querySelector('[data-press="' + name + '"]');
+  if (button) {
+    press(button, onScreen);
+  } else {
+    act('tv.' + channel, {});
+  }
+}
+
+/* Every key on the remote, wired once. The button names its own action in
+   data-press, so adding a key is markup rather than another listener. */
+function wireKeys() {
+  var keys = document.querySelectorAll('[data-press]');
+  Array.prototype.forEach.call(keys, function (key) {
+    key.addEventListener('click', function () {
+      press(key.getAttribute('data-press'), key);
+    });
+  });
+}
+
+function press(button, key) {
+  // Deliberately not act(). That one takes the busy lock, announces itself and
+  // reloads a second and a half later -- right for starting the television,
+  // wrong for a key someone presses eight times getting down a menu. Every
+  // press goes, in the order it was made, and none of them is announced.
+  if (key) {
+    // Lit on the way out. A key that answers nothing gets pressed again, and
+    // twice down the guide is not what was meant.
+    key.classList.add('lit');
+    setTimeout(function () { key.classList.remove('lit'); }, 160);
+  }
+  api('/api/action', 'POST', {action: 'tv.press', button: button})
+    .then(function (data) {
+      if (data.status === 401) { showLogin(); return; }
+      // Only failures speak, and only real ones -- "nothing is playing" from
+      // a stop button is worth saying; a toast per press is not.
+      if (!data.ok && data.message) { say(data.message, 'bad'); }
+      // One read after the run of presses stops, rather than one per press:
+      // the volume and the play glyph need to catch up, and eight presses in
+      // two seconds do not need eight round trips to say so.
+      if (pressSettle) { clearTimeout(pressSettle); }
+      pressSettle = setTimeout(load, 350);
+    });
+}
+
+function renderControls() {
+  var player = tvState().player || {};
+
+  var play = document.getElementById('tv_playKey');
+  // The glyph says what the button will do next, not what is happening now.
+  play.innerHTML = (player.playing && !player.paused) ? '&#10074;&#10074;'
+                                                      : '&#9654;&#65038;';
+
+  var mute = document.getElementById('tv_muteKey');
+  mute.classList.toggle('lit', !!player.muted);
+
+  var volume = document.getElementById('tv_volNow');
+  volume.textContent = (player.volume === null ||
+                        player.volume === undefined)
+    ? '' : (player.muted ? 'MUTED' : 'VOL ' + player.volume);
+}
+
+/* Typing into a box on the television.
+
+   The section is there only while Kodi has a keyboard or a number pad up.
+   The state says which, so a number pad gets a numeric field and a tablet
+   raises a number pad of its own rather than a full keyboard. */
+function renderTyping() {
+  var section = document.getElementById('tv_typing');
+  var field = document.getElementById('tv_typeField');
+  var input = tvState().input || {};
+  var was = !section.hidden;
+
+  section.hidden = !input.open;
+  document.getElementById('tv_typingKind').textContent =
+    input.kind === 'numeric' ? 'NUMBER PAD' : (input.kind ? 'KEYBOARD' : '');
+
+  if (!input.open) {
+    // Closed on the television -- by an OK from this page, or by somebody
+    // walking over and pressing a button. Either way the box is gone and
+    // what was half-typed has nowhere to go.
+    if (was) { field.value = ''; }
+    return;
+  }
+
+  field.inputMode = input.kind === 'numeric' ? 'numeric' : 'text';
+
+  // Focus on the way in only. Doing it on every poll would fight anyone
+  // typing, and on a tablet would raise the on-screen keyboard again after
+  // it had been dismissed.
+  if (!was) {
+    field.value = '';
+    try { field.focus(); } catch (ignored) {}
+    // The column may be scrolled down to the remote. The field is at the top
+    // of it, and a field you have to go looking for is worse than no field.
+    try {
+      section.parentNode.scrollTop = 0;
+    } catch (ignored) {}
+  }
+}
+
+function sendTyped() {
+  var field = document.getElementById('tv_typeField');
+  var text = field.value;
+  if (!text) { return; }
+  api('/api/action', 'POST', {action: 'tv.text', text: text, done: true})
+    .then(function (data) {
+      if (data.status === 401) { showLogin(); return; }
+      if (!data.ok) {
+        say(data.message || 'Could not send that', 'bad');
+        return;
+      }
+      field.value = '';
+      say('Sent', 'good');
+      // Sending closes the box, so read back promptly and let the section go.
+      load();
+    });
+}
+
+function renderJobs() {
+  var section = document.getElementById('tv_jobs');
+  // The one rule: not while the television is on. The server refuses as well
+  // -- a page left open since this morning does not know the box has been
+  // switched on since.
+  var allowed = tvState().ready && !tvState().running;
+  section.hidden = !allowed;
+  if (!allowed) { return; }
+
+  var box = document.getElementById('tv_jobList');
+  var tasks = tvState().tasks || [];
+  // Rebuilt only when the list itself changes. It never does in practice, and
+  // redrawing seven buttons under a finger every five seconds would be a way
+  // to lose a press.
+  var signature = tasks.map(function (t) { return t.name; }).join(',');
+  if (box.dataset.signature === signature) { return; }
+  box.dataset.signature = signature;
+
+  box.textContent = '';
+  tasks.forEach(function (task) {
+    var button = el('button', 'key', task.label);
+    if (task.confirm) { button.classList.add('grave'); }
+    button.dataset.label = task.label;
+    button.addEventListener('click', function () {
+      if (task.confirm && button.dataset.armed !== '1') {
+        // Asked twice. This one is the whole machine, and a wall tablet is a
+        // thing people brush past on their way through a room.
+        armJob(button);
+        return;
+      }
+      runJob(task.name, button);
+    });
+    box.appendChild(button);
+  });
+}
+
+function armJob(button) {
+  disarmJob();
+  armed = button;
+  button.dataset.armed = '1';
+  button.classList.add('lit');
+  button.textContent = 'Tap again to confirm';
+  // Forgets itself. An armed button left armed is the accident it was meant
+  // to prevent, only slower.
+  button.dataset.timer = setTimeout(disarmJob, 5000);
+}
+
+function disarmJob() {
+  if (!armed) { return; }
+  clearTimeout(Number(armed.dataset.timer));
+  armed.dataset.armed = '';
+  armed.classList.remove('lit');
+  armed.textContent = armed.dataset.label;
+  armed = null;
+}
+
+function runJob(name, button) {
+  disarmJob();
+  if (button) {
+    button.classList.add('lit');
+    button.disabled = true;
+  }
+  api('/api/action', 'POST', {action: 'tv.task', name: name})
+    .then(function (data) {
+      if (data.status === 401) { showLogin(); return; }
+      say(data.message || '', data.ok ? 'good' : 'bad');
+      // Held for a moment rather than freed at once: these take minutes and
+      // report on the television, so the only thing the remote can usefully
+      // prevent is the same job being started three times in a row.
+      setTimeout(function () {
+        if (button) {
+          button.classList.remove('lit');
+          button.disabled = false;
+        }
+      }, 4000);
+      load();
+    });
+}
+
+function renderChannels() {
+  var box = document.getElementById('tv_channels');
+  var list = tvState().channels || [];
+
+  // Rebuilt only when something in it changed. Eighty-five rows torn down and
+  // built again every poll is real work, it throws away the scroll position,
+  // and a row replaced under a finger is a tap that lands on nothing -- so
+  // this is what let the poll be quick enough for the typing box to appear
+  // when somebody opens one on the television.
+  var signature = tvState().channel + '|' + tvState().running + '|' + list.map(
+    function (c) {
+      return [c.number, c.name, c.logo, c.showing, c.episode,
+              Math.round((c.duration - c.elapsed) / 30)].join('~');
+    }).join(',');
+  if (box.dataset.signature === signature) { return; }
+  box.dataset.signature = signature;
+
+  box.textContent = '';
+
+  list.forEach(function (channel) {
+    var live = tvState().running && channel.number === tvState().channel;
+    var card = el('button', 'card chan' + (live ? ' lit live' : ''));
+    card.appendChild(el('div', 'num', String(channel.number)));
+
+    var who = el('div', 'who');
+    if (channel.logo) {
+      // The logo says which channel this is, so the name would be saying it
+      // twice -- but it is still the alt text, and still what appears if the
+      // picture does not arrive.
+      var logo = document.createElement('img');
+      logo.className = 'logo';
+      logo.alt = channel.name;
+      logo.loading = 'lazy';
+      logo.src = '/tv/logo?c=' + encodeURIComponent(channel.number);
+      logo.addEventListener('error', function () {
+        var name = el('div', 'name', channel.name);
+        if (logo.parentNode) { logo.parentNode.replaceChild(name, logo); }
+      });
+      who.appendChild(logo);
+    } else {
+      who.appendChild(el('div', 'name', channel.name));
+    }
+
+    // What is on it, when the Overlay has said. A channel with nothing
+    // against it is one the television has not tuned since it started --
+    // saying nothing is better than saying the wrong programme.
+    var sub = '';
+    if (channel.showing) {
+      sub = channel.showing;
+      if (channel.episode) { sub += ' - ' + channel.episode; }
+      if (channel.duration > 0) {
+        sub += '  (' + clock(channel.duration - channel.elapsed) + ' left)';
+      }
+    } else if (live) {
+      sub = 'On now';
+    } else if (!channel.named) {
+      // The name comes out of the channel's own type, and a type this build
+      // has not been taught reads as no name at all rather than a wrong one.
+      sub = 'Unnamed channel type';
+    }
+    if (sub) { who.appendChild(el('div', 'sub', sub)); }
+
+    card.appendChild(who);
+    card.addEventListener('click', function () {
+      if (!tvState().running) {
+        say('Paragon TV is not running', 'bad');
+        return;
+      }
+      act('tv.channel', {number: channel.number});
+    });
+    box.appendChild(card);
+  });
+
+  document.getElementById('tv_channelCount').textContent =
+    list.length ? String(list.length) : '';
+  document.getElementById('tv_noChannels').hidden = !!list.length;
+}
+
+/* Which half is showing. Kept in this browser's storage beside the full
+   screen choice, and for the same reason: the tablet on the wall is
+   probably a television remote and the phone in a pocket probably is not. */
+function showTab(which) {
+  var tabs = document.querySelectorAll('#tabs button');
+  Array.prototype.forEach.call(tabs, function (button) {
+    button.classList.toggle('on', button.getAttribute('data-tab') === which);
+  });
+  document.getElementById('homePanel').hidden = which !== 'home';
+  document.getElementById('tvPanel').hidden = which !== 'tv';
+  try { localStorage.setItem('paragon.tab', which); } catch (ignored) {}
+}
+
+function wantedTab() {
+  try { return localStorage.getItem('paragon.tab') || 'home'; }
+  catch (ignored) { return 'home'; }
+}
+
+function renderTv() {
+  // No television on this box, no tab and no panel. Not disabled -- absent.
+  var here = !!tvState().installed;
+  document.getElementById('tabs').hidden = !here;
+  if (!here) {
+    document.getElementById('homePanel').hidden = false;
+    document.getElementById('tvPanel').hidden = true;
+    return;
+  }
+  renderOnAir();
+  renderControls();
+  renderTyping();
+  renderJobs();
+  renderChannels();
+}
+
 function render() {
   document.getElementById('version').textContent = 'v' + (state.version || '');
   var badge = document.getElementById('badge');
@@ -2229,6 +3444,7 @@ function render() {
   renderSequences();
   renderPalette();
   renderDevices();
+  renderTv();
 }
 
 document.getElementById('fullscreen').addEventListener('click', function () {
@@ -2282,13 +3498,49 @@ Array.prototype.forEach.call(document.querySelectorAll('[data-temp]'), function 
   });
 });
 
+Array.prototype.forEach.call(document.querySelectorAll('#tabs button'),
+  function (button) {
+    button.addEventListener('click', function () {
+      showTab(button.getAttribute('data-tab'));
+    });
+  });
+showTab(wantedTab());
+wireKeys();
+wireScrubber();
+document.getElementById('tv_typeForm').addEventListener('submit', function (e) {
+  // A form, so Enter in the field sends -- which is what the key is for.
+  e.preventDefault();
+  sendTyped();
+});
+document.addEventListener('keydown', function (event) {
+  // Only while the television half is the one being looked at. On the lights
+  // tab an arrow key is a page scroll and has no business moving a cursor on
+  // a television in another room.
+  if (document.getElementById('tvPanel').hidden) { return; }
+  tvKeyPressed(event);
+});
+
 // A scene fired from the television, or a satellite copying from its master,
 // changes what this page should be showing. Only while it is actually on
 // screen: a page left open in a background tab has no business waking the
 // service twice a minute.
+//
+// The television half wants a closer eye than the lights: a keyboard opening
+// over there should show a field here within a second, and what is on
+// changes without anybody touching this page.
+var pollAt = 0;
 setInterval(function () {
-  if (!document.hidden && state && !busy) { load(); }
-}, 20000);
+  if (document.hidden || !state || busy) { return; }
+  var tv = tvState();
+  var every = 20000;
+  if (tv.installed && !document.getElementById('tvPanel').hidden) {
+    every = (tv.input && tv.input.open) ? 1000 : 2500;
+  }
+  var now = Date.now();
+  if (now - pollAt < every) { return; }
+  pollAt = now;
+  load();
+}, 1000);
 
 load();
 </script>

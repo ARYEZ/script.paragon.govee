@@ -58,8 +58,13 @@ def install(addon_id, settings=None, profile=None, path=None):
 
 
 class Addon(object):
-    def __init__(self, addon_id=None):
-        self._id = addon_id or _INFO['id']
+    # Kodi's own signature is Addon([id]), and code that reaches another
+    # add-on writes it as Addon(id="script.paragontv"). A stub that spelled
+    # the parameter differently raised TypeError for exactly those calls --
+    # which the caller catches as "not installed", so a cross-add-on read
+    # would have looked absent in every test and worked on the box.
+    def __init__(self, id=None):  # noqa: A002 - matches the Kodi binding
+        self._id = id or _INFO['id']
         if self._id != _INFO['id'] and self._id not in FOREIGN:
             # What Kodi does for an add-on that is not installed.
             raise RuntimeError('Addon "%s" is not installed' % self._id)

@@ -1838,6 +1838,24 @@ footer button { flex: 1 1 auto; }
   #remote { display: flex; flex-direction: column; height: 100%; }
   .wrap { flex: 1; min-height: 0; display: flex; flex-direction: column;
           padding-bottom: 18px; }
+  /* The tab panels have to carry the height down.
+     .wrap is a flex column whose child takes the rest of the screen, and the
+     deck used to be that child. Putting a panel in between broke the chain:
+     `flex: 1` on the deck means nothing when its parent is a plain block, so
+     the deck grew to the height of its contents, the pane's overflow-y never
+     had a smaller box to scroll inside, and body's `overflow: hidden` simply
+     cut off everything past the fold. Eighty-five channels, ten of them
+     reachable.
+
+     `display: flex` here is safe against `hidden`: the `[hidden]` rule near
+     the top of this sheet is !important precisely so a display rule cannot
+     un-hide something. */
+  #homePanel, #tvPanel {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
   .deck { flex: 1; min-height: 0; }
   .pane {
     overflow-y: auto;

@@ -1,3 +1,15 @@
+2.35.1 (Aryez - 2025)
+    Fixed: nothing scrolled on a wall panel. With eighty-five channels only
+        the first ten could be reached, and there was no way to get at the
+        rest.
+    The tabs caused it. On a panel the page itself does not scroll -- each
+        column scrolls inside its own box -- and that works only while every
+        element between the page and the column passes the height down. The
+        tab panel put in between did not, so the column grew to the height of
+        its contents, had nothing smaller to scroll inside, and everything
+        past the fold was simply cut off.
+    A phone was never affected: there the page scrolls normally.
+
 2.35.0 (Aryez - 2025)
     Added: the web remote has a television half. The page now has two tabs --
         Home for the lights, scenes and sequences, TV for Paragon TV -- and

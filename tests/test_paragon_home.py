@@ -6184,6 +6184,50 @@ class TestTheTelevisionHalf(unittest.TestCase):
         self.assertIn('scenes', state)
         self.assertIn('devices', state)
 
+    def test_the_tab_panels_carry_the_height_down_to_the_panes(self):
+        """The bug the tabs introduced, and the reason it is not obvious.
+
+        On a wall panel the page itself does not scroll -- body is
+        `overflow: hidden` and each pane scrolls inside its own box. That only
+        works while every element between .wrap and .pane passes the height
+        down: .wrap is a flex column, .deck takes the rest of it, and the pane
+        gets a box smaller than its contents to scroll inside.
+
+        Putting a tab panel between .wrap and .deck broke that chain. `flex:
+        1` on the deck means nothing when its parent is a plain block, so the
+        deck grew to the height of its contents, the pane never had a smaller
+        box, and body's overflow: hidden simply cut the rest off. Eighty-five
+        channels with ten of them reachable and no way to scroll.
+
+        There is no unit test for a browser's layout, so this checks the rule
+        is there and says what it is for.
+        """
+        page = WebRemote_PAGE = self.page()
+
+        panel = page.index('#homePanel, #tvPanel {')
+        rule = page[panel:page.index('}', panel)]
+
+        self.assertIn('flex: 1', rule)
+        self.assertIn('min-height: 0', rule)
+        self.assertIn('display: flex', rule)
+        self.assertIn('flex-direction: column', rule)
+
+    def test_hiding_a_panel_still_beats_showing_it(self):
+        """The panels are display: flex, and hidden ones must stay hidden.
+
+        That works only because the [hidden] rule is !important. It was made
+        !important for the badge, long before there were panels; this is the
+        second thing depending on it, so it is worth a test of its own.
+        """
+        page = self.page()
+
+        self.assertIn('[hidden] { display: none !important; }', page)
+
+    def page(self):
+        import remote as remote_lib
+
+        return remote_lib.PAGE
+
     def test_the_television_actions_are_named_apart_from_the_lights(self):
         """So neither half can be reached by the other's name, and the server
         can tell at a glance which thread an action belongs on."""

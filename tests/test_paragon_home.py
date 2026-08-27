@@ -6012,6 +6012,145 @@ class TestDriverSeam(unittest.TestCase):
 # Device model and transport selection
 # ---------------------------------------------------------------------------
 
+def touch_later(app, filename):
+    """Make sure the stamp really differs, whatever the clock did.
+
+    Writing a file twice inside one filesystem tick can leave mtime
+    identical, which would make a passing test prove nothing.
+    """
+    import addon_utils
+
+    path = addon_utils.profile_file(filename)
+    stamp = os.stat(path)
+    os.utime(path, (stamp.st_mtime + 5, stamp.st_mtime + 5))
+
+
+class TestNoticingOutsideChanges(unittest.TestCase):
+    """Kodi gives a script its own interpreter.
+
+    The service that runs the schedule and serves the web remote is one
+    process; the menus opened from the add-on are another. Both hold a
+    session, and a list read at startup stays read until something says
+    otherwise -- so a sequence edited in the menus left the web remote
+    showing the old one until Kodi was restarted.
+    """
+
+    def setUp(self):
+        clean_profile()
+        xbmcaddon.reset()
+        xbmcgui.reset()
+        for name in ('addon_utils', 'paragon_home', 'sequences', 'gui'):
+            if name in sys.modules:
+                del sys.modules[name]
+
+    def tearDown(self):
+        clean_profile()
+
+    def app(self):
+        from paragon_home import ParagonHome
+
+        app = ParagonHome()
+        app.controller = RecordingController()
+        return app
+
+    def write_sequences(self, steps):
+        import addon_utils
+        import sequences as sequence_lib
+
+        addon_utils.write_json(sequence_lib.SEQUENCE_FILE, [{
+            'name': 'Evening',
+            # A scene step needs a target to count as filled -- a half-filled
+            # slot is normalised back to an empty one.
+            'steps': [{'kind': sequence_lib.KIND_SCENE,
+                       'target': 'Scene %d' % n}
+                      for n in range(steps)],
+        }])
+
+    def filled(self, app):
+        """How many steps a sequence actually has something in.
+
+        Every sequence is padded to ten slots when it is read, so the raw
+        length says nothing -- and it is the filled count the web remote puts
+        on the card.
+        """
+        import sequences as sequence_lib
+
+        return len(sequence_lib.filled_steps(app.sequences[0]))
+
+    def test_a_sequence_edited_elsewhere_is_picked_up(self):
+        """The reported bug, in one test: seven steps become eight."""
+        self.write_sequences(7)
+        app = self.app()
+        # The service's first pump, which takes the baseline. A first look
+        # never reloads anything -- a session that has only just started has
+        # not gone stale.
+        app.reload_changed()
+        self.assertEqual(self.filled(app), 7)
+
+        # Something else -- the menus, in another interpreter -- rewrites it.
+        self.write_sequences(8)
+        touch_later(app, 'sequences.json')
+        app.reload_changed()
+
+        self.assertEqual(self.filled(app), 8)
+
+    def test_an_untouched_file_is_not_re_read(self):
+        """Four stat calls a pass is fine; rebuilding every list is not."""
+        self.write_sequences(7)
+        app = self.app()
+        first = app.sequences
+
+        app.reload_changed()
+
+        self.assertIs(app.sequences, first, 're-read a file nothing changed')
+
+    def test_the_first_look_changes_nothing(self):
+        """A session that has only just started has not gone stale."""
+        self.write_sequences(7)
+        app = self.app()
+
+        self.assertEqual(app.reload_changed(), [])
+
+    def test_it_notices_scenes_too(self):
+        """The menus can change any of them, not only sequences."""
+        import addon_utils
+        import scenes as scene_lib
+
+        app = self.app()
+        app.reload_changed()
+
+        addon_utils.write_json(scene_lib.SCENE_FILE,
+                               [{'name': 'Made elsewhere'}])
+        touch_later(app, 'scenes.json')
+
+        self.assertIn('scenes.json', app.reload_changed())
+        self.assertIn('Made elsewhere', [s['name'] for s in app.scenes])
+
+    def test_a_rewrite_in_the_same_second_is_still_noticed(self):
+        """Which is what happens when two sequences are edited in a row.
+
+        The size is stamped as well as the time for exactly this reason.
+        """
+        self.write_sequences(7)
+        app = self.app()
+        app.reload_changed()
+
+        self.write_sequences(9)
+        import addon_utils
+        import sequences as sequence_lib
+        path = addon_utils.profile_file(sequence_lib.SEQUENCE_FILE)
+        os.utime(path, (1600000000, 1600000000))
+        app._stamps['sequences.json'] = (1600000000, -1)
+
+        self.assertIn('sequences.json', app.reload_changed())
+
+    def test_a_missing_file_is_not_a_crash(self):
+        app = self.app()
+
+        self.assertEqual(app.reload_changed(), [])
+        self.assertEqual(app.sequences, [])
+
+
 class TestPowerOnlyDevices(unittest.TestCase):
     """A light this add-on switches but never styles.
 
@@ -7765,15 +7904,27 @@ class TestPlaybackService(unittest.TestCase):
         svc._remote = stub
 
         class StubApp(object):
+            def __init__(self):
+                self.reloads = 0
+
             @staticmethod
             def cycle_due():
                 return False
 
-        svc._app = StubApp()
+            def reload_changed(self):
+                # The pump asks the session what has changed underneath it
+                # before draining the queue. A stub that does not answer is a
+                # stub pretending to be a session it is not.
+                self.reloads += 1
+                return []
+
+        app = StubApp()
+        svc._app = app
         svc._tick()
         svc._tick()
 
         self.assertEqual(stub.pumps, 2)
+        self.assertEqual(app.reloads, 2, 'never asked what had changed')
 
     def test_a_scheduled_sequence_stops_the_remote_starting_another(self):
         """Two sequences interleaving is the thing v2.22 went to lengths over."""

@@ -205,6 +205,17 @@ class GoveeService(xbmc.Monitor):
         """Run whatever the phone asked for, on this thread."""
         if self._remote is None:
             return 0
+        # Before anything else: the menus are a different interpreter with
+        # their own session, so a sequence edited there was written to disk
+        # and this process never looked again. A handful of stat calls.
+        #
+        # Guarded on its own. Draining the queue is how a phone reaches this
+        # box at all, and it must not stop because a file could not be read.
+        try:
+            self.app.reload_changed()
+        except Exception as exc:
+            utils.log('Could not re-read what changed: %s' % exc,
+                      xbmc.LOGERROR)
         alive = lambda index, step: not self.abortRequested()
         return self._remote.pump(self.app, sleep_func=self._pause,
                                  on_step=alive)

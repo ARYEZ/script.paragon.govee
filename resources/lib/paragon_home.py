@@ -13,6 +13,7 @@ one of these. Nothing here draws UI, so the same object serves a dialog-driven
 menu and a silent playback callback.
 """
 
+import os
 import time
 
 import addon_utils as utils
@@ -56,6 +57,9 @@ class ParagonHome(object):
         self._devices = None
         self._scenes = None
         self._sequences = None
+        # What each shared file looked like when this session last read it.
+        # See reload_changed.
+        self._stamps = {}
         self._sequence_state = None
         self._reracks = None
         self._week = None
@@ -1115,6 +1119,89 @@ class ParagonHome(object):
                 utils.read_json(self.KEY_FILE, default={}) or {})
             self._stamp_sync(at)
         return copied, problems
+
+    # -- noticing what another process changed -----------------------------
+
+    # The files each cached list is read from. Both halves of this add-on
+    # keep their own session -- the service that runs the schedule and the
+    # web remote, and the menus you open from the add-on itself -- because
+    # Kodi gives a script its own interpreter. So the copy in this process is
+    # only as fresh as the last time it read.
+    SHARED_STATE = (
+        ('_devices', DEVICE_CACHE),
+        ('_scenes', scene_lib.SCENE_FILE),
+        ('_sequences', sequence_lib.SEQUENCE_FILE),
+        ('_palette', palette_lib.PALETTE_FILE),
+    )
+
+    def reload_changed(self):
+        """Forget anything whose file has been rewritten since it was read.
+
+        Cheap enough to call on every pass -- four stat calls, no reading --
+        and the lists themselves are only rebuilt when one of them has
+        actually moved.
+
+        Without this, editing a sequence in the menus left the web remote
+        showing the old one until Kodi was restarted: the menus wrote the
+        file, and the service went on holding what it had read at startup.
+        """
+        changed = []
+        for attribute, filename in self.SHARED_STATE:
+            if not self._moved(filename):
+                continue
+            setattr(self, attribute, None)
+            changed.append(filename)
+
+        # The learned codes and the Tuya keys are handed to the drivers as
+        # dicts and kept, so these are emptied and refilled rather than
+        # replaced -- rebinding would leave each driver holding the old one.
+        for filename, store in ((self.CODE_FILE, self._codes),
+                                (self.KEY_FILE, self._tuya_keys)):
+            if not self._moved(filename):
+                continue
+            store.clear()
+            store.update(utils.read_json(filename, default={}) or {})
+            changed.append(filename)
+
+        if changed:
+            utils.log('Re-reading %s: changed by something else'
+                      % ', '.join(sorted(set(changed))))
+        return changed
+
+    def _moved(self, filename):
+        """Whether `filename` has changed since this session last looked.
+
+        False on the very first look, whatever the file is doing: a session
+        that has only just started has not gone stale.
+
+        A file that is not there yet is stamped as absent rather than skipped.
+        Skipping it meant its first appearance read as a first look and was
+        passed over -- so the first scene ever saved was not picked up until
+        the one after it.
+        """
+        stamp = self._file_stamp(filename)
+        seen = filename in self._stamps
+        previous = self._stamps.get(filename)
+        self._stamps[filename] = stamp
+        return seen and previous != stamp
+
+    @staticmethod
+    def _file_stamp(filename):
+        """(modified, size) for a saved file, or None when it is not there.
+
+        Both, because a file can be rewritten inside the same second as it
+        was last read -- which is exactly what happens when somebody edits
+        two sequences one after the other.
+        """
+        try:
+            full = utils.profile_file(filename)
+        except Exception:
+            return None
+        try:
+            info = os.stat(full)
+        except (OSError, IOError):
+            return None
+        return (info.st_mtime, info.st_size)
 
     def describe_satellite(self):
         return satellite_lib.describe(self.master_ip, self.last_sync)

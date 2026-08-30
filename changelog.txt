@@ -1,3 +1,25 @@
+2.36.0 (Aryez - 2026)
+    Sequences hold fifteen steps instead of ten. Ten ran out: a sequence that
+        wakes a television, waits for it to come up, tunes it and then settles
+        the lights around it spends its slots quickly.
+    Sequences already saved are padded to fifteen when they are read, so
+        nothing needs re-entering and the steps stay in the slots they were
+        in. Update every box together -- a satellite still on ten trims a
+        fifteen-step sequence down to ten when it reads the master's copy.
+    Steps can be reordered. "Reorder steps..." in the sequence editor opens a
+        screen that stays open: pick a step, say which slot it goes to, and
+        repeat. Everything it passes slides along to make room, and the
+        destination list names what is in each slot, since the question being
+        asked is "before the scene" rather than "position 6".
+    The same move is on each step's own menu as "Move this step...", for when
+        the step is already open and only that one is out of place.
+    A step's pause travels with the step. The gap means "wait for the
+        television", not "wait at slot 2", so moving the television moves the
+        wait with it.
+    Reordering was the missing half of the fixed-slot design: the slots were
+        deliberately numbered and fixed, which is right, but getting the order
+        wrong then meant retyping the steps in a different order.
+
 2.35.1 (Aryez - 2025)
     Fixed: nothing scrolled on a wall panel. With eighty-five channels only
         the first ten could be reached, and there was no way to get at the

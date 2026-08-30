@@ -1693,15 +1693,18 @@ class ControlPanel(object):
             rows[choice][1]()
 
     def edit_sequence(self, sequence):
-        """The ten slots, always all ten, numbered as they run."""
+        """Every slot, always all of them, numbered as they run."""
         while True:
             rows = []
-            for index, step in enumerate(sequence['steps']):
-                rows.append(('%2d. %s'
-                             % (index + 1,
-                                sequence_lib.describe_step(
-                                    step, self._target_name(step))),
+            for index, label in enumerate(self._slot_labels(sequence)):
+                rows.append((label,
                              lambda i=index: self.edit_step(sequence, i)))
+            # Nothing to reorder until there are two things to put in an
+            # order, and an extra row on a sequence with one step is just a
+            # row that says no when you press it.
+            if len(sequence_lib.filled_steps(sequence)) > 1:
+                rows.append(('Reorder steps...',
+                             lambda: self.reorder_steps(sequence)))
             used = self.app.sequence_used_by(sequence['name'])
             if used:
                 rows.append(('Used by: %s' % ', '.join(used),
@@ -1720,6 +1723,60 @@ class ControlPanel(object):
                 return
             if rows[choice][1]() is False:
                 return
+
+    def _slot_labels(self, sequence):
+        """Every slot numbered and described, as the editor lists them.
+
+        One place rather than three, so the reorder screens read as the same
+        list the sequence editor showed rather than a second opinion of it.
+        """
+        return ['%2d. %s' % (index + 1,
+                             sequence_lib.describe_step(
+                                 step, self._target_name(step)))
+                for index, step in enumerate(sequence['steps'])]
+
+    def reorder_steps(self, sequence):
+        """Move steps about, staying on the screen between moves.
+
+        A mode of its own rather than a "move up" on every slot: nudging a
+        step from the bottom of fifteen to the top one row at a time is
+        fourteen trips through the menu, and the fourteenth is where the
+        mistake gets made. Pick a step, say where it goes, done.
+
+        The loop is the point -- reordering is rarely one move -- so it stays
+        open until you back out of it.
+        """
+        while True:
+            choice = _select('%s - pick a step to move' % sequence['name'],
+                             self._slot_labels(sequence))
+            if choice == BACK:
+                return
+            if sequence['steps'][choice].get('kind') == sequence_lib.KIND_NONE:
+                utils.force_notify('Slot %d is empty' % (choice + 1))
+                continue
+            self._move_step(sequence, choice)
+
+    def _move_step(self, sequence, index):
+        """Ask where a step should go, and put it there.
+
+        The destination list is the slots as they stand now, with the step
+        being moved marked in it. Naming what is already in each slot is what
+        makes this answerable: "before the scene" is the question actually
+        being asked, and "position 6" is not.
+        """
+        if sequence['steps'][index].get('kind') == sequence_lib.KIND_NONE:
+            utils.force_notify('Slot %d is empty' % (index + 1))
+            return
+        labels = self._slot_labels(sequence)
+        labels[index] += '   <- moving this'
+
+        choice = _select('Move step %d to' % (index + 1), labels)
+        if choice == BACK or choice == index:
+            return
+        sequence['steps'] = sequence_lib.move_step(sequence['steps'],
+                                                   index, choice)
+        self.app.save_sequence(sequence)
+        utils.notify('Step %d is now step %d' % (index + 1, choice + 1))
 
     def _show_used_by(self, sequence):
         """Where a sequence is used, so a change is not a surprise elsewhere."""
@@ -2149,6 +2206,10 @@ class ControlPanel(object):
             kinds.append((self._driver_label(driver_id),
                           lambda d=driver_id: self._step_device(d)))
         kinds.append(('Pause after this step', self._step_pause))
+        # Offered only on a slot that holds something, since moving an empty
+        # slot somewhere else achieves nothing but renumbering.
+        if sequence['steps'][index].get('kind') != sequence_lib.KIND_NONE:
+            kinds.append(('Move this step...', self._step_move))
         kinds.append(('Clear this step', lambda: sequence_lib.empty_step()))
 
         choice = _select('Step %d' % (index + 1),
@@ -2161,6 +2222,9 @@ class ControlPanel(object):
             return
         if step == 'pause':
             self._ask_pause(sequence, index)
+            return
+        if step == 'move':
+            self._move_step(sequence, index)
             return
 
         # A step's pause belongs to the slot rather than to what is in it, so
@@ -2230,6 +2294,9 @@ class ControlPanel(object):
 
     def _step_pause(self):
         return 'pause'
+
+    def _step_move(self):
+        return 'move'
 
     def _ask_pause(self, sequence, index):
         current = str(sequence['steps'][index].get('pause') or 0)

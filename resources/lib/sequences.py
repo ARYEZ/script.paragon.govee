@@ -5,12 +5,18 @@ Creator: Aryez
 Year: 2026
 Part of: Paragon TV Project
 
-Sequences: ten ordered steps, run as one.
+Sequences: fifteen ordered steps, run as one.
 
 A fixed number of numbered slots rather than a list you grow, so a sequence
 has the same shape every time you open it and slot 4 is always slot 4. Empty
 slots are normal and cost nothing. That shape is borrowed from the Paragon TV
 Rerack, whose phases work the same way.
+
+The slots are fixed but not frozen: a step can be moved to any other slot,
+and the ones it passes slide along to make room. Order is the whole point of
+a sequence -- a pause belongs after the step that needs it, not wherever the
+step happened to be typed -- so getting the order wrong should not mean
+retyping the steps in a different order.
 
 A step is three choices: what kind of thing, which one, and what to do to it.
 
@@ -40,10 +46,11 @@ SEQUENCE_FILE = 'sequences.json'
 LEGACY_FILE = 'reracks.json'
 LEGACY_STATE_FILE = 'rerack_state.json'
 
-# Fixed, like the phases of the system this is named after. Ten is enough for
-# anything anyone has wanted, and a fixed count is what lets the editor show
-# every slot including the empty ones.
-STEP_COUNT = 10
+# Fixed, like the phases of the system this is named after, and a fixed count
+# is what lets the editor show every slot including the empty ones. Fifteen
+# because ten ran out: a sequence that wakes a television, waits for it, tunes
+# it and then settles the lights around it spends its slots quickly.
+STEP_COUNT = 15
 
 KIND_NONE = 'none'
 KIND_SCENE = 'scene'
@@ -310,6 +317,25 @@ def normalise_step(raw):
         return step
 
     return empty_step()
+
+
+def move_step(steps, frm, to):
+    """One step moved to another slot, with the rest sliding along.
+
+    Returns a new list rather than reordering in place, so a caller that
+    decides against the move still has the original. The length never
+    changes: a step leaving slot 2 for slot 7 pulls slots 3 to 7 up one, and
+    the sequence still has its full complement of slots afterwards.
+
+    Out-of-range and no-op moves return the steps unchanged rather than
+    raising. There is nothing a caller could usefully do about it, and the
+    honest answer to "move this nowhere" is the list you started with.
+    """
+    moved = list(steps or [])
+    if not (0 <= frm < len(moved)) or not (0 <= to < len(moved)) or frm == to:
+        return moved
+    moved.insert(to, moved.pop(frm))
+    return moved
 
 
 def normalise(raw):

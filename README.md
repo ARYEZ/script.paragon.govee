@@ -418,7 +418,7 @@ Example `keymaps/govee.xml` in your Kodi userdata:
 
 ## Sequences
 
-A **sequence** is ten ordered steps run as one. Named after the Paragon TV
+A **sequence** is fifteen ordered steps run as one. Named after the Paragon TV
 preset macro system, and shaped like it on purpose: a fixed number of numbered
 slots rather than a list you grow, so a sequence has the same shape every time
 you open it and slot 4 is always slot 4. Empty slots are normal.
@@ -487,11 +487,32 @@ appeared to be switching far more than it had been asked to.
 To put a plug in a colour scene deliberately, name it in the scene's target
 list. Named targets are honoured exactly.
 
+### Changing the order
+
+Order is the whole point of a sequence, and it is rarely right first time — a
+pause belongs after the step that needs it, and that is usually discovered
+after the step has been typed somewhere else.
+
+**Reorder steps...** in the sequence editor opens a screen that stays open:
+pick a step, say which slot it should go to, and repeat. The step lands where
+you sent it and everything it passed slides along to make room. The
+destination list names what is in each slot, because the question actually
+being asked is "before the scene", not "position 6".
+
+The same move is on each step's own menu as **Move this step...**, for when
+one step is already open and only that one is in the wrong place.
+
+A step's pause travels with it. The gap means "wait for the television", not
+"wait at slot 2", so moving the television moves the wait.
+
+The row only appears once a sequence has two steps, since one step is already
+in order.
+
 ### Copying a sequence
 
-**Duplicate...** in the sequence editor copies all ten slots under a new name
-and opens the copy, which is the point — ten steps is a lot to retype for a
-variant.
+**Duplicate...** in the sequence editor copies all fifteen slots under a new
+name and opens the copy, which is the point — fifteen steps is a lot to retype
+for a variant.
 
 **The copy is not scheduled**, however the original was. Two sequences firing
 at the same minute on the same days is not what anyone means by "make me a
@@ -591,7 +612,7 @@ state to describe at all, like an infrared button press. Steps refer to
 devices by id, so renaming a device does not break a sequence that used it.
 
 There is no starter set. A sequence refers to this house's own devices, and an
-invented one would be ten slots pointing at nothing.
+invented one would be fifteen slots pointing at nothing.
 
 ---
 
@@ -689,7 +710,7 @@ Three layers, each answering one question:
 | | Answers |
 |---|---|
 | **Scene** | how the lights should *look* |
-| **Sequence** | what to *do*, in order — ten steps |
+| **Sequence** | what to *do*, in order — fifteen steps |
 | **Rerack** | when a *day* does it — nine phases |
 
 ---
@@ -1141,8 +1162,8 @@ read rather than to act on.
 
 ### Sequences
 
-A sequence is the most disruptive thing a stray tap can start — ten steps, and
-possibly an hour of pauses. **Allow sequences from the remote** turns them off
+A sequence is the most disruptive thing a stray tap can start — fifteen steps,
+and possibly an hour of pauses. **Allow sequences from the remote** turns them off
 without touching anything else, which is the setting to reach for if the phone
 lives in a pocket.
 

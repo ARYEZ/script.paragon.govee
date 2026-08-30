@@ -702,26 +702,105 @@ class TestSequences(unittest.TestCase):
 
     # -- shape -------------------------------------------------------------
 
-    def test_a_sequence_always_has_ten_slots(self):
+    def test_a_sequence_always_has_fifteen_slots(self):
         """Named after the preset system, and fixed like it: slot 4 is slot 4."""
         sequence = self.sequences.make_sequence('Wind Down')
 
         self.assertEqual(len(sequence['steps']), self.sequences.STEP_COUNT)
-        self.assertEqual(self.sequences.STEP_COUNT, 10)
+        self.assertEqual(self.sequences.STEP_COUNT, 15)
         self.assertTrue(all(s['kind'] == 'none' for s in sequence['steps']))
 
-    def test_three_steps_leave_seven_empty_slots(self):
+    def test_three_steps_leave_twelve_empty_slots(self):
         sequence = self.example()
 
         self.assertEqual(len(self.sequences.filled_steps(sequence)), 3)
-        self.assertEqual(len(sequence['steps']), 10)
+        self.assertEqual(len(sequence['steps']), 15)
 
-    def test_more_than_ten_steps_are_trimmed(self):
+    def test_more_than_fifteen_steps_are_trimmed(self):
         sequence = self.sequences.make_sequence(
             'Too many',
-            [{'kind': 'scene', 'target': 'Warshade'}] * 14)
+            [{'kind': 'scene', 'target': 'Warshade'}] * 20)
 
-        self.assertEqual(len(sequence['steps']), 10)
+        self.assertEqual(len(sequence['steps']), 15)
+
+    def test_a_sequence_saved_with_ten_slots_gains_the_five_new_ones(self):
+        """The file on disk predates the fifteenth slot. It is padded, not
+        rejected, and the ten it had stay where they were."""
+        old = {'name': 'Bedtime',
+               'steps': [{'kind': 'scene', 'target': 'Warshade'}]
+                        + [{'kind': 'none'}] * 8
+                        + [{'kind': 'scene', 'target': 'Off'}]}
+
+        sequence = self.sequences.normalise(old)
+
+        self.assertEqual(len(sequence['steps']), 15)
+        self.assertEqual(sequence['steps'][0]['target'], 'Warshade')
+        self.assertEqual(sequence['steps'][9]['target'], 'Off')
+        self.assertTrue(all(step['kind'] == 'none'
+                            for step in sequence['steps'][10:]))
+
+    # -- reordering --------------------------------------------------------
+
+    def test_a_step_moved_down_pulls_the_ones_it_passes_up(self):
+        steps = ['a', 'b', 'c', 'd']
+
+        self.assertEqual(self.sequences.move_step(steps, 0, 2),
+                         ['b', 'c', 'a', 'd'])
+
+    def test_a_step_moved_up_pushes_the_ones_it_passes_down(self):
+        steps = ['a', 'b', 'c', 'd']
+
+        self.assertEqual(self.sequences.move_step(steps, 3, 1),
+                         ['a', 'd', 'b', 'c'])
+
+    def test_moving_a_step_leaves_the_original_list_alone(self):
+        """A caller that changes its mind still has what it started with."""
+        steps = ['a', 'b', 'c']
+
+        self.sequences.move_step(steps, 0, 2)
+
+        self.assertEqual(steps, ['a', 'b', 'c'])
+
+    def test_a_move_never_changes_how_many_slots_there_are(self):
+        sequence = self.example()
+
+        sequence['steps'] = self.sequences.move_step(sequence['steps'], 0, 14)
+
+        self.assertEqual(len(sequence['steps']), 15)
+        self.assertEqual(len(self.sequences.filled_steps(sequence)), 3)
+
+    def test_a_pause_travels_with_the_step_it_belongs_to(self):
+        """The gap is "wait for the television", not "wait at slot 2"."""
+        sequence = self.sequences.make_sequence('Wake', [
+            {'kind': 'scene', 'target': 'Warshade'},
+            {'kind': 'scene', 'target': 'Bright', 'pause': 12}])
+
+        moved = self.sequences.move_step(sequence['steps'], 1, 0)
+
+        self.assertEqual(moved[0]['target'], 'Bright')
+        self.assertEqual(moved[0]['pause'], 12)
+        self.assertEqual(moved[1]['pause'], 0)
+
+    def test_a_nonsense_move_returns_the_steps_unchanged(self):
+        steps = ['a', 'b', 'c']
+
+        for frm, to in ((0, 0), (-1, 1), (1, 99), (99, 1), (1, -4)):
+            self.assertEqual(self.sequences.move_step(steps, frm, to),
+                             ['a', 'b', 'c'],
+                             'move_step(%r, %r) changed something' % (frm, to))
+
+    def test_reordering_changes_the_order_the_steps_run_in(self):
+        """The whole point, checked at the far end: what actually runs."""
+        sequence = self.sequences.make_sequence('Wake', [
+            {'kind': 'scene', 'target': 'First'},
+            {'kind': 'scene', 'target': 'Second'},
+            {'kind': 'scene', 'target': 'Third'}])
+        sequence['steps'] = self.sequences.move_step(sequence['steps'], 2, 0)
+
+        self.assertEqual(
+            [step['target']
+             for step in self.sequences.filled_steps(sequence)],
+            ['Third', 'First', 'Second'])
 
     def test_a_half_filled_step_becomes_empty_rather_than_broken(self):
         """A slot that looks filled but cannot run is worse than a blank one."""
@@ -1170,8 +1249,8 @@ class TestSequences(unittest.TestCase):
 
         return gui.ControlPanel(app)
 
-    def test_all_ten_slots_come_across(self):
-        """Ten steps is what makes retyping a variant worth avoiding."""
+    def test_all_fifteen_slots_come_across(self):
+        """Fifteen steps is what makes retyping a variant worth avoiding."""
         app = self.app()
         app._sequences = [self._ignition()]
         panel = self.panel_for(app)
@@ -1180,7 +1259,7 @@ class TestSequences(unittest.TestCase):
 
         copied = app.sequence_by_name('Ignition Late')
         self.assertIsNotNone(copied)
-        self.assertEqual(len(copied['steps']), 10)
+        self.assertEqual(len(copied['steps']), 15)
         self.assertEqual(
             [self.sequences.describe_step(s) for s in copied['steps'][:3]],
             [self.sequences.describe_step(s)
@@ -1262,7 +1341,7 @@ class TestSequences(unittest.TestCase):
 
         self.assertIsNotNone(carried)
         self.assertEqual(carried['time'], '18:00')
-        self.assertEqual(len(carried['steps']), 10)
+        self.assertEqual(len(carried['steps']), 15)
         # Written out under the new name, so the old file is read only once.
         self.assertIsNotNone(utils.read_json('sequences.json', default=None))
 
@@ -1298,7 +1377,7 @@ class TestSequences(unittest.TestCase):
 
         saved = again.sequence_by_name('Wind Down')
         self.assertIsNotNone(saved)
-        self.assertEqual(len(saved['steps']), 10)
+        self.assertEqual(len(saved['steps']), 15)
         self.assertEqual(saved['steps'][0]['target'], 'Warshade')
 
     def test_saving_the_same_name_replaces_rather_than_duplicates(self):
@@ -1325,7 +1404,7 @@ class TestSequences(unittest.TestCase):
         self.assertEqual([r['name'] for r in app.sequences], ['Wind Down'])
 
     def test_a_fresh_install_has_no_sequences_rather_than_invented_ones(self):
-        """A starter sequence would be ten slots pointing at nobody's devices."""
+        """A starter sequence would be fifteen slots pointing at nobody's devices."""
         self.assertEqual(self.app().sequences, [])
 
     def test_run_by_name_reports_a_name_that_is_not_there(self):
@@ -6294,7 +6373,7 @@ class TestNoticingOutsideChanges(unittest.TestCase):
     def filled(self, app):
         """How many steps a sequence actually has something in.
 
-        Every sequence is padded to ten slots when it is read, so the raw
+        Every sequence is padded to fifteen slots when it is read, so the raw
         length says nothing -- and it is the filled count the web remote puts
         on the card.
         """
@@ -9017,7 +9096,7 @@ class TestControlPanel(unittest.TestCase):
             ['Scene: Warshade', 'WP9ABC#ALL: On', 'EE:FF: TV power'])
         self.assertEqual(steps[2]['kind'], 'command')
 
-    def test_the_editor_shows_all_ten_slots_including_the_empty_ones(self):
+    def test_the_editor_shows_all_fifteen_slots_including_the_empty_ones(self):
         import sequences as sequence_lib
 
         self._sequence_app()
@@ -9029,9 +9108,161 @@ class TestControlPanel(unittest.TestCase):
                                 ' 1.')
 
         slots = [l for l in labels if l[:3].strip().rstrip('.').isdigit()]
-        self.assertEqual(len(slots), 10)
+        self.assertEqual(len(slots), 15)
         self.assertIn('Scene: Warshade', slots[0])
         self.assertIn('Empty', slots[1])
+
+    def test_the_editor_offers_reordering_once_there_are_two_steps(self):
+        import sequences as sequence_lib
+
+        self._sequence_app()
+        one = sequence_lib.make_sequence('Wind Down', [
+            {'kind': 'scene', 'target': 'Warshade'}])
+        two = sequence_lib.make_sequence('Bedtime', [
+            {'kind': 'scene', 'target': 'Warshade'},
+            {'kind': 'power', 'driver': 'tuya', 'target': 'WP9ABC#ALL',
+             'action': 'off'}])
+        self.app._sequences = [one, two]
+        panel = self.panel()
+
+        alone = menu_row(lambda: panel.edit_sequence(one), 'Runs:')[1]
+        xbmcgui.reset()
+        pair = menu_row(lambda: panel.edit_sequence(two), 'Runs:')[1]
+
+        self.assertNotIn('Reorder steps...', alone)
+        self.assertIn('Reorder steps...', pair)
+
+    def test_a_step_can_be_sent_to_another_slot_from_the_editor(self):
+        """Three steps, and the third one wanted first."""
+        import sequences as sequence_lib
+
+        self._sequence_app()
+        sequence = sequence_lib.make_sequence('Bedtime', [
+            {'kind': 'scene', 'target': 'Warshade'},
+            {'kind': 'power', 'driver': 'tuya', 'target': 'WP9ABC#ALL',
+             'action': 'off'},
+            {'kind': 'command', 'driver': 'broadlink', 'target': 'EE:FF',
+             'action': 'TV power'}])
+        self.app._sequences = [sequence]
+        panel = self.panel()
+
+        # Reorder steps -> pick slot 3 -> move it to slot 1 -> back out.
+        rows = menu_row(lambda: panel.edit_sequence(sequence),
+                        'Reorder steps...')
+        xbmcgui.reset()
+        xbmcgui.SELECT_QUEUE.extend([2, 0, -1])
+        panel.reorder_steps(sequence)
+
+        self.assertEqual(
+            [sequence_lib.describe_step(step)
+             for step in sequence_lib.filled_steps(sequence)],
+            ['EE:FF: TV power', 'Scene: Warshade', 'WP9ABC#ALL: Off'])
+        self.assertEqual(rows[1].count('Reorder steps...'), 1)
+
+    def test_a_reordered_sequence_is_saved_not_just_shown(self):
+        """It has to survive the menu closing, or it did not happen."""
+        import sequences as sequence_lib
+
+        self._sequence_app()
+        sequence = sequence_lib.make_sequence('Bedtime', [
+            {'kind': 'scene', 'target': 'Warshade'},
+            {'kind': 'scene', 'target': 'Second'}])
+        self.app._sequences = [sequence]
+
+        xbmcgui.SELECT_QUEUE.extend([1, 0, -1])
+        self.panel().reorder_steps(sequence)
+
+        saved = self.app.sequence_by_name('Bedtime')['steps']
+        self.assertEqual([step['target'] for step in saved[:2]],
+                         ['Second', 'Warshade'])
+
+    def test_the_move_screen_marks_the_step_being_moved(self):
+        """Picking a destination among fifteen identical-looking rows needs
+        the one you are holding to be obvious."""
+        import sequences as sequence_lib
+
+        self._sequence_app()
+        sequence = sequence_lib.make_sequence('Bedtime', [
+            {'kind': 'scene', 'target': 'Warshade'},
+            {'kind': 'scene', 'target': 'Second'}])
+        self.app._sequences = [sequence]
+
+        xbmcgui.SELECT_QUEUE.extend([-1])
+        self.panel()._move_step(sequence, 1)
+        labels = xbmcgui.SELECT_CALLS[-1][1]
+
+        self.assertIn('moving this', labels[1])
+        self.assertNotIn('moving this', labels[0])
+        self.assertEqual(len(labels), 15)
+
+    def test_backing_out_of_the_move_screen_changes_nothing(self):
+        import sequences as sequence_lib
+
+        self._sequence_app()
+        sequence = sequence_lib.make_sequence('Bedtime', [
+            {'kind': 'scene', 'target': 'Warshade'},
+            {'kind': 'scene', 'target': 'Second'}])
+        self.app._sequences = [sequence]
+
+        xbmcgui.SELECT_QUEUE.extend([-1])
+        self.panel()._move_step(sequence, 0)
+
+        self.assertEqual([step['target'] for step in sequence['steps'][:2]],
+                         ['Warshade', 'Second'])
+
+    def test_an_empty_slot_cannot_be_moved(self):
+        """Moving a blank somewhere else only renumbers the blanks."""
+        import sequences as sequence_lib
+
+        self._sequence_app()
+        sequence = sequence_lib.make_sequence('Bedtime', [
+            {'kind': 'scene', 'target': 'Warshade'},
+            {'kind': 'scene', 'target': 'Second'}])
+        self.app._sequences = [sequence]
+
+        # Slot 5 is empty. Offered the reorder screen, it is refused and the
+        # screen comes back rather than the sequence being rearranged.
+        xbmcgui.SELECT_QUEUE.extend([4, -1])
+        self.panel().reorder_steps(sequence)
+
+        self.assertEqual([step['target'] for step in sequence['steps'][:2]],
+                         ['Warshade', 'Second'])
+
+    def test_the_step_menu_offers_a_move_only_on_a_filled_slot(self):
+        import sequences as sequence_lib
+
+        self._sequence_app()
+        sequence = sequence_lib.make_sequence('Bedtime', [
+            {'kind': 'scene', 'target': 'Warshade'},
+            {'kind': 'scene', 'target': 'Second'}])
+        self.app._sequences = [sequence]
+        panel = self.panel()
+
+        filled = menu_row(lambda: panel.edit_step(sequence, 0), 'Scene')[1]
+        xbmcgui.reset()
+        blank = menu_row(lambda: panel.edit_step(sequence, 6), 'Scene')[1]
+
+        self.assertIn('Move this step...', filled)
+        self.assertNotIn('Move this step...', blank)
+
+    def test_moving_a_step_from_its_own_menu_reorders_the_sequence(self):
+        import sequences as sequence_lib
+
+        self._sequence_app()
+        sequence = sequence_lib.make_sequence('Bedtime', [
+            {'kind': 'scene', 'target': 'Warshade'},
+            {'kind': 'scene', 'target': 'Second'},
+            {'kind': 'scene', 'target': 'Third'}])
+        self.app._sequences = [sequence]
+        panel = self.panel()
+
+        kinds = menu_row(lambda: panel.edit_step(sequence, 0), 'Scene')[1]
+        xbmcgui.reset()
+        xbmcgui.SELECT_QUEUE.extend([kinds.index('Move this step...'), 2])
+        panel.edit_step(sequence, 0)
+
+        self.assertEqual([step['target'] for step in sequence['steps'][:3]],
+                         ['Second', 'Third', 'Warshade'])
 
     def test_clearing_a_step_empties_that_slot_and_no_other(self):
         import sequences as sequence_lib

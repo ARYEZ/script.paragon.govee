@@ -1,3 +1,20 @@
+2.36.1 (Aryez - 2026)
+    Changed: the mirrored copy of Paragon TV's phase times moves with it.
+        Alpha's phases 3 to 6 run an hour earlier there now, so a sequence
+        following one of those phases has to move with them or fire at an
+        hour nobody set.
+    In this add-on's numbering that is phase 2 (04:40 to 03:40), phase 3
+        (05:00 to 04:00), phase 4 (05:05 to 04:05) and phase 5 (05:45 to
+        04:45). Paragon TV's settings screen counts its unnumbered initial
+        shutdown as phase 1, which is why the two disagree by one.
+    Nothing reads across at run time. Paragon TV holds its times in its own
+        source and not in its settings, so there is nothing to read and this
+        table is a copy -- which is exactly why it has to be changed in the
+        same breath.
+    The staleness check cannot catch this one. It compares against the
+        disabled time fields on Paragon TV's settings page, and those hold
+        only the anchor and the initial shutdown -- neither of which moved.
+
 2.36.0 (Aryez - 2026)
     Sequences hold fifteen steps instead of ten. Ten ran out: a sequence that
         wakes a television, waits for it to come up, tunes it and then settles

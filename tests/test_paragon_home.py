@@ -1728,8 +1728,8 @@ class TestReracks(unittest.TestCase):
 
     def install_tv(self, **settings):
         # Paragon TV computes its times from a hardcoded anchor and offsets.
-        # Alpha anchors at 03:00, so its phase 2 is 04:40 and its phase 5
-        # is 05:45.
+        # Alpha anchors at 03:00, so its phase 2 is 03:40 and its phase 5
+        # is 04:45.
         base = {'EnablePresetSystem': 'true', 'SaturdayPreset': '1'}
         base.update(settings)
         xbmcaddon.install('script.paragontv', base)
@@ -1745,10 +1745,10 @@ class TestReracks(unittest.TestCase):
         self.install_tv()
         app = self.with_alpha(follow_tv=True)
 
-        # Its own phase 2 was 07:00; Paragon TV's Alpha phase 2 is 04:40.
+        # Its own phase 2 was 07:00; Paragon TV's Alpha phase 2 is 03:40.
         self.assertEqual(app.run_due_phases(now=self.SATURDAY), [])
         self.assertEqual(
-            app.run_due_phases(now=self.SATURDAY.replace(hour=4, minute=40)),
+            app.run_due_phases(now=self.SATURDAY.replace(hour=3, minute=40)),
             ['Alpha phase 2'])
 
     def test_a_phase_paragon_tv_has_no_time_for_does_not_run(self):
@@ -1781,9 +1781,9 @@ class TestReracks(unittest.TestCase):
         app._week = ['Alpha'] * 7
         app._phase_state = set()
 
-        # Paragon TV wakes at its own Alpha phase 5 of 05:45. Not ours.
+        # Paragon TV wakes at its own Alpha phase 5 of 04:45. Not ours.
         self.assertEqual(
-            app.run_due_phases(now=self.SATURDAY.replace(hour=5, minute=45)),
+            app.run_due_phases(now=self.SATURDAY.replace(hour=4, minute=45)),
             [])
         self.assertEqual(
             app.run_due_phases(now=self.SATURDAY.replace(hour=6, minute=0)),
@@ -1794,7 +1794,7 @@ class TestReracks(unittest.TestCase):
             ['Alpha phase 6'])
 
     def test_a_phase_with_its_own_time_ignores_paragon_tv_entirely(self):
-        self.install_tv()          # Alpha phase 2 is 09:00 there
+        self.install_tv()          # Alpha phase 2 is 03:40 there
         app = self.with_alpha(follow_tv=False)   # and 07:00 here
 
         self.assertEqual(app.run_due_phases(now=self.SATURDAY),
@@ -1988,11 +1988,11 @@ class TestParagonTV(unittest.TestCase):
                              'accepted %r as a preset index' % value)
 
     def test_phase_times_are_the_anchor_plus_its_offsets(self):
-        """Alpha anchors at 03:00 and its first offset is 100 minutes."""
+        """Alpha anchors at 03:00 and its first offset is 40 minutes."""
         tv = self.install_tv()
 
         self.assertEqual(tv.phase_time('Alpha', 1), '03:00')
-        self.assertEqual(tv.phase_time('Alpha', 2), '04:40')
+        self.assertEqual(tv.phase_time('Alpha', 2), '03:40')
         self.assertEqual(tv.phase_time('Alpha', 9), '17:45')
 
     def test_the_computed_times_match_paragon_tvs_own_log(self):
@@ -2008,7 +2008,7 @@ class TestParagonTV(unittest.TestCase):
         """Paragon TV's own settings fields are disabled copies, not sources."""
         tv = self.install_tv(AlphaPhase2Time='23:59')
 
-        self.assertEqual(tv.phase_time('Alpha', 2), '04:40')
+        self.assertEqual(tv.phase_time('Alpha', 2), '03:40')
 
     def test_an_offset_crossing_midnight_wraps(self):
         """Alpha anchors at 03:00 and its last offset is 885 minutes."""
@@ -2043,17 +2043,17 @@ class TestParagonTV(unittest.TestCase):
         self.assertEqual(tv.week(), ['' for _ in range(7)])
         self.assertIn('Satellite Mode', tv.report('Alpha', self.SATURDAY))
         # Its phase times are still knowable, because they are not per-box.
-        self.assertEqual(tv.phase_time('Alpha', 2), '04:40')
+        self.assertEqual(tv.phase_time('Alpha', 2), '03:40')
 
     def test_a_disagreeing_reference_time_is_reported_as_drift(self):
         """Paragon TV keeps disabled copies; when one differs, we are stale."""
-        tv = self.install_tv(AlphaPhase2Time='04:40')
+        tv = self.install_tv(AlphaPhase2Time='03:40')
         self.assertNotIn('no longer agree', tv.report('Alpha', self.SATURDAY))
 
         tv = self.install_tv(AlphaPhase2Time='06:00')
         text = tv.report('Alpha', self.SATURDAY)
         self.assertIn('no longer agree', text)
-        self.assertIn('Paragon TV says 06:00, this says 04:40', text)
+        self.assertIn('Paragon TV says 06:00, this says 03:40', text)
 
     def test_a_phase_number_out_of_range_has_no_time(self):
         tv = self.install_tv()
@@ -2068,7 +2068,7 @@ class TestParagonTV(unittest.TestCase):
 
         self.assertIn('Alpha', text)
         self.assertIn('03:00', text)          # its anchor
-        self.assertIn('04:40', text)          # anchor + its first offset
+        self.assertIn('03:40', text)          # anchor + its first offset
         self.assertIn('maintenance', text)
 
     def test_the_status_says_when_there_is_nothing_to_say(self):
@@ -2101,7 +2101,7 @@ class TestParagonTV(unittest.TestCase):
 
         # 4. On, with a preset it does know.
         text = tv.report('Alpha', self.SATURDAY)
-        self.assertIn('04:40', text)
+        self.assertIn('03:40', text)
         self.assertNotIn('None at all', text)
 
     def _paragon_tv_declaring(self, settings_xml, **settings):
@@ -2206,8 +2206,8 @@ class TestParagonTV(unittest.TestCase):
         app = self.app()
         app._sequences = [self.following(2)]
 
-        # Saturday is Alpha, whose phase 2 is 03:00 + 100 minutes.
-        at_alpha_two = self.SATURDAY.replace(hour=4, minute=40)
+        # Saturday is Alpha, whose phase 2 is 03:00 + 40 minutes.
+        at_alpha_two = self.SATURDAY.replace(hour=3, minute=40)
 
         self.assertEqual(app.run_due_sequences(now=at_alpha_two),
                          ['Curtain Up'])
@@ -2228,9 +2228,9 @@ class TestParagonTV(unittest.TestCase):
         app._sequences = [self.following(2)]
 
         # Thursday is Sigma, whose phase 2 is its anchor of 05:35 rather
-        # than Alpha's 04:40.
+        # than Alpha's 03:40.
         self.assertEqual(
-            app.run_due_sequences(now=self.THURSDAY.replace(hour=4,
+            app.run_due_sequences(now=self.THURSDAY.replace(hour=3,
                                                             minute=40)), [])
         self.assertEqual(
             app.run_due_sequences(now=self.THURSDAY.replace(hour=5,
@@ -2297,14 +2297,14 @@ class TestParagonTV(unittest.TestCase):
         tv = self.install_tv()
         app = self.app()
         app._sequences = [self.following(2)]
-        app.run_due_sequences(now=self.SATURDAY.replace(hour=4, minute=40))
+        app.run_due_sequences(now=self.SATURDAY.replace(hour=3, minute=40))
 
         self.addCleanup(tv.ANCHOR_TIMES.__setitem__, 'Alpha',
                         tv.ANCHOR_TIMES['Alpha'])
-        tv.ANCHOR_TIMES['Alpha'] = '07:20'          # phase 2 becomes 09:00
+        tv.ANCHOR_TIMES['Alpha'] = '07:20'          # phase 2 becomes 08:00
 
         self.assertEqual(
-            app.run_due_sequences(now=self.SATURDAY.replace(hour=9)),
+            app.run_due_sequences(now=self.SATURDAY.replace(hour=8)),
             ['Curtain Up'])
 
     def test_following_a_phase_reads_as_such(self):

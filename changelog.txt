@@ -1,3 +1,23 @@
+2.36.3 (Aryez - 2026)
+    Changed: the mirrored table follows Sigma's early phases. Its initial
+        shutdown is 01:30, its first startup 04:25 and its first shutdown
+        04:35; from the first wake at 04:45 onward it still matches Alpha.
+    Four tests replace the one that said Sigma keeps Alpha's clock exactly,
+        which stopped being true: the two now share the day only from the
+        first wake, and the reason they part is worth stating rather than
+        just recording -- a satellite that starts before its master pushes
+        comes up on yesterday's channels.
+    One of them pins the negative offset. Sigma's push is measured as twenty
+        minutes before the startup it hangs off, the first negative offset in
+        these tables, and the arithmetic here is a modulo where Paragon TV's
+        is a timedelta. They agree, and now something says so.
+    Another checks no two phases of a preset share a minute, since Paragon TV
+        checks its phases down an elif chain and the second of a pair would
+        never run. It found that Omicron, Theta and Lambda each have their
+        first shutdown and their push at 06:25. Nothing is lost -- a
+        satellite's push does nothing anyway, and that is the one the chain
+        swallows -- so the test excludes it and says why.
+
 2.36.2 (Aryez - 2026)
     Changed: the mirrored copy follows Paragon TV again. Sigma now keeps
         Alpha's clock exactly there, so a sequence hung off a phase runs at

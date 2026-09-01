@@ -2022,20 +2022,60 @@ class TestParagonTV(unittest.TestCase):
         tv = self.install_tv()
 
         self.assertEqual(tv.phase_time('Sigma', 1), '')
-        self.assertEqual(tv.phase_time('Sigma', 2), '03:40')
-        self.assertEqual(tv.phase_time('Sigma', 3), '04:00')
+        self.assertEqual(tv.phase_time('Sigma', 2), '04:25')
+        self.assertEqual(tv.phase_time('Sigma', 3), '04:35')
 
-    def test_sigma_keeps_alphas_clock_exactly(self):
-        """A satellite day and its master day are the same day, phase for
-        phase. Only the maintenance phase is missing, which is master-only."""
+    def test_sigma_keeps_alphas_clock_from_the_first_wake_on(self):
+        """Master and satellite share the whole viewing day. They part only
+        over the early phases, where the two boxes have different work."""
         tv = self.install_tv()
 
-        self.assertEqual(tv.shutdown_time('Sigma'), tv.shutdown_time('Alpha'))
-        self.assertEqual(tv.phase_time('Sigma', 1), '')
-        for phase in range(2, 10):
+        self.assertEqual(tv.phase_time('Sigma', 1), '')      # no maintenance
+        for phase in range(5, 10):
             self.assertEqual(
                 tv.phase_time('Sigma', phase), tv.phase_time('Alpha', phase),
                 'phase %d differs between Alpha and its satellite' % phase)
+
+    def test_sigma_starts_up_after_its_master_has_pushed(self):
+        """The reason the two part early. A satellite that starts before the
+        push comes up on yesterday's channels and goes down again before
+        today's have arrived."""
+        tv = self.install_tv()
+
+        self.assertGreater(tv.phase_time('Sigma', 2),   # its first startup
+                           tv.phase_time('Alpha', 4))   # the master's push
+
+    def test_a_negative_offset_runs_before_its_anchor(self):
+        """Sigma's push sits twenty minutes before the startup it is measured
+        from. A satellite never pushes -- the phase is inert there and the
+        time is carried only so the phase has one -- but the arithmetic still
+        has to hold, and every other offset in these tables is positive."""
+        tv = self.install_tv()
+
+        self.assertEqual(tv.PHASE_OFFSETS['Sigma'][1], -20)
+        self.assertEqual(tv.phase_time('Sigma', 4), '04:05')
+        self.assertLess(tv.phase_time('Sigma', 4), tv.phase_time('Sigma', 2))
+
+    def test_no_two_live_phases_of_a_preset_share_a_time(self):
+        """Paragon TV checks its phases down an elif chain, so two phases at
+        the same minute means the second one never runs at all.
+
+        A satellite's push phase is excluded, because it does nothing on a
+        satellite -- it returns as soon as it sees the preset is one. That is
+        the only reason Omicron, Theta and Lambda get away with sharing 06:25
+        between their first shutdown and their push: the phase the chain
+        swallows is the one that was never going to do anything.
+        """
+        tv = self.install_tv()
+
+        for preset in tv.PRESET_NAMES:
+            live = [p for p in range(1, 10)
+                    if not (p == 4 and preset in tv.SATELLITE_PRESETS)]
+            times = [t for t in [tv.shutdown_time(preset)]
+                     + [tv.phase_time(preset, p) for p in live] if t]
+            self.assertEqual(sorted(times), sorted(set(times)),
+                             '%s has two live phases at the same minute'
+                             % preset)
 
     def test_zeta_is_the_tenth_preset(self):
         """Paragon TV grew one, and a day set to it must find a rerack."""

@@ -2022,8 +2022,20 @@ class TestParagonTV(unittest.TestCase):
         tv = self.install_tv()
 
         self.assertEqual(tv.phase_time('Sigma', 1), '')
-        self.assertEqual(tv.phase_time('Sigma', 2), '05:35')
-        self.assertEqual(tv.phase_time('Sigma', 3), '05:40')
+        self.assertEqual(tv.phase_time('Sigma', 2), '03:40')
+        self.assertEqual(tv.phase_time('Sigma', 3), '04:00')
+
+    def test_sigma_keeps_alphas_clock_exactly(self):
+        """A satellite day and its master day are the same day, phase for
+        phase. Only the maintenance phase is missing, which is master-only."""
+        tv = self.install_tv()
+
+        self.assertEqual(tv.shutdown_time('Sigma'), tv.shutdown_time('Alpha'))
+        self.assertEqual(tv.phase_time('Sigma', 1), '')
+        for phase in range(2, 10):
+            self.assertEqual(
+                tv.phase_time('Sigma', phase), tv.phase_time('Alpha', phase),
+                'phase %d differs between Alpha and its satellite' % phase)
 
     def test_zeta_is_the_tenth_preset(self):
         """Paragon TV grew one, and a day set to it must find a rerack."""
@@ -2223,18 +2235,21 @@ class TestParagonTV(unittest.TestCase):
 
     def test_it_follows_today_preset_rather_than_a_fixed_time(self):
         """The same sequence runs at a different hour on a different day."""
-        self.install_tv()
+        # Omicron rather than the fixture's Sigma: Sigma keeps Alpha's clock
+        # exactly now, so it can no longer show two days running at two
+        # different hours. Omicron anchors at 06:15 and still can.
+        self.install_tv(ThursdayPreset='7')
         app = self.app()
         app._sequences = [self.following(2)]
 
-        # Thursday is Sigma, whose phase 2 is its anchor of 05:35 rather
+        # Thursday is Omicron, whose phase 2 is its anchor of 06:15 rather
         # than Alpha's 03:40.
         self.assertEqual(
             app.run_due_sequences(now=self.THURSDAY.replace(hour=3,
                                                             minute=40)), [])
         self.assertEqual(
-            app.run_due_sequences(now=self.THURSDAY.replace(hour=5,
-                                                            minute=35)),
+            app.run_due_sequences(now=self.THURSDAY.replace(hour=6,
+                                                            minute=15)),
             ['Curtain Up'])
 
     def test_it_does_not_run_on_a_day_with_no_preset(self):

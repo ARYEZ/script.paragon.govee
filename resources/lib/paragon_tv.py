@@ -61,7 +61,7 @@ PHASE_OFFSETS = {
     'Delta':   (40, 60, 65, 105, 435, 525, 735, 765),
     'Epsilon': (40, 60, 65, 105, 435, 525, 675, 705),
     'Gamma':   (30, 50, 60, 65, 385, 475, 685, 725),
-    'Sigma':   (5, 5, 10, 100, 640, 700, 730),
+    'Sigma':   (20, 25, 65, 215, 755, 815, 845),
     'Omicron': (10, 10, 30, 180, 735, 780, 810),
     'Theta':   (10, 10, 30, 360, 450, 660, 690),
     'Lambda':  (10, 10, 30, 360, 450, 600, 630),
@@ -70,7 +70,7 @@ PHASE_OFFSETS = {
 
 ANCHOR_TIMES = {
     'Alpha': '03:00', 'Omega': '05:00', 'Delta': '05:00',
-    'Epsilon': '05:00', 'Gamma': '05:50', 'Sigma': '05:35',
+    'Epsilon': '05:00', 'Gamma': '05:50', 'Sigma': '03:40',
     'Omicron': '06:15', 'Theta': '06:15', 'Lambda': '06:15',
     'Zeta': '06:20',
 }
@@ -78,7 +78,7 @@ ANCHOR_TIMES = {
 # Paragon TV's own initial shutdown, which sits outside the numbered phases.
 SHUTDOWN_TIMES = {
     'Alpha': '00:30', 'Omega': '01:30', 'Delta': '03:30',
-    'Epsilon': '03:30', 'Gamma': '03:30', 'Sigma': '03:30',
+    'Epsilon': '03:30', 'Gamma': '03:30', 'Sigma': '00:30',
     'Omicron': '03:30', 'Theta': '04:30', 'Lambda': '04:30',
     'Zeta': '03:30',
 }

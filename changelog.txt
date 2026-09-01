@@ -1,3 +1,18 @@
+2.36.2 (Aryez - 2026)
+    Changed: the mirrored copy follows Paragon TV again. Sigma now keeps
+        Alpha's clock exactly there, so a sequence hung off a phase runs at
+        the same minute whether the day is a master day or a satellite one.
+    Sigma's anchor moved 05:35 to 03:40 and its initial shutdown 03:30 to
+        00:30, with its offsets rewritten from the new anchor.
+    A test pins the two together now, phase for phase, rather than trusting
+        the numbers to have been copied correctly. It is the only guard
+        against these tables drifting from Paragon TV's, since the staleness
+        report can only see the anchor and the initial shutdown.
+    One test had to change its preset. It proved that the same sequence runs
+        at a different hour on a different day, and used Sigma to do it --
+        which no longer proves anything now that Sigma and Alpha agree. It
+        uses Omicron, anchored at 06:15, instead.
+
 2.36.1 (Aryez - 2026)
     Changed: the mirrored copy of Paragon TV's phase times moves with it.
         Alpha's phases 3 to 6 run an hour earlier there now, so a sequence

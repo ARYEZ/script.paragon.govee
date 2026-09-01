@@ -1,3 +1,25 @@
+2.36.4 (Aryez - 2026)
+    Changed: the mirrored table drops the push phase from satellites, as
+        Paragon TV has. A sequence hung off phase 4 now simply never comes
+        round on a satellite day, which is the honest answer -- better than a
+        time that arrives and does nothing.
+    NO_PHASE_ONE existed for exactly this idea and was never used. It is now
+        MASTER_ONLY_PHASES, holding both phases a satellite does not have,
+        with the phases its offsets fill derived from it rather than written
+        out twice.
+    Sigma's negative offset is gone with the phase that needed it, so the
+        test for it goes too. Three tests replace it: that no satellite
+        anywhere has either master-only phase, that dropping the push left
+        every other satellite phase on its own minute, and Zeta's whole day
+        pinned as the worked example.
+    The collision test can be strict again. It was excluding satellite pushes
+        because Omicron, Theta and Lambda shared 06:25 between their first
+        shutdown and their push; that collision left with the phase.
+    One of the new tests names phases 1 and 4 rather than reading
+        MASTER_ONLY_PHASES. Asking the code which phases to check agrees with
+        the code by construction -- it passed against a deliberately broken
+        build until the constant was taken out of it.
+
 2.36.3 (Aryez - 2026)
     Changed: the mirrored table follows Sigma's early phases. Its initial
         shutdown is 01:30, its first startup 04:25 and its first shutdown

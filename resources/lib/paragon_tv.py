@@ -61,11 +61,11 @@ PHASE_OFFSETS = {
     'Delta':   (40, 60, 65, 105, 435, 525, 735, 765),
     'Epsilon': (40, 60, 65, 105, 435, 525, 675, 705),
     'Gamma':   (30, 50, 60, 65, 385, 475, 685, 725),
-    'Sigma':   (10, -20, 20, 170, 710, 770, 800),
-    'Omicron': (10, 10, 30, 180, 735, 780, 810),
-    'Theta':   (10, 10, 30, 360, 450, 660, 690),
-    'Lambda':  (10, 10, 30, 360, 450, 600, 630),
-    'Zeta':    (20, 30, 35, 355, 445, 655, 695),
+    'Sigma':   (10, 20, 170, 710, 770, 800),
+    'Omicron': (10, 30, 180, 735, 780, 810),
+    'Theta':   (10, 30, 360, 450, 660, 690),
+    'Lambda':  (10, 30, 360, 450, 600, 630),
+    'Zeta':    (20, 35, 355, 445, 655, 695),
 }
 
 ANCHOR_TIMES = {
@@ -103,9 +103,16 @@ PHASE_LABELS = (
     'wake and tune',
 )
 
-# The satellite presets carry no maintenance phase at all, so a rerack hung
-# off phase 1 will simply never come round on those days.
-NO_PHASE_ONE = SATELLITE_PRESETS
+# The two phases a satellite does not have. Maintenance is the master's
+# work, done once for everyone; the push is by definition the thing a master
+# does TO a satellite. A rerack hung off either will simply never come round
+# on a satellite day, which is the honest answer -- better than a time that
+# arrives and does nothing.
+MASTER_ONLY_PHASES = (1, 4)
+
+# Which phases a satellite's offsets fill, being the rest of them.
+SATELLITE_PHASES = tuple(phase for phase in range(2, PHASE_COUNT + 1)
+                         if phase not in MASTER_ONLY_PHASES)
 
 
 def _addon():
@@ -185,8 +192,9 @@ def compute_phase_times(preset):
     """Every phase time for a preset, worked out as Paragon TV works it out.
 
     One anchor plus offsets in minutes. A master anchors at phase 1 and its
-    eight offsets fill phases 2 to 9; a satellite anchors at phase 2 and its
-    seven fill 3 to 9, having no maintenance phase at all.
+    eight offsets fill phases 2 to 9. A satellite anchors at phase 2 and its
+    six fill phases 3 and 5 to 9, having neither the maintenance phase nor
+    the push -- both of which belong to the master alone.
     """
     anchor = ANCHOR_TIMES.get(preset)
     offsets = PHASE_OFFSETS.get(preset)
@@ -199,14 +207,17 @@ def compute_phase_times(preset):
         return {}
     start = hour * 60 + minute
 
-    first = 2 if preset in SATELLITE_PRESETS else 1
-    times = {first: anchor}
+    satellite = preset in SATELLITE_PRESETS
+    # A satellite's offsets skip the push; a master's run straight through.
+    fills = SATELLITE_PHASES[1:] if satellite else tuple(range(2, PHASE_COUNT + 1))
+
+    times = {SATELLITE_PHASES[0] if satellite else 1: anchor}
     for index, offset in enumerate(offsets):
         # Wrapped rather than allowed past 24:00: an offset that crosses
         # midnight is a time the following morning, which is what Paragon TV
         # gets from adding a timedelta to a datetime.
         minutes = (start + offset) % (24 * 60)
-        times[first + 1 + index] = '%02d:%02d' % (minutes // 60, minutes % 60)
+        times[fills[index]] = '%02d:%02d' % (minutes // 60, minutes % 60)
     return times
 
 

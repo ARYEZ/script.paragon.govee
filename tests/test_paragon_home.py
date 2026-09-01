@@ -2017,13 +2017,47 @@ class TestParagonTV(unittest.TestCase):
         self.assertEqual(tv.phase_time('Alpha', 9), '17:45')
         self.assertEqual(tv.compute_phase_times('Omega')[9], '19:45')
 
-    def test_a_satellite_preset_has_no_maintenance_phase(self):
-        """A satellite anchors at phase 2 and has no phase 1 at all."""
+    def test_a_satellite_has_neither_a_maintenance_phase_nor_a_push(self):
+        """Both belong to the master alone, so neither has a time at all.
+
+        Maintenance is work done once for everyone; the push is by definition
+        what a master does TO a satellite. A satellite anchors at phase 2 and
+        its offsets step over phase 4.
+        """
         tv = self.install_tv()
 
         self.assertEqual(tv.phase_time('Sigma', 1), '')
         self.assertEqual(tv.phase_time('Sigma', 2), '04:25')
         self.assertEqual(tv.phase_time('Sigma', 3), '04:35')
+        self.assertEqual(tv.phase_time('Sigma', 4), '')
+        self.assertEqual(tv.phase_time('Sigma', 5), '04:45')
+
+    def test_no_satellite_anywhere_has_a_push_or_a_maintenance_phase(self):
+        """The masters keep both, so this is a property of being a satellite
+        rather than something true of Sigma by accident.
+
+        Phases 1 and 4 are named here rather than read from
+        MASTER_ONLY_PHASES. A test that asks the code which phases to check
+        agrees with the code by construction and can never disagree with it.
+        """
+        tv = self.install_tv()
+
+        for preset in tv.PRESET_NAMES:
+            satellite = preset in tv.SATELLITE_PRESETS
+            for phase in (1, 4):                 # maintenance, push
+                self.assertEqual(
+                    not tv.phase_time(preset, phase), satellite,
+                    '%s phase %d' % (preset, phase))
+
+    def test_dropping_the_push_left_every_other_satellite_phase_alone(self):
+        """The offsets shifted along one when the push came out of them, so
+        the thing to check is that nothing else moved with it."""
+        tv = self.install_tv()
+
+        self.assertEqual(
+            tv.compute_phase_times('Zeta'),
+            {2: '06:20', 3: '06:40', 5: '06:55', 6: '12:15', 7: '13:45',
+             8: '17:15', 9: '17:55'})
 
     def test_sigma_keeps_alphas_clock_from_the_first_wake_on(self):
         """Master and satellite share the whole viewing day. They part only
@@ -2045,36 +2079,22 @@ class TestParagonTV(unittest.TestCase):
         self.assertGreater(tv.phase_time('Sigma', 2),   # its first startup
                            tv.phase_time('Alpha', 4))   # the master's push
 
-    def test_a_negative_offset_runs_before_its_anchor(self):
-        """Sigma's push sits twenty minutes before the startup it is measured
-        from. A satellite never pushes -- the phase is inert there and the
-        time is carried only so the phase has one -- but the arithmetic still
-        has to hold, and every other offset in these tables is positive."""
-        tv = self.install_tv()
-
-        self.assertEqual(tv.PHASE_OFFSETS['Sigma'][1], -20)
-        self.assertEqual(tv.phase_time('Sigma', 4), '04:05')
-        self.assertLess(tv.phase_time('Sigma', 4), tv.phase_time('Sigma', 2))
-
-    def test_no_two_live_phases_of_a_preset_share_a_time(self):
+    def test_no_two_phases_of_a_preset_share_a_time(self):
         """Paragon TV checks its phases down an elif chain, so two phases at
         the same minute means the second one never runs at all.
 
-        A satellite's push phase is excluded, because it does nothing on a
-        satellite -- it returns as soon as it sees the preset is one. That is
-        the only reason Omicron, Theta and Lambda get away with sharing 06:25
-        between their first shutdown and their push: the phase the chain
-        swallows is the one that was never going to do anything.
+        Omicron, Theta and Lambda used to share 06:25 between their first
+        shutdown and their push. Taking the push off satellites altogether
+        took that with it, so this can be strict about every phase that has
+        a time at all.
         """
         tv = self.install_tv()
 
         for preset in tv.PRESET_NAMES:
-            live = [p for p in range(1, 10)
-                    if not (p == 4 and preset in tv.SATELLITE_PRESETS)]
             times = [t for t in [tv.shutdown_time(preset)]
-                     + [tv.phase_time(preset, p) for p in live] if t]
+                     + [tv.phase_time(preset, p) for p in range(1, 10)] if t]
             self.assertEqual(sorted(times), sorted(set(times)),
-                             '%s has two live phases at the same minute'
+                             '%s has two phases at the same minute'
                              % preset)
 
     def test_zeta_is_the_tenth_preset(self):

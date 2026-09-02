@@ -24,6 +24,11 @@ Fields:
                 1-100, or None. When set, lightbars use this instead of
                 `brightness`. A lightbar throws far more light than a bulb
                 at the same percentage, so one figure rarely suits both.
+    backlight_brightness
+                1-100, or None. The same idea for a backlight, which has the
+                opposite problem: a strip washing a wall behind a screen is
+                either glare or nothing at the level that suits the bulbs
+                lighting the room.
 """
 
 import random
@@ -51,6 +56,13 @@ SCENE_FILE = 'scenes.json'
 # against Device.model. A device whose name contains "lightbar" also counts,
 # which covers a model not listed here without needing a code change.
 LIGHTBAR_MODELS = ('H610A',)
+
+# A backlight is matched on its name alone. There is no SKU list to go with
+# it because nothing so far has needed one -- what makes a light a backlight
+# is where it is pointed, not what it is, and a bulb behind a screen is a
+# backlight while the identical bulb in a lamp is not. The name is the only
+# place that fact is recorded.
+BACKLIGHT_WORD = 'BACKLIGHT'
 
 # How far apart the RGB channels must be before a reading counts as a real
 # colour rather than a shade of white. Govee bulbs report white either as
@@ -206,12 +218,14 @@ def rotate_assignment(assignment, color_count):
 
 def make_scene(name, power=POWER_ON, brightness=None, mode=MODE_NONE,
                color=None, kelvin=None, targets=None, devices=None,
-               colors=None, cycle=0, actions=None, bar_brightness=None):
+               colors=None, cycle=0, actions=None, bar_brightness=None,
+               backlight_brightness=None):
     return {
         'name': name,
         'power': power,
         'brightness': brightness,
         'bar_brightness': bar_brightness,
+        'backlight_brightness': backlight_brightness,
         'mode': mode,
         'color': list(color) if color else [255, 255, 255],
         'kelvin': kelvin or 2700,
@@ -261,12 +275,37 @@ def _normalise_settings(raw, fallback_power=POWER_ON):
             'color': color, 'kelvin': kelvin}
 
 
+def _normalise_level(value):
+    """A brightness percentage, or None when it is absent or unreadable.
+
+    Shared by the lightbar and backlight figures, which are clamped the same
+    way and were about to be clamped twice.
+    """
+    if value is None:
+        return None
+    try:
+        return max(1, min(100, int(value)))
+    except (TypeError, ValueError):
+        return None
+
+
 def is_lightbar(device):
     """Whether `device` should take a scene's separate lightbar brightness."""
     model = (getattr(device, 'model', '') or '').strip().upper()
     if model in LIGHTBAR_MODELS:
         return True
     return 'LIGHTBAR' in (getattr(device, 'name', '') or '').upper()
+
+
+def is_backlight(device):
+    """Whether `device` should take a scene's separate backlight brightness.
+
+    By name only, and deliberately: see BACKLIGHT_WORD. Note that "Lightbar"
+    does not contain "Backlight", so the two never collide by accident on a
+    name -- but a backlight built from a lightbar would match both, and
+    apply_scene settles that in the backlight's favour.
+    """
+    return BACKLIGHT_WORD in (getattr(device, 'name', '') or '').upper()
 
 
 def settings_for(scene, device_id):
@@ -540,12 +579,8 @@ def normalise(scene):
             if item is not None:
                 actions.append(item)
 
-    bar_brightness = scene.get('bar_brightness')
-    if bar_brightness is not None:
-        try:
-            bar_brightness = max(1, min(100, int(bar_brightness)))
-        except (TypeError, ValueError):
-            bar_brightness = None
+    bar_brightness = _normalise_level(scene.get('bar_brightness'))
+    backlight_brightness = _normalise_level(scene.get('backlight_brightness'))
 
     try:
         cycle = max(0, int(scene.get('cycle') or 0))
@@ -562,6 +597,7 @@ def normalise(scene):
         'power': settings['power'],
         'brightness': settings['brightness'],
         'bar_brightness': bar_brightness,
+        'backlight_brightness': backlight_brightness,
         'mode': mode,
         'color': settings['color'],
         'kelvin': settings['kelvin'],
@@ -620,6 +656,8 @@ def describe(scene):
         bits.append('%d%%' % scene['brightness'])
     if scene.get('bar_brightness') is not None:
         bits.append('bars %d%%' % scene['bar_brightness'])
+    if scene.get('backlight_brightness') is not None:
+        bits.append('backlight %d%%' % scene['backlight_brightness'])
     if scene.get('mode') == MODE_COLOR:
         color = scene.get('color') or [255, 255, 255]
         bits.append('RGB %d,%d,%d' % tuple(color[:3]))
@@ -760,6 +798,7 @@ def apply_scene(controller, scene, devices, log_func=None,
     errors = []
     per_device_map = scene.get('devices') or {}
     bar_brightness = scene.get('bar_brightness')
+    backlight_brightness = scene.get('backlight_brightness')
     for index, device in enumerate(targets):
         # A few milliseconds between lights. Sending 25 lights' worth of
         # datagrams as fast as the loop runs is the shape of traffic consumer
@@ -772,8 +811,14 @@ def apply_scene(controller, scene, devices, log_func=None,
         # other scene falls back to its single uniform set.
         settings = settings_for(scene, device.device_id)
         # A lightbar puts out far more light than a bulb at the same
-        # percentage, so a scene can carry a second figure just for them.
-        if bar_brightness is not None and is_lightbar(device):
+        # percentage, so a scene can carry a second figure just for them, and
+        # a third for a backlight. Backlight is checked first: it is the more
+        # specific claim, so a backlight built out of a lightbar takes the
+        # backlight figure rather than the bar one.
+        if backlight_brightness is not None and is_backlight(device):
+            settings = dict(settings)
+            settings['brightness'] = backlight_brightness
+        elif bar_brightness is not None and is_lightbar(device):
             settings = dict(settings)
             settings['brightness'] = bar_brightness
         if dealt is not None and device.device_id not in per_device_map:

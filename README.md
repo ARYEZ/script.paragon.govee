@@ -221,6 +221,31 @@ light or just a few. The starter set is `Movie Night`, `Paused`, `Lights Up`,
 Scenes live in `scenes.json` in the add-on's profile directory, so they survive
 upgrades and can be hand-edited or copied between boxes.
 
+#### Lights that need their own brightness
+
+Not every light does the same thing with the same percentage. A lightbar at
+50% throws far more light than a bulb at 50%, and a strip washing a wall
+behind a screen at the level that suits the room's bulbs is either glare or
+nothing at all. So a scene carries two more brightnesses beside its own:
+
+| Row | Applies to | Default |
+|---|---|---|
+| **Lightbar brightness** | anything whose model is a known lightbar SKU, or whose name contains "Lightbar" | same as the scene |
+| **Backlight brightness** | anything whose name contains "Backlight" | same as the scene |
+
+Both sit in the scene editor under the ordinary **Brightness** row, and both
+default to *same as above* — set one only when that kind of light needs a
+different figure. They override the scene's brightness for those lights and
+nothing else, including in a captured scene.
+
+A backlight is matched on its name alone, with no model list behind it. What
+makes a light a backlight is where it is pointed rather than what it is: the
+same bulb is a backlight behind a screen and an ordinary light in a lamp, and
+the name is the only place that fact is written down. Rename a light to
+include "Backlight" and it takes the backlight figure; take the word out and
+it goes back to the scene's own. A light matching both rules takes the
+backlight figure, the more specific of the two.
+
 ### Mixing several colours over the lights
 
 A scene can hold a *set* of colours rather than one. In the scene editor:

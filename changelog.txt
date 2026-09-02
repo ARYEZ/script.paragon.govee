@@ -1,3 +1,21 @@
+2.37.0 (Aryez - 2026)
+    Added: scenes carry a separate brightness for backlights, beside the one
+        they already carried for lightbars. "Backlight brightness" sits under
+        the lightbar row in the scene editor and defaults to "same as above".
+    Same reason as the lightbars, from the other end. A lightbar at 50% is far
+        brighter than a bulb at 50%; a strip washing a wall behind a screen at
+        the level that suits the room's bulbs is either glare or nothing.
+    A backlight is matched on its name alone -- any light whose name contains
+        "Backlight" -- with no model list behind it. What makes a light a
+        backlight is where it is pointed rather than what it is, and the name
+        is the only place that is recorded. "Lightbar" does not contain
+        "Backlight", so the two never collide by accident; a light matching
+        both takes the backlight figure, being the more specific claim.
+    The override applies to captured scenes too, exactly as the lightbar one
+        does, and neither writes back into the saved scene.
+    Scenes saved before this exist unchanged: the field is simply absent and
+        normalises to "same as the scene brightness".
+
 2.36.4 (Aryez - 2026)
     Changed: the mirrored table drops the push phase from satellites, as
         Paragon TV has. A sequence hung off phase 4 now simply never comes

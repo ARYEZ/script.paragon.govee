@@ -420,6 +420,126 @@ class TestScenes(unittest.TestCase):
         self.assertEqual(scene['brightness'], 50)
         self.assertEqual(scene['bar_brightness'], 5)
 
+    def test_backlight_brightness_overrides_for_the_backlight_only(self):
+        """The same idea as the lightbars, for a strip behind a screen."""
+        controller = RecordingController()
+        bulb = Device('AA:BB', name='Bulb', model='H6008', lan=True,
+                      ip='127.0.0.1')
+        back = Device('EE:11', name='Hundy Backlight', model='H6008',
+                      lan=True, ip='127.0.0.3')
+        scene = scene_lib.make_scene('Dawn', brightness=50,
+                                     backlight_brightness=20)
+        applied, errors = scene_lib.apply_scene(controller, scene,
+                                                [bulb, back])
+
+        self.assertEqual(applied, 2)
+        self.assertEqual(errors, [])
+        levels = dict((c[1], c[2]) for c in controller.calls
+                      if c[0] == 'brightness')
+        self.assertEqual(levels, {'AA:BB': 50, 'EE:11': 20})
+
+    def test_the_three_brightnesses_land_on_three_different_lights(self):
+        """The point of the whole thing: one scene, three levels."""
+        controller = RecordingController()
+        bulb = Device('AA:BB', name='Bulb', model='H6008', lan=True,
+                      ip='127.0.0.1')
+        bar = Device('CC:DD', name='Greatroom Lightbar One', model='H610A',
+                     lan=True, ip='127.0.0.2')
+        back = Device('EE:11', name='Hundy Backlight', model='H6008',
+                      lan=True, ip='127.0.0.3')
+        scene = scene_lib.make_scene('Dawn', brightness=50, bar_brightness=5,
+                                     backlight_brightness=20)
+        scene_lib.apply_scene(controller, scene, [bulb, bar, back])
+
+        levels = dict((c[1], c[2]) for c in controller.calls
+                      if c[0] == 'brightness')
+        self.assertEqual(levels, {'AA:BB': 50, 'CC:DD': 5, 'EE:11': 20})
+
+    def test_a_backlight_built_from_a_lightbar_takes_the_backlight_figure(self):
+        """Both claims match, and the more specific one wins."""
+        controller = RecordingController()
+        both = Device('EE:11', name='Screen Backlight', model='H610A',
+                      lan=True, ip='127.0.0.3')
+        self.assertTrue(scene_lib.is_lightbar(both))
+        self.assertTrue(scene_lib.is_backlight(both))
+
+        scene = scene_lib.make_scene('Dawn', brightness=50, bar_brightness=5,
+                                     backlight_brightness=20)
+        scene_lib.apply_scene(controller, scene, [both])
+
+        levels = [c[2] for c in controller.calls if c[0] == 'brightness']
+        self.assertEqual(levels, [20])
+
+    def test_backlight_brightness_absent_leaves_it_on_the_scene_value(self):
+        controller = RecordingController()
+        back = Device('EE:11', name='Hundy Backlight', model='H6008',
+                      lan=True, ip='127.0.0.3')
+        scene = scene_lib.make_scene('Dawn', brightness=50)
+        scene_lib.apply_scene(controller, scene, [back])
+
+        levels = [c[2] for c in controller.calls if c[0] == 'brightness']
+        self.assertEqual(levels, [50])
+
+    def test_a_backlight_is_recognised_by_name_and_nothing_else(self):
+        """No SKU list: what makes a light a backlight is where it points."""
+        named = Device('EE:11', name='Hundy Backlight', model='H6008')
+        lower = Device('EE:22', name='hallway backlight', model='H6008')
+        bar = Device('CC:DD', name='Kitchen Lightbar two', model='H610A')
+        plain = Device('AA:BB', name='Bedroom Left Top', model='H6008')
+
+        self.assertTrue(scene_lib.is_backlight(named))
+        self.assertTrue(scene_lib.is_backlight(lower))
+        # "Lightbar" does not contain "Backlight" -- the two never collide
+        # on a name by accident.
+        self.assertFalse(scene_lib.is_backlight(bar))
+        self.assertFalse(scene_lib.is_backlight(plain))
+
+    def test_backlight_override_does_not_write_back_into_the_scene(self):
+        controller = RecordingController()
+        back = Device('EE:11', name='Hundy Backlight', model='H6008',
+                      lan=True, ip='127.0.0.3')
+        scene = scene_lib.make_scene('Dawn', brightness=50,
+                                     backlight_brightness=20)
+        scene_lib.apply_scene(controller, scene, [back])
+
+        self.assertEqual(scene['brightness'], 50)
+        self.assertEqual(scene['backlight_brightness'], 20)
+
+    def test_backlight_brightness_overrides_a_captured_scene_too(self):
+        """A capture records what each light was doing; the override still
+        applies, exactly as the lightbar one does."""
+        controller = RecordingController()
+        back = Device('EE:11', name='Hundy Backlight', model='H6008',
+                      lan=True, ip='127.0.0.3')
+        scene = scene_lib.make_scene(
+            'Captured', backlight_brightness=20,
+            devices={'EE:11': {'power': 'on', 'brightness': 90,
+                               'mode': 'none', 'color': [255, 255, 255],
+                               'kelvin': 2700}})
+        scene_lib.apply_scene(controller, scene, [back])
+
+        levels = [c[2] for c in controller.calls if c[0] == 'brightness']
+        self.assertEqual(levels, [20])
+        self.assertEqual(scene['devices']['EE:11']['brightness'], 90)
+
+    def test_normalise_clamps_backlight_brightness(self):
+        scene = scene_lib.normalise({'name': 'X', 'backlight_brightness': 900})
+        self.assertEqual(scene['backlight_brightness'], 100)
+        scene = scene_lib.normalise({'name': 'X',
+                                     'backlight_brightness': 'junk'})
+        self.assertIsNone(scene['backlight_brightness'])
+        scene = scene_lib.normalise({'name': 'X'})
+        self.assertIsNone(scene['backlight_brightness'])
+
+    def test_a_scene_saved_before_backlights_existed_still_loads(self):
+        """The field is simply absent in scenes.json on every existing box."""
+        scene = scene_lib.normalise({'name': 'Warshade', 'brightness': 40,
+                                     'bar_brightness': 5})
+
+        self.assertEqual(scene['brightness'], 40)
+        self.assertEqual(scene['bar_brightness'], 5)
+        self.assertIsNone(scene['backlight_brightness'])
+
     def test_normalise_clamps_lightbar_brightness(self):
         scene = scene_lib.normalise({'name': 'X', 'bar_brightness': 900})
         self.assertEqual(scene['bar_brightness'], 100)
@@ -427,6 +547,13 @@ class TestScenes(unittest.TestCase):
         self.assertIsNone(scene['bar_brightness'])
         scene = scene_lib.normalise({'name': 'X'})
         self.assertIsNone(scene['bar_brightness'])
+
+    def test_describe_reports_backlight_brightness(self):
+        scene = scene_lib.make_scene('Dawn', brightness=50,
+                                     backlight_brightness=20)
+        self.assertIn('backlight 20%', scene_lib.describe(scene))
+        plain = scene_lib.make_scene('Dawn', brightness=50)
+        self.assertNotIn('backlight', scene_lib.describe(plain))
 
     def test_describe_reports_lightbar_brightness(self):
         scene = scene_lib.make_scene('Dawn', brightness=50, bar_brightness=5)
@@ -9356,6 +9483,42 @@ class TestControlPanel(unittest.TestCase):
 
         self.assertEqual(sequence['steps'][0]['kind'], 'none')
         self.assertEqual(sequence['steps'][1]['action'], 'on')
+
+    def test_the_scene_editor_offers_a_separate_backlight_brightness(self):
+        """Its own row, beside the lightbar one, since the backlight has the
+        same problem from the other end."""
+        panel = self.panel()
+        self.app._scenes = [scene_lib.make_scene('Warshade')]
+
+        xbmcgui.SELECT_QUEUE.extend([-1])
+        panel.edit_scene(0)
+        labels = xbmcgui.SELECT_CALLS[-1][1]
+
+        self.assertTrue(
+            any(l.startswith('Backlight brightness:') for l in labels),
+            'no backlight row among %r' % labels)
+        self.assertTrue(
+            any(l.startswith('Lightbar brightness:') for l in labels))
+
+    def test_setting_a_backlight_brightness_sticks_and_can_be_cleared(self):
+        import gui
+
+        panel = self.panel()
+        self.app._scenes = [scene_lib.make_scene('Warshade')]
+        scene = self.app.scenes[0]
+        self.assertIsNone(scene['backlight_brightness'])
+
+        # Row 1 is the first preset, so it sets BRIGHTNESS_STEPS[0].
+        xbmcgui.SELECT_QUEUE.extend([1])
+        panel._edit_backlight_brightness(scene)
+        self.assertEqual(scene['backlight_brightness'],
+                         gui.BRIGHTNESS_STEPS[0])
+
+        # Row 0 is "Same as the scene brightness", which clears it again.
+        xbmcgui.reset()
+        xbmcgui.SELECT_QUEUE.extend([0])
+        panel._edit_backlight_brightness(scene)
+        self.assertIsNone(scene['backlight_brightness'])
 
     def test_a_pause_survives_the_step_being_changed(self):
         """The gap belongs to the slot, not to what happens to be in it."""

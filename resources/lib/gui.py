@@ -780,6 +780,10 @@ class ControlPanel(object):
             bar_brightness = ('same as above'
                               if scene.get('bar_brightness') is None
                               else '%d%%' % scene['bar_brightness'])
+            backlight_brightness = (
+                'same as above'
+                if scene.get('backlight_brightness') is None
+                else '%d%%' % scene['backlight_brightness'])
             if scene['mode'] == scene_lib.MODE_COLOR:
                 appearance = 'RGB %d, %d, %d' % tuple(scene['color'][:3])
             elif scene['mode'] == scene_lib.MODE_MIX:
@@ -820,6 +824,8 @@ class ControlPanel(object):
                  lambda: self._edit_brightness(scene)),
                 ('Lightbar brightness: %s' % bar_brightness,
                  lambda: self._edit_bar_brightness(scene)),
+                ('Backlight brightness: %s' % backlight_brightness,
+                 lambda: self._edit_backlight_brightness(scene)),
                 ('Appearance: %s' % appearance,
                  lambda: self._edit_appearance(scene)),
                 ('Lights: %s' % target_label,
@@ -1037,6 +1043,28 @@ class ControlPanel(object):
                 scene['bar_brightness'] = max(1, min(100, value))
         else:
             scene['bar_brightness'] = BRIGHTNESS_STEPS[choice - 1]
+
+    def _edit_backlight_brightness(self, scene):
+        """A separate brightness for backlights, overriding the scene's own.
+
+        The same problem as the lightbars, from the other end: a strip washing
+        a wall behind a screen at the level that suits the room's bulbs is
+        either glare or nothing at all.
+        """
+        options = ['Same as the scene brightness']
+        options += ['%d%%' % step for step in BRIGHTNESS_STEPS]
+        options.append('Custom...')
+        choice = _select('Backlight brightness', options)
+        if choice == BACK:
+            return
+        if choice == 0:
+            scene['backlight_brightness'] = None
+        elif choice == len(options) - 1:
+            value = self._ask_number('Backlight brightness (1-100)', '25')
+            if value is not None:
+                scene['backlight_brightness'] = max(1, min(100, value))
+        else:
+            scene['backlight_brightness'] = BRIGHTNESS_STEPS[choice - 1]
 
     def _edit_appearance(self, scene):
         choice = _select('Scene appearance',

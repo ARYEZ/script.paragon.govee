@@ -2142,7 +2142,7 @@ class TestParagonTV(unittest.TestCase):
         tv = self.install_tv()
 
         self.assertEqual(tv.phase_time('Alpha', 9), '17:45')
-        self.assertEqual(tv.compute_phase_times('Omega')[9], '19:45')
+        self.assertEqual(tv.compute_phase_times('Omega')[9], '20:30')
 
     def test_a_satellite_has_neither_a_maintenance_phase_nor_a_push(self):
         """Both belong to the master alone, so neither has a time at all.
@@ -2185,6 +2185,42 @@ class TestParagonTV(unittest.TestCase):
             tv.compute_phase_times('Zeta'),
             {2: '06:20', 3: '06:40', 5: '06:55', 6: '12:15', 7: '13:45',
              8: '17:15', 9: '17:55'})
+
+    def test_omicron_keeps_omegas_clock_from_the_first_wake_on(self):
+        """The second master and satellite pair, kept together the same way.
+
+        Omicron differs from Sigma in that it already started up after its
+        master had pushed, so the two part only over the maintenance window
+        rather than over the startup as well.
+        """
+        tv = self.install_tv()
+
+        self.assertEqual(tv.phase_time('Omicron', 1), '')     # no maintenance
+        self.assertEqual(tv.phase_time('Omicron', 4), '')     # no push
+        for phase in range(5, 10):
+            self.assertEqual(
+                tv.phase_time('Omicron', phase), tv.phase_time('Omega', phase),
+                'phase %d differs between Omega and its satellite' % phase)
+
+    def test_omegas_evening_block(self):
+        """Pinned outright, being the half of the day that was reset."""
+        tv = self.install_tv()
+
+        self.assertEqual(
+            [tv.phase_time('Omega', p) for p in range(6, 10)],
+            ['10:15', '19:15', '19:45', '20:30'])
+
+    def test_moving_omega_left_its_morning_and_alpha_alone(self):
+        """Only phases 7 to 10 moved, and only on the Omega pair."""
+        tv = self.install_tv()
+
+        self.assertEqual(
+            [tv.shutdown_time('Omega')]
+            + [tv.phase_time('Omega', p) for p in range(1, 6)],
+            ['01:30', '05:00', '05:40', '06:00', '06:05', '06:45'])
+        self.assertEqual(
+            [tv.phase_time('Alpha', p) for p in range(6, 10)],
+            ['07:15', '16:15', '17:15', '17:45'])
 
     def test_sigma_keeps_alphas_clock_from_the_first_wake_on(self):
         """Master and satellite share the whole viewing day. They part only

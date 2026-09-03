@@ -1,3 +1,16 @@
+2.37.1 (Aryez - 2026)
+    Changed: the mirrored table follows Omega's evening. Second shutdown
+        10:15, second startup 19:15, third shutdown 19:45, evening startup
+        20:30, on Omega and on Omicron alike.
+    Nothing before the first wake moved on either, and Alpha and its
+        satellite are untouched, so a sequence following an Alpha phase runs
+        exactly where it did.
+    Three tests: Omega's evening block pinned outright; Omicron holding
+        Omega's clock from the first wake on, as Sigma does with Alpha; and
+        one asserting that Omega's morning and the whole of Alpha did not
+        move, since a change to the last four offsets of a list is the sort
+        that takes the first four with it when it goes wrong.
+
 2.37.0 (Aryez - 2026)
     Added: scenes carry a separate brightness for backlights, beside the one
         they already carried for lightbars. "Backlight brightness" sits under

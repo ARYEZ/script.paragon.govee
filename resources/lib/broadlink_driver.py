@@ -176,8 +176,60 @@ class BroadlinkDriver(object):
             raise ControlError('%s: %s' % (device.name, exc))
         return True
 
+    def start_rf_sweep(self, device):
+        """Begin hunting for the frequency an RF remote transmits on.
+
+        Radio takes two passes where infrared takes one -- sweep for the
+        frequency, then listen on it -- so this is the first half. Only the
+        Pro-class blasters have the radio; a Mini refuses, and the message
+        says which it was rather than reporting a bare protocol error.
+        """
+        session = self._session(device)
+        try:
+            session.sweep_frequency()
+        except BroadlinkError as exc:
+            raise ControlError(
+                '%s would not start an RF sweep. Only the Pro blasters have '
+                'a radio -- a Mini can learn infrared only. (%s)'
+                % (device.name, exc))
+        return True
+
+    def rf_frequency_found(self, device):
+        """Whether the sweep has locked on. False means keep holding."""
+        session = self._session(device)
+        try:
+            return session.check_frequency()
+        except BroadlinkError:
+            return False
+
+    def start_rf_capture(self, device):
+        """Having found the frequency, listen for the code itself."""
+        session = self._session(device)
+        try:
+            session.find_rf_packet()
+        except BroadlinkError as exc:
+            raise ControlError('%s: %s' % (device.name, exc))
+        return True
+
+    def cancel_rf_sweep(self, device):
+        """Stop sweeping, so a cancelled learn does not leave it deaf.
+
+        Never raises: this runs on the way out of a learn that has already
+        gone wrong, and a failure here would replace the message explaining
+        that with a less useful one.
+        """
+        try:
+            self._session(device).cancel_sweep()
+        except Exception:
+            return False
+        return True
+
     def collect_learned(self, device):
-        """The code captured since learning started, as hex, or None."""
+        """The code captured since learning started, as hex, or None.
+
+        Shared by infrared and radio: once a code has been found, what comes
+        back off the wire is the same either way.
+        """
         session = self._session(device)
         try:
             code = session.check_learned()

@@ -51,6 +51,7 @@ DATA_CHECK = 0x04
 DATA_LEARN_RF_SWEEP = 0x19
 DATA_CHECK_RF_FOUND = 0x1a
 DATA_LEARN_RF_CODE = 0x1b
+DATA_CANCEL_RF_SWEEP = 0x1e
 
 # Devices that want the newer, length-prefixed data payload. The RM4 family
 # and the later "RM Mini 3" (0x5f36) share it; RM2/RM3-era hardware, including
@@ -385,6 +386,51 @@ class Session(object):
     def enter_learning(self):
         """Put the device into IR learning mode; it waits for a remote press."""
         self.data_command(DATA_LEARN)
+        return True
+
+    # -- RF ----------------------------------------------------------------
+    #
+    # Radio is learned in two passes where infrared takes one, because the
+    # blaster does not know which frequency to listen on. First it sweeps for
+    # one while the button is held down; then, having locked on, it listens
+    # again for the code itself. The second pass reads back through
+    # check_learned, exactly as infrared does -- only the finding of it
+    # differs, not the code that comes out.
+    #
+    # Only the Pro-class blasters have the radio for this at all. A Mini
+    # authenticates and then refuses the sweep, which is a BroadlinkError like
+    # any other; the caller is what turns it into an explanation.
+
+    def sweep_frequency(self):
+        """Start hunting for the frequency a remote is transmitting on."""
+        self.data_command(DATA_LEARN_RF_SWEEP)
+        return True
+
+    def check_frequency(self):
+        """Whether the sweep has locked onto a frequency yet.
+
+        The reply's first byte is the flag. A device still sweeping answers
+        zero rather than an error, which is the opposite of how the infrared
+        check behaves -- so an error here is a real failure and is left to
+        raise rather than being read as "keep waiting".
+        """
+        payload = bytearray(self.data_command(DATA_CHECK_RF_FOUND))
+        return bool(payload) and payload[0] == 1
+
+    def find_rf_packet(self):
+        """Having found the frequency, listen for the code on it."""
+        self.data_command(DATA_LEARN_RF_CODE)
+        return True
+
+    def cancel_sweep(self):
+        """Stop sweeping.
+
+        Worth doing on the way out of a cancelled learn: a blaster left
+        sweeping stays deaf to ordinary commands until it times out on its
+        own, so giving up without this makes the next thing anyone presses
+        appear broken.
+        """
+        self.data_command(DATA_CANCEL_RF_SWEEP)
         return True
 
     def check_learned(self):

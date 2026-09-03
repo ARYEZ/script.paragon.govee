@@ -181,6 +181,26 @@ class ParagonHome(object):
     def collect_learned(self, device):
         return self._emitter(device).collect_learned(device)
 
+    # Radio, which takes two passes where infrared takes one. The satellite
+    # guard is on the sweep alone: it is the first thing a learn does, so
+    # refusing there stops the whole business before the blaster is touched.
+
+    def start_rf_sweep(self, device):
+        if not self.owns_data:
+            from devices import ControlError
+
+            raise ControlError('Learn commands on the master, not here')
+        return self._emitter(device).start_rf_sweep(device)
+
+    def rf_frequency_found(self, device):
+        return self._emitter(device).rf_frequency_found(device)
+
+    def start_rf_capture(self, device):
+        return self._emitter(device).start_rf_capture(device)
+
+    def cancel_rf_sweep(self, device):
+        return self._emitter(device).cancel_rf_sweep(device)
+
     def save_command(self, device, name, hex_code):
         if self._master_owns('learned commands'):
             return False

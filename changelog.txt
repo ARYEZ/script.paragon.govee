@@ -1,3 +1,27 @@
+2.38.0 (Aryez - 2026)
+    Added: Broadlink blasters can learn radio codes, not only infrared.
+        "Learn an RF command..." sits beside the infrared one under Manage
+        devices.
+    Radio takes two passes where infrared takes one: the blaster sweeps for
+        the frequency while the button is held down, then listens on it for
+        the code. Hence two presses, the first a hold.
+    What comes out is an ordinary learned command -- same list, same firing
+        path, usable in a scene, a sequence step or the web remote with
+        nothing else to change. The blaster does not care which kind it is
+        replaying, and send_code never did.
+    Needs a Pro-class blaster. Every Mini is infrared only, refuses the
+        sweep, and is now told that in those words rather than reporting a
+        bare protocol error.
+    A sweep that is cancelled, times out, or captures nothing is stopped on
+        the way out. A blaster left sweeping ignores ordinary commands until
+        it times out on its own, which would make the next thing anyone
+        pressed look broken rather than the learn look failed.
+    The three RF opcodes had been named in broadlink_lan.py since the driver
+        was written and never used. This is what they were for.
+    Changed: the blaster's command menu picks its rows by name rather than by
+        counting past the codes. What follows them has grown from one row to
+        three, and the arithmetic version breaks every time it does.
+
 2.37.1 (Aryez - 2026)
     Changed: the mirrored table follows Omega's evening. Second shutdown
         10:15, second startup 19:15, third shutdown 19:45, evening startup

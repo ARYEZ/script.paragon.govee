@@ -3291,6 +3291,15 @@ class FakeRM(object):
         self.device_id = bytearray([1, 2, 3, 4])
         self.sent_codes = []
         self.learning = False
+        # Radio. A Pro has it, a Mini does not, and the sweep does not lock
+        # on instantly -- holds_before_lock is how many "still looking"
+        # answers to give before saying found, so a test can exercise the
+        # waiting rather than only the happy first poll.
+        self.has_radio = True
+        self.sweeping = False
+        self.sweeps = 0
+        self.cancels = 0
+        self.holds_before_lock = 0
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -3404,6 +3413,33 @@ class FakeRM(object):
                 else:
                     self.sock.sendto(self._reply(bytearray(self.LEARNED)),
                                      sender)
+            elif verb == self.bl.DATA_LEARN_RF_SWEEP:
+                if not self.has_radio:
+                    # What a Mini does: authenticates, then refuses.
+                    self._refuse(sender, code=0xFFF9)
+                    continue
+                self.sweeping = True
+                self.sweeps += 1
+                self.sock.sendto(self._reply(bytearray(16)), sender)
+            elif verb == self.bl.DATA_CHECK_RF_FOUND:
+                if not self.sweeping:
+                    self._refuse(sender, code=0xFFF9)
+                    continue
+                # A real device answers zero until it locks on, rather than
+                # erroring. `holds_before_lock` is how many of those to give.
+                payload = bytearray(16)
+                if self.holds_before_lock > 0:
+                    self.holds_before_lock -= 1
+                else:
+                    payload[0] = 1
+                self.sock.sendto(self._reply(payload), sender)
+            elif verb == self.bl.DATA_LEARN_RF_CODE:
+                self.learning = True
+                self.sock.sendto(self._reply(bytearray(16)), sender)
+            elif verb == self.bl.DATA_CANCEL_RF_SWEEP:
+                self.sweeping = False
+                self.cancels += 1
+                self.sock.sendto(self._reply(bytearray(16)), sender)
 
 
 class TestBroadlinkProtocol(unittest.TestCase):
@@ -3555,6 +3591,47 @@ class TestBroadlinkProtocol(unittest.TestCase):
 
         self.assertIsNotNone(learned)
         self.assertTrue(learned.startswith(b'\x26\x00'))
+
+    def test_an_rf_code_is_learned_in_two_passes(self):
+        """Sweep for the frequency, then listen on it. The code that comes
+        back reads through the same check as infrared."""
+        session = self.session()
+
+        self.assertTrue(session.sweep_frequency())
+        self.assertTrue(session.check_frequency())
+        self.assertTrue(session.find_rf_packet())
+        learned = session.check_learned()
+
+        self.assertIsNotNone(learned)
+        self.assertTrue(learned.startswith(b'\x26\x00'))
+
+    def test_the_sweep_answers_not_yet_rather_than_erroring(self):
+        """Unlike the infrared check, which errors while it waits."""
+        self.device.holds_before_lock = 2
+        session = self.session()
+        session.sweep_frequency()
+
+        self.assertFalse(session.check_frequency())
+        self.assertFalse(session.check_frequency())
+        self.assertTrue(session.check_frequency())
+
+    def test_a_blaster_with_no_radio_refuses_the_sweep(self):
+        """What a Mini does: authenticates fine, then will not sweep."""
+        self.device.has_radio = False
+        session = self.session()
+
+        self.assertRaises(self.bl.BroadlinkError, session.sweep_frequency)
+
+    def test_cancelling_the_sweep_reaches_the_device(self):
+        """A blaster left sweeping stays deaf to ordinary commands."""
+        session = self.session()
+        session.sweep_frequency()
+        self.assertTrue(self.device.sweeping)
+
+        session.cancel_sweep()
+
+        self.assertFalse(self.device.sweeping)
+        self.assertEqual(self.device.cancels, 1)
 
     def test_new_framing_is_length_prefixed(self):
         """<H length> + <I verb> + data, length covering verb and data."""
@@ -3747,6 +3824,53 @@ class TestBroadlinkDriver(unittest.TestCase):
         self.assertTrue(driver.save_command(device, 'AVR Power', code))
         self.assertEqual(driver.commands(device), ['AVR Power'])
         self.assertTrue(self.saved, 'codes were not persisted')
+
+    def test_an_rf_code_is_learned_and_saved_like_any_other(self):
+        """The point of the whole thing: what comes out is an ordinary
+        command, so scenes, sequences and the remote need no change."""
+        driver, device = self.driver(), self.device()
+
+        driver.start_rf_sweep(device)
+        self.assertTrue(driver.rf_frequency_found(device))
+        driver.start_rf_capture(device)
+        code = driver.collect_learned(device)
+
+        self.assertIsNotNone(code)
+        self.assertTrue(driver.save_command(device, 'Blinds Open', code))
+        self.assertEqual(driver.commands(device), ['Blinds Open'])
+
+    def test_a_sweep_still_looking_reads_as_not_found(self):
+        driver, device = self.driver(), self.device()
+        self.rm.holds_before_lock = 1
+
+        driver.start_rf_sweep(device)
+        self.assertFalse(driver.rf_frequency_found(device))
+        self.assertTrue(driver.rf_frequency_found(device))
+
+    def test_a_mini_is_told_it_has_no_radio_rather_than_erroring(self):
+        """The failure people will actually hit, so it says which it is."""
+        driver, device = self.driver(), self.device()
+        self.rm.has_radio = False
+
+        try:
+            driver.start_rf_sweep(device)
+        except ControlError as exc:
+            self.assertIn('Pro', str(exc))
+            self.assertIn('Mini', str(exc))
+        else:
+            self.fail('a blaster with no radio swept anyway')
+
+    def test_cancelling_a_sweep_never_raises(self):
+        """It runs while something has already gone wrong; a throw here
+        would replace the message explaining that."""
+        driver, device = self.driver(), self.device()
+        driver.start_rf_sweep(device)
+        self.assertTrue(driver.cancel_rf_sweep(device))
+
+        device_gone = Device('11:22:33:44:55:66', name='Unplugged',
+                             driver='broadlink', ip='127.0.0.9', lan=True,
+                             devtype=0x27c2)
+        self.assertFalse(driver.cancel_rf_sweep(device_gone))
 
     def test_nothing_learned_yet_reads_as_still_waiting(self):
         driver, device = self.driver(), self.device()
@@ -8179,6 +8303,15 @@ class TestSatelliteMode(unittest.TestCase):
         else:
             self.fail('a satellite went into learning mode')
 
+        # Radio the same way. The guard sits on the sweep, which is the
+        # first thing a radio learn does, so it never reaches the blaster.
+        try:
+            app.start_rf_sweep(device)
+        except ControlError as exc:
+            self.assertIn('master', str(exc))
+        else:
+            self.fail('a satellite started an RF sweep')
+
     def test_learned_commands_travel_down_with_everything_else(self):
         """A sequence step firing a code fails on a box that has not got it."""
         app = self.app()
@@ -9519,6 +9652,142 @@ class TestControlPanel(unittest.TestCase):
 
         self.assertEqual(sequence['steps'][0]['kind'], 'none')
         self.assertEqual(sequence['steps'][1]['action'], 'on')
+
+    def _rm(self):
+        """A blaster whose driver records the radio calls made to it."""
+        calls = []
+
+        class Emitter(object):
+            found_after = 0
+            code = '2600abcd'
+            sweep_raises = None
+
+            def start_rf_sweep(self, device):
+                calls.append('sweep')
+                if self.sweep_raises:
+                    raise ControlError(self.sweep_raises)
+                return True
+
+            def rf_frequency_found(self, device):
+                calls.append('check')
+                if self.found_after > 0:
+                    self.found_after -= 1
+                    return False
+                return True
+
+            def start_rf_capture(self, device):
+                calls.append('capture')
+                return True
+
+            def cancel_rf_sweep(self, device):
+                calls.append('cancel')
+                return True
+
+            def collect_learned(self, device):
+                calls.append('collect')
+                return self.code
+
+            def save_command(self, device, name, code):
+                calls.append('save:%s' % name)
+                return True
+
+        emitter = Emitter()
+        self.app._emitter = lambda device: emitter
+        device = Device('EE:FF', name='Hall RM', driver='broadlink')
+        self.app._devices = [device]
+        return device, emitter, calls
+
+    def test_learning_an_rf_command_sweeps_then_captures(self):
+        """Two passes: find the frequency, then listen on it."""
+        device, _emitter, calls = self._rm()
+
+        xbmcgui.INPUT_QUEUE.append('Blinds Open')
+        self.panel().learn_rf_command(device, sleep_func=lambda s: None)
+
+        self.assertEqual(calls,
+                         ['sweep', 'check', 'capture', 'collect',
+                          'save:Blinds Open'])
+
+    def test_the_sweep_is_polled_until_it_locks_on(self):
+        device, emitter, calls = self._rm()
+        emitter.found_after = 3
+
+        xbmcgui.INPUT_QUEUE.append('Blinds Shut')
+        self.panel().learn_rf_command(device, sleep_func=lambda s: None)
+
+        self.assertEqual(calls.count('check'), 4)
+        self.assertIn('save:Blinds Shut', calls)
+
+    def test_a_sweep_that_never_locks_on_is_cancelled(self):
+        """A blaster left sweeping stays deaf, so the next ordinary command
+        would look broken rather than the learn looking failed."""
+        device, emitter, calls = self._rm()
+        emitter.found_after = 10 ** 6      # never
+
+        self.panel().learn_rf_command(device, sleep_func=lambda s: None)
+
+        self.assertIn('cancel', calls)
+        self.assertNotIn('capture', calls)
+        self.assertFalse([c for c in calls if c.startswith('save:')])
+
+    def test_a_frequency_found_but_no_code_is_cancelled_too(self):
+        device, emitter, calls = self._rm()
+        emitter.code = None
+
+        self.panel().learn_rf_command(device, sleep_func=lambda s: None)
+
+        self.assertIn('capture', calls)
+        self.assertIn('cancel', calls)
+        self.assertFalse([c for c in calls if c.startswith('save:')])
+
+    def test_naming_nothing_cancels_rather_than_saving(self):
+        device, _emitter, calls = self._rm()
+
+        xbmcgui.INPUT_QUEUE.append('')
+        self.panel().learn_rf_command(device, sleep_func=lambda s: None)
+
+        self.assertIn('cancel', calls)
+        self.assertFalse([c for c in calls if c.startswith('save:')])
+
+    def test_a_blaster_with_no_radio_says_so_and_stops(self):
+        device, emitter, calls = self._rm()
+        emitter.sweep_raises = ('Hall RM would not start an RF sweep. Only '
+                                'the Pro blasters have a radio')
+
+        self.panel().learn_rf_command(device, sleep_func=lambda s: None)
+
+        self.assertEqual(calls, ['sweep'])
+
+    def test_the_command_menu_offers_both_kinds_of_learning(self):
+        device, _emitter, _calls = self._rm()
+        self.app.controller.commands = lambda d: ['TV Power', 'Volume Up']
+
+        xbmcgui.SELECT_QUEUE.extend([-1])
+        self.panel().command_menu(device)
+        labels = xbmcgui.SELECT_CALLS[-1][1]
+
+        self.assertEqual(labels[:2], ['TV Power', 'Volume Up'])
+        self.assertIn('Learn a new command...', labels)
+        self.assertIn('Learn an RF command...', labels)
+        self.assertIn('Test connection', labels)
+
+    def test_the_menu_rows_after_the_codes_do_what_they_say(self):
+        """They used to be found by subtracting from the code count, and
+        every version of that broke the first time a row was added."""
+        device, _emitter, calls = self._rm()
+        self.app.controller.commands = lambda d: ['TV Power', 'Volume Up']
+
+        xbmcgui.SELECT_QUEUE.extend([-1])
+        self.panel().command_menu(device)
+        labels = list(xbmcgui.SELECT_CALLS[-1][1])
+        xbmcgui.reset()
+
+        row = labels.index('Learn an RF command...')
+        xbmcgui.INPUT_QUEUE.append('Blinds Open')
+        xbmcgui.SELECT_QUEUE.extend([row, -1])
+        self.panel().command_menu(device)
+
+        self.assertIn('save:Blinds Open', calls)
 
     def test_the_scene_editor_offers_a_separate_backlight_brightness(self):
         """Its own row, beside the lightbar one, since the backlight has the

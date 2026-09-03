@@ -20,8 +20,9 @@ Built for **Kodi 17.6 (Krypton)** — `xbmc.python 2.25.0`, Python 2.7.
 
 * **Govee lights** over the Govee LAN protocol, the Govee cloud API, or both —
   power, brightness, RGB colour and colour temperature.
-* **Broadlink RM blasters** — learn an IR code from a remote and send it back,
-  over the LAN with no Broadlink account.
+* **Broadlink RM blasters** — learn an infrared or radio code from a remote
+  and send it back, over the LAN with no Broadlink account. Radio needs a
+  Pro-class blaster; a Mini has no transmitter for it.
 * **Tuya smart plugs** — GHome, Gosund, Smart Life and most no-name plugs,
   protocol 3.1 to 3.4. Multi-outlet plugs are listed one device per outlet.
 * **TP-Link Kasa plugs** — HS100, HS103, HS110 and the KP series. No account,
@@ -1253,7 +1254,7 @@ LibreELEC   /storage/.kodi/userdata/addon_data/script.paragon.home/
 | `sequences.json` | sequences and their schedules |
 | `rerack_presets.json` | the nine reracks and the weekly table |
 | `palette.json` | the speed-dial colours |
-| `broadlink_codes.json` | learned infrared codes |
+| `broadlink_codes.json` | learned infrared and radio codes |
 | `tuya_keys.json` | Tuya local keys |
 | `remote.json` | the web remote's API token |
 
@@ -1457,3 +1458,35 @@ GPL-3.0. See [LICENSE.txt](LICENSE.txt).
 
 Govee is a trademark of its respective owner. This add-on is unofficial and not
 affiliated with or endorsed by Govee.
+
+
+### Learning a radio (RF) command
+
+**Manage devices → the blaster → Learn an RF command...**
+
+Radio takes two presses where infrared takes one, because the blaster does not
+know which frequency to listen on until it has gone looking:
+
+1. **Hold the button down**, close to the blaster, while it sweeps for the
+   frequency. Holding matters — a sweep needs something to find, and a tap is
+   usually over before it locks on.
+2. **Press the same button again**, once, and the code is captured.
+
+What comes out is an ordinary learned command. It appears in the same list as
+the infrared ones, fires the same way, and can be used in a scene, a sequence
+step or the web remote with nothing else to set up — the blaster does not care
+which kind it is replaying.
+
+**It needs a Pro-class blaster.** The RM Pro, Pro+, RM2 Pro Plus and RM4 Pro
+have a radio; every Mini is infrared only. A Mini refuses the sweep and says
+so rather than failing obscurely.
+
+Two things that can go wrong and are not bugs:
+
+* **No frequency found.** Hold rather than tap, and keep the remote within a
+  foot of the blaster. The sweep is stopped on the way out, because a blaster
+  left sweeping ignores ordinary commands until it times out — which would
+  make the next thing you press look broken.
+* **A frequency, but no code.** Some remotes — car keys, most garage doors,
+  some alarms — change their code on every press by design. Those cannot be
+  replayed by anything, and no amount of retrying will capture one.

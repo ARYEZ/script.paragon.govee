@@ -2041,6 +2041,97 @@ class ControlPanel(object):
             return
         rows[choice][1]()
 
+    def learn_rf_command(self, device, sleep_func=None):
+        """Learn a radio code, which takes two passes rather than one.
+
+        The blaster does not know which frequency to listen on, so it sweeps
+        for one while the button is held down, and only then listens for the
+        code. That is why this asks for two presses where infrared asks for
+        one, and why the first is a hold rather than a tap -- a sweep needs
+        something to find.
+        """
+        import time
+
+        sleep = sleep_func or time.sleep
+
+        try:
+            self.app.start_rf_sweep(device)
+        except ControlError as exc:
+            utils.force_notify(str(exc))
+            return
+
+        found = False
+        progress = xbmcgui.DialogProgress()
+        progress.create(utils.ADDON_NAME,
+                        'Hold the button down on your remote, close to %s.'
+                        % device.name,
+                        'Finding the frequency. Keep holding.')
+        try:
+            for step in range(LEARN_ATTEMPTS):
+                progress.update(int(step * 100.0 / LEARN_ATTEMPTS))
+                if progress.iscanceled():
+                    break
+                if self.app.rf_frequency_found(device):
+                    found = True
+                    break
+                sleep(LEARN_POLL)
+        finally:
+            progress.close()
+
+        if not found:
+            # Leaving it sweeping would make the next ordinary command look
+            # broken, so it is stopped whether this was a cancel or a failure.
+            self.app.cancel_rf_sweep(device)
+            _dialog().ok(utils.ADDON_NAME,
+                         'No frequency was found.\n\nHold the button down '
+                         'rather than tapping it, and keep the remote within '
+                         'a foot of %s.\n\nIf this blaster is a Mini it has '
+                         'no radio at all and can learn infrared only.'
+                         % device.name)
+            return
+
+        try:
+            self.app.start_rf_capture(device)
+        except ControlError as exc:
+            self.app.cancel_rf_sweep(device)
+            utils.force_notify(str(exc))
+            return
+
+        code = None
+        progress = xbmcgui.DialogProgress()
+        progress.create(utils.ADDON_NAME,
+                        'Frequency found. Now press the same button again.',
+                        'A single press this time.')
+        try:
+            for step in range(LEARN_ATTEMPTS):
+                progress.update(int(step * 100.0 / LEARN_ATTEMPTS))
+                if progress.iscanceled():
+                    break
+                code = self.app.collect_learned(device)
+                if code:
+                    break
+                sleep(LEARN_POLL)
+        finally:
+            progress.close()
+
+        if not code:
+            self.app.cancel_rf_sweep(device)
+            _dialog().ok(utils.ADDON_NAME,
+                         'The frequency was found but no code came through.'
+                         '\n\nTry again and press the button firmly while '
+                         'the dialog is open.\n\nSome remotes change their '
+                         'code on every press for security. Those cannot be '
+                         'replayed by anything, and this will never capture '
+                         'one.')
+            return
+
+        name = _dialog().input('Name for this RF command', '')
+        if not name or not name.strip():
+            self.app.cancel_rf_sweep(device)
+            return
+        if self.app.save_command(device, name.strip(), code):
+            utils.notify('Learned %s' % name.strip())
+
     def _pick_phase_sequence(self, rerack, number):
         names = [s['name'] for s in self.app.sequences]
         if not names:
@@ -2347,19 +2438,24 @@ class ControlPanel(object):
             # A satellite copies the codes down from the master along with
             # everything else, so it can fire them and nothing more.
             owns = self.app.owns_data
+            # Named rather than counted. What follows the codes has grown
+            # from one row to three, and every version of this that worked
+            # out which by subtracting broke the first time it did.
+            extras = []
             if owns:
-                rows.append('Learn a new command...')
-            rows.append('Test connection')
+                extras.append(('Learn a new command...',
+                               lambda: self.learn_command(device)))
+                extras.append(('Learn an RF command...',
+                               lambda: self.learn_rf_command(device)))
+            extras.append(('Test connection',
+                           lambda: self.test_device(device)))
+            rows.extend(label for label, _handler in extras)
 
             choice = _select('%s - commands' % device.name, rows)
             if choice == BACK:
                 return
-            extra = choice - len(names)
-            if extra >= 0:
-                if owns and extra == 0:
-                    self.learn_command(device)
-                else:
-                    self.test_device(device)
+            if choice >= len(names):
+                extras[choice - len(names)][1]()
                 continue
 
             name = names[choice]

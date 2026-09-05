@@ -24,7 +24,7 @@ import reracks as rerack_lib
 import sequences as sequence_lib
 import scenes as scene_lib
 from devices import (CAP_BRIGHTNESS, CAP_COLOR, CAP_COLOR_TEMP,
-                     CAP_COMMANDS, CAP_POWER, CAP_STATE,
+                     CAP_COMMANDS, CAP_POSITION, CAP_POWER, CAP_STATE,
                      ControlError, DEFAULT_DRIVER, TRANSPORT_CLOUD)
 
 # Presets offered before the user has to type anything.
@@ -290,7 +290,12 @@ class ControlPanel(object):
         Routing here is what stops one menu having to apologise for rows that
         do not apply.
         """
-        if CAP_COMMANDS in self.app.controller.capabilities(device):
+        capabilities = self.app.controller.capabilities(device)
+        # Before the commands check, not after: a blind reports both, and the
+        # position is the thing you actually came here to change.
+        if CAP_POSITION in capabilities:
+            return self.cover_menu(device)
+        if CAP_COMMANDS in capabilities:
             return self.command_menu(device)
         return self.control_menu([device], device.name)
 
@@ -2386,28 +2391,41 @@ class ControlPanel(object):
         sample = device if device is not None else devices[0]
         capabilities = self.app.controller.capabilities(sample)
 
+        # (label, kind, value). The kind travels with the row rather than
+        # being worked back out from the value afterwards -- a learned code
+        # named "On" used to be saved as a power step, because that is what
+        # reading the kind off the value gets you.
         actions = []
         if CAP_POWER in capabilities:
-            actions.extend([('On', sequence_lib.ACTION_ON),
-                            ('Off', sequence_lib.ACTION_OFF),
-                            ('Toggle', sequence_lib.ACTION_TOGGLE)])
-        commands = []
+            actions.extend([
+                ('On', sequence_lib.KIND_POWER, sequence_lib.ACTION_ON),
+                ('Off', sequence_lib.KIND_POWER, sequence_lib.ACTION_OFF),
+                ('Toggle', sequence_lib.KIND_POWER,
+                 sequence_lib.ACTION_TOGGLE)])
         if device is not None and CAP_COMMANDS in capabilities:
-            commands = self.app.controller.commands(device)
-            actions.extend((name, name) for name in commands)
+            actions.extend((name, sequence_lib.KIND_COMMAND, name)
+                           for name in self.app.controller.commands(device))
+        if device is not None and CAP_POSITION in capabilities:
+            actions.extend(('Position %d%%' % step,
+                            sequence_lib.KIND_POSITION, str(step))
+                           for step in (0, 25, 50, 75, 100))
+            actions.append(('Position...', sequence_lib.KIND_POSITION, None))
 
         if not actions:
             utils.force_notify('%s has nothing to switch or send' % label)
             return None
 
         pick = _select('What should it do',
-                       [action_label for action_label, _v in actions])
+                       [action_label for action_label, _k, _v in actions])
         if pick == BACK:
             return None
 
-        chosen = actions[pick][1]
-        kind = sequence_lib.KIND_COMMAND if chosen in commands \
-            else sequence_lib.KIND_POWER
+        _picked, kind, chosen = actions[pick]
+        if kind == sequence_lib.KIND_POSITION and chosen is None:
+            value = self._ask_number('Position (0-100)', '50')
+            if value is None:
+                return None
+            chosen = str(max(0, min(100, value)))
         return {'kind': kind, 'driver': driver_id, 'target': target,
                 'action': chosen}
 
@@ -2429,6 +2447,59 @@ class ControlPanel(object):
         self.app.save_sequence(sequence)
 
     # -- learned commands ---------------------------------------------------
+
+    def cover_menu(self, device):
+        """Open, close, or put a blind somewhere in between.
+
+        The named rows come from the driver rather than from here, because
+        what "open" means is the hardware's business: a tilt closes in two
+        directions and a curtain in one. Asking the driver keeps this menu
+        from having an opinion it cannot back up.
+
+        The percentages are offered without a reading attached to them -- a
+        tilt is shut at both ends of its range and open in the middle, so
+        labelling 50 as "half open" would be wrong on the one device this was
+        written for. They are numbers; the slats show you what they mean.
+        """
+        rows = [(name, lambda n=name: self._send_cover_command(device, n))
+                for name in self.app.controller.commands(device)]
+        rows.extend(
+            ('Position %d%%' % step,
+             lambda p=step: self._set_position(device, p))
+            for step in (25, 50, 75))
+        rows.append(('Set position...',
+                     lambda: self._ask_position(device)))
+
+        choice = _select(device.name, [label for label, _handler in rows])
+        if choice == BACK:
+            return
+        rows[choice][1]()
+
+    def _send_cover_command(self, device, name):
+        from devices import ControlError
+
+        try:
+            self.app.controller.send_command(device, name)
+        except ControlError as exc:
+            utils.force_notify(str(exc))
+            return
+        utils.notify('%s: %s' % (device.name, name))
+
+    def _set_position(self, device, percent):
+        from devices import ControlError
+
+        try:
+            self.app.controller.set_position(device, percent)
+        except ControlError as exc:
+            utils.force_notify(str(exc))
+            return
+        utils.notify('%s to %d%%' % (device.name, percent))
+
+    def _ask_position(self, device):
+        value = self._ask_number('Position (0-100)', '50')
+        if value is None:
+            return
+        self._set_position(device, max(0, min(100, value)))
 
     def command_menu(self, device):
         """The codes a blaster knows: fire one, learn another, delete one."""

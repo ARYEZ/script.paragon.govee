@@ -56,6 +56,7 @@ KIND_NONE = 'none'
 KIND_SCENE = 'scene'
 KIND_POWER = 'power'
 KIND_COMMAND = 'command'
+KIND_POSITION = 'position'   # open a blind to a percentage
 
 # Power actions a step can carry.
 ACTION_ON = 'on'
@@ -316,6 +317,24 @@ def normalise_step(raw):
         step['action'] = action
         return step
 
+    if kind == KIND_POSITION:
+        target = (raw.get('target') or '').strip()
+        if not target:
+            return empty_step()
+        # Held as a string like every other field on a step, so a sequence
+        # written by hand and one written by the editor read the same. The
+        # number is what matters, so an unparseable one empties the slot
+        # rather than being kept as a step that cannot run.
+        try:
+            percent = int(round(float(raw.get('action'))))
+        except (TypeError, ValueError):
+            return empty_step()
+        step['kind'] = KIND_POSITION
+        step['driver'] = (raw.get('driver') or '').strip()
+        step['target'] = target
+        step['action'] = str(max(0, min(100, percent)))
+        return step
+
     return empty_step()
 
 
@@ -415,6 +434,8 @@ def describe_step(step, device_name=None):
         text = '%s: %s' % (target, step.get('action', '').title())
     elif kind == KIND_COMMAND:
         text = '%s: %s' % (target, step.get('action'))
+    elif kind == KIND_POSITION:
+        text = '%s: %s%% open' % (target, step.get('action'))
     else:
         text = 'Empty'
 
@@ -516,6 +537,11 @@ def _run_step(app, step):
     if kind == KIND_COMMAND:
         for device in targets:
             app.controller.send_command(device, step['action'])
+        return
+
+    if kind == KIND_POSITION:
+        for device in targets:
+            app.controller.set_position(device, int(step['action']))
         return
 
     raise ControlError('Unknown step type "%s"' % kind)

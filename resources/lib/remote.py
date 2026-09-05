@@ -51,7 +51,7 @@ import tv
 from compat import (BaseHTTPRequestHandler, HTTPServer, ThreadingMixIn,
                     same_secret, to_bytes, to_text)
 from devices import (CAP_BRIGHTNESS, CAP_COLOR, CAP_COLOR_TEMP, CAP_COMMANDS,
-                     CAP_POWER, CAP_STATE)
+                     CAP_POSITION, CAP_POWER, CAP_STATE)
 
 # Where the API token is kept. Not in settings.xml: it is not something anyone
 # types, and Kodi rewrites settings.xml on exit -- which is exactly the race
@@ -108,7 +108,7 @@ COOKIE_NAME = 'paragon_remote'
 # Sequences and discovery are not waited on: a sequence can hold an hour of
 # pauses, and the phone wants to know it started, not sit there until it ends.
 IMMEDIATE = ('on', 'off', 'toggle', 'brightness', 'color', 'temp', 'scene',
-             'command', 'states')
+             'command', 'position', 'states')
 # A satellite copying from its master reads five files over SSH, each with its
 # own timeout, so a master that is off can take longer than a handler is
 # willing to wait. Discovery is the same shape.
@@ -160,7 +160,7 @@ STATIC_CACHE = 'public, max-age=31536000, immutable'
 # or colour, but it does have the codes it has been taught, and those are as
 # much a thing to press as an on switch is.
 ACTIONABLE = frozenset([CAP_POWER, CAP_BRIGHTNESS, CAP_COLOR, CAP_COLOR_TEMP,
-                        CAP_COMMANDS])
+                        CAP_COMMANDS, CAP_POSITION])
 
 
 # ---------------------------------------------------------------------------
@@ -511,7 +511,7 @@ def perform(app, action, params, sleep_func=None, on_step=None):
 
     targets = None
     if action in ('on', 'off', 'toggle', 'brightness', 'color', 'temp',
-                  'command'):
+                  'command', 'position'):
         targets = app.resolve_targets(params.get('target'))
         if targets == []:
             return {'ok': False,
@@ -543,6 +543,17 @@ def perform(app, action, params, sleep_func=None, on_step=None):
         if value is None:
             return {'ok': False, 'message': 'Temperature needs a number'}
         return outcome(app.color_temp_all(value, targets), '%dK' % value)
+
+    if action == 'position':
+        value = utils.clamp_int(params.get('value'), 0, 100)
+        if value is None:
+            return {'ok': False, 'message': 'Position needs a number 0-100'}
+        if targets is None:
+            # Unlike brightness there is no useful "everything": the only
+            # devices with a position are the blinds, and a phone asking for
+            # 50% without saying what should not shut the whole flat.
+            return {'ok': False, 'message': 'That needs a blind to move'}
+        return outcome(app.position_all(value, targets), '%d%%' % value)
 
     if action == 'command':
         name = params.get('name') or params.get('value') or ''
@@ -640,10 +651,12 @@ def _device_entry(app, device, state):
                      if CAP_COMMANDS in caps else []),
         'power': None,
         'brightness': None,
+        'position': None,
     }
     if state:
         entry['power'] = state.get('power')
         entry['brightness'] = state.get('brightness')
+        entry['position'] = state.get('position')
     return entry
 
 
@@ -2789,7 +2802,15 @@ function deviceCard(device) {
   var controls = el('div', 'controls');
 
   if (caps.indexOf('power') >= 0) {
-    [['on', 'On'], ['off', 'Off'], ['toggle', 'Toggle']].forEach(function (pair) {
+    // A blind is switched by the same two verbs, but "On" is not what a
+    // blind does. Toggle is left off it: toggling reads the power state
+    // first, and a cover reports a position instead, so the fallback would
+    // be a guess dressed up as a button.
+    var isCover = caps.indexOf('position') >= 0;
+    var pairs = isCover
+      ? [['on', 'Open'], ['off', 'Close']]
+      : [['on', 'On'], ['off', 'Off'], ['toggle', 'Toggle']];
+    pairs.forEach(function (pair) {
       var node = el('button', null, pair[1]);
       node.addEventListener('click', function () {
         act(pair[0], {target: device.id});
@@ -2838,6 +2859,37 @@ function deviceCard(device) {
     dim.appendChild(readout);
     dim.appendChild(slider);
     card.appendChild(dim);
+  }
+
+  if (caps.indexOf('position') >= 0) {
+    var where = (device.position === null || device.position === undefined)
+      ? 50 : device.position;
+    var openness = el('div', 'dim');
+    var mark = el('span', 'stat');
+    mark.appendChild(document.createTextNode(String(where)));
+    mark.appendChild(el('span', 'unit', '%'));
+
+    var travel = el('input');
+    travel.type = 'range';
+    travel.min = 0;
+    travel.max = 100;
+    // Even numbers only: a Blind Tilt rejects an odd position outright, so a
+    // slider that can land on 51 would show a number the blind never took.
+    travel.step = 2;
+    travel.value = where;
+    travel.setAttribute('aria-label', device.name + ' position');
+    travel.addEventListener('input', function () {
+      mark.firstChild.nodeValue = travel.value;
+    });
+    // On change, not input: a dragged slider fires input continuously and
+    // every one of those would be a signed request out to SwitchBot.
+    travel.addEventListener('change', function () {
+      act('position', {target: device.id, value: travel.value});
+    });
+
+    openness.appendChild(mark);
+    openness.appendChild(travel);
+    card.appendChild(openness);
   }
 
   if (caps.indexOf('commands') >= 0) {

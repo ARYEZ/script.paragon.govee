@@ -53,6 +53,8 @@ class ParagonHome(object):
         settings['known_ips'] = self.known_ips
         settings['kasa_username'] = utils.get_setting('kasa_username')
         settings['kasa_password'] = utils.get_setting('kasa_password')
+        settings['switchbot_token'] = utils.get_setting('switchbot_token')
+        settings['switchbot_secret'] = utils.get_setting('switchbot_secret')
         self.controller = build_hub(settings)
         self._devices = None
         self._scenes = None
@@ -1304,6 +1306,30 @@ class ParagonHome(object):
                 done += 1
             except ControlError as exc:
                 utils.log('Command failed on %s: %s' % (device.name, exc))
+                errors.append(str(exc))
+        return done, errors
+
+    def position_all(self, percent, targets):
+        """Drive each target that is a cover to `percent`.
+
+        Built like send_command_all rather than on `_each`: there is no
+        sensible "every device in the house" for a position, and moving a
+        blind is no reason to stop the lights cycling. Targets that are not
+        covers are passed over rather than failed -- "close the blinds" sent
+        at a room should not report an error for each lamp in it.
+        """
+        from devices import CAP_POSITION, ControlError
+
+        done = 0
+        errors = []
+        for device in (targets or []):
+            if CAP_POSITION not in self.controller.capabilities(device):
+                continue
+            try:
+                self.controller.set_position(device, percent)
+                done += 1
+            except ControlError as exc:
+                utils.log('Position failed on %s: %s' % (device.name, exc))
                 errors.append(str(exc))
         return done, errors
 

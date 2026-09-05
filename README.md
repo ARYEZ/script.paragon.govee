@@ -4,8 +4,8 @@ Control your LAN smart home from inside Kodi, instead of reaching for a
 separate app per brand.
 
 Started as Govee light control and grew a driver layer, so it now speaks
-Govee, Broadlink and Tuya. Adding a fourth vendor is a fourth driver, not a
-change to the menus, the scene engine or the device registry.
+Govee, Broadlink, Tuya, Kasa and SwitchBot. Adding a vendor is another driver,
+not a change to the menus, the scene engine or the device registry.
 
 Part of the **Paragon TV** project, alongside
 [`script.paragontv`](https://github.com/Aryez/script.paragontv),
@@ -27,6 +27,9 @@ Built for **Kodi 17.6 (Krypton)** — `xbmc.python 2.25.0`, Python 2.7.
   protocol 3.1 to 3.4. Multi-outlet plugs are listed one device per outlet.
 * **TP-Link Kasa plugs** — HS100, HS103, HS110 and the KP series. No account,
   no key, no setup: found is the same as usable.
+* **SwitchBot blinds and shades** — Blind Tilt, Curtain and Roller Shade,
+  opened and closed to a percentage. The one thing here that is not on the
+  LAN: it goes through SwitchBot's servers, because there is no local API.
 * **Scenes** — named presets (`Movie Night`, `Paused`, `All Off`, …) that you
   can edit in the add-on and re-use everywhere.
 * **Playback lighting** — an optional service that dims when playback starts,
@@ -738,6 +741,46 @@ Three layers, each answering one question:
 | **Scene** | how the lights should *look* |
 | **Sequence** | what to *do*, in order — fifteen steps |
 | **Rerack** | when a *day* does it — nine phases |
+
+---
+
+## Blinds (SwitchBot)
+
+**This one is not on your LAN, and that is not a choice.** A Blind Tilt speaks
+Bluetooth Low Energy, a SwitchBot hub is what bridges it to anything else, and
+SwitchBot publish no local API for that bridge. Bluetooth straight from Kodi
+would need a library that cannot be a standard-library import on Python 2.7.
+So the route to the blinds is out to SwitchBot and back.
+
+The practical consequence: **the blinds are the only thing in Paragon Home
+that stops working when your internet does.** Govee, Tuya, Kasa and Broadlink
+all keep working on a dead uplink. If that matters more than having the blinds
+in here, do not set this up.
+
+You need a **hub** — the Hub 2 or the Hub Mini both work, since all that is
+being used is its bridge to the cloud, not Matter — and a token and secret
+from the phone app:
+
+**Profile → Preferences → About**, then tap the app version ten times to
+reveal **Developer Options**. Copy both values into **Settings → SwitchBot**.
+Both are needed: every request is signed with the secret, and a token on its
+own cannot sign.
+
+Then **Refresh devices**. Only blinds and shades are adopted — bots, sensors,
+plugs and the hub itself are left alone rather than half-supported.
+
+A blind is neither a light nor a plug, and is treated as neither. It reports a
+*position*, so scenes pass over it entirely: a scene describes how a room
+looks, and closing the blinds during `All Off` is not something to inherit by
+accident. Put a blind in a **sequence** instead, which already switches plugs
+and fires infrared. The web remote draws it a slider.
+
+**What position means on a Blind Tilt is not what it means on a curtain.** The
+slats tilt rather than travelling, so both ends of the range are shut — one
+tilted up, one tilted down — and the middle is open. The menu offers the
+hardware's own commands (Open, Close Up, Close Down, Pause) alongside the
+percentages for exactly that reason: those do whatever the blind says they do
+and do not depend on anyone's reading of the number.
 
 ---
 

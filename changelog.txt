@@ -1,3 +1,29 @@
+2.39.0 (Aryez - 2026)
+    Added: SwitchBot blinds and shades -- Blind Tilt, Curtain, Roller Shade.
+        Open, close, or set a percentage, from the menus, a sequence step or
+        the web remote.
+    This is the first driver here that is not on the LAN, and that is not a
+        choice: a Blind Tilt speaks Bluetooth, the hub bridges it, and
+        SwitchBot publish no local API for that bridge. So the blinds are the
+        one thing in Paragon Home that stops when the internet does.
+        Everything else keeps working on a dead uplink.
+    Needs a token and a secret from the phone app -- Profile, Preferences,
+        About, then tap the version ten times for Developer Options -- under
+        Settings, SwitchBot. Every request is signed with the secret.
+    A blind is neither a light nor a plug, so it reports a new capability
+        rather than borrowing one. Reported as a plug it would have been shut
+        by every "everything off" path in the add-on; reported as a light it
+        would have been dimmed by scenes. Scenes now pass over it, and a
+        blind belongs in a sequence, which already switches plugs and fires
+        infrared.
+    A tilt is shut at both ends of its range and open in the middle, which is
+        not how a curtain reads. The hardware's own commands -- Open, Close
+        Up, Close Down, Pause -- are offered alongside the percentages so
+        nothing depends on this add-on's reading of the number.
+    Fixed, found on the way: a sequence step took its kind from its value, so
+        a learned code named "On" was saved as a power step rather than a
+        command. The kind now travels with the row that was chosen.
+
 2.38.0 (Aryez - 2026)
     Added: Broadlink blasters can learn radio codes, not only infrared.
         "Learn an RF command..." sits beside the infrared one under Manage

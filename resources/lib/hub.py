@@ -17,7 +17,7 @@ A driver implements:
     DRIVER_ID, DRIVER_LABEL     identity
     discover(timeout)           -> ([Device], [warning strings])
     capabilities(device)        -> set of CAP_* it supports
-    turn/set_brightness/set_color/set_color_temp
+    turn/set_brightness/set_color/set_color_temp/set_position
                                 state verbs, raising ControlError on failure
     get_state(device)           -> dict or None
     get_states(devices, timeout)-> {device_id: state or None}
@@ -29,8 +29,8 @@ for something with no colour -- a plug, an IR blaster -- implements the verbs
 it has and reports the rest as absent.
 """
 
-from devices import (CAP_COMMANDS, CAP_POWER, CAP_STATE, ControlError,
-                     DEFAULT_DRIVER)
+from devices import (CAP_COMMANDS, CAP_POSITION, CAP_POWER, CAP_STATE,
+                     ControlError, DEFAULT_DRIVER)
 
 # What a power-only device is allowed to be asked for. Switching, and saying
 # what it is doing -- everything about how it looks is somebody else's job.
@@ -174,6 +174,18 @@ class Hub(object):
         if self._look_only(device):
             return None
         return self._require(device).set_color_temp(device, kelvin)
+
+    def set_position(self, device, percent):
+        """Drive a cover to `percent` open. 0 is shut, 100 is fully open.
+
+        Not narrowed by _look_only. Power-only marks a light the user does not
+        want coloured or dimmed; a blind is not a light, and its position is
+        the only thing it has. Narrowing here would leave it with nothing.
+        """
+        driver = self._require(device)
+        if CAP_POSITION not in driver.capabilities(device):
+            raise ControlError('%s cannot be opened or closed' % device.name)
+        return driver.set_position(device, percent)
 
     @staticmethod
     def _look_only(device):

@@ -36,6 +36,7 @@ CAP_COLOR = 'color'
 CAP_COLOR_TEMP = 'color_temp'
 CAP_STATE = 'state'        # can report what it is currently doing
 CAP_COMMANDS = 'commands'  # emits named commands, e.g. a learned IR code
+CAP_POSITION = 'position'  # opens and closes to a percentage, e.g. a blind
 
 # Devices cached before drivers existed have no driver recorded; they are all
 # Govee, because that is all there was.
@@ -499,6 +500,21 @@ def build_hub(settings):
                                   known_ips=settings.get('known_ips'),
                                   username=settings.get('kasa_username', ''),
                                   password=settings.get('kasa_password', '')))
+
+    # Only built when there are credentials to build it with. Every other
+    # driver can search a network that may have nothing on it; this one would
+    # be a signed request to SwitchBot that is certain to be refused.
+    if settings.get('switchbot_token') and settings.get('switchbot_secret'):
+        from switchbot_cloud import SwitchBotTransport
+        from switchbot_driver import SwitchBotDriver
+        drivers.append(SwitchBotDriver(
+            transport=SwitchBotTransport(
+                token=settings.get('switchbot_token', ''),
+                secret=settings.get('switchbot_secret', ''),
+                timeout=settings.get('cloud_timeout', 10),
+                verify_ssl=settings.get('verify_ssl', True),
+                log_func=settings.get('log_func')),
+            log_func=settings.get('log_func')))
 
     if settings.get('broadlink_enabled', True):
         drivers.append(BroadlinkDriver(

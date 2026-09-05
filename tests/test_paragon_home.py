@@ -11560,5 +11560,347 @@ class TestWebRemote(unittest.TestCase):
         self.assertTrue(same_secret('', ''))
 
 
+class FakeSwitchBotAPI(object):
+    """A stand-in for SwitchBot's HTTPS endpoints.
+
+    Records what was asked of it rather than answering cleverly: the point of
+    most of these tests is which command went out, not what came back.
+    """
+
+    def __init__(self, entries=None, status=None, fail=None):
+        self._entries = entries if entries is not None else [
+            {'deviceId': 'BT01', 'deviceName': 'Lounge Blinds',
+             'deviceType': 'Blind Tilt', 'hubDeviceId': 'HUB2'},
+            {'deviceId': 'BOT1', 'deviceName': 'Kettle Bot',
+             'deviceType': 'Bot', 'hubDeviceId': 'HUB2'},
+            {'deviceId': 'HUB2', 'deviceName': 'Hub 2',
+             'deviceType': 'Hub 2', 'hubDeviceId': ''},
+        ]
+        self._status = status or {'slidePosition': 40, 'battery': 88}
+        self._fail = fail
+        self.sent = []
+        self.configured = True
+
+    def devices(self):
+        if self._fail:
+            raise self._fail
+        return list(self._entries)
+
+    def status(self, device_id):
+        if self._fail:
+            raise self._fail
+        return dict(self._status)
+
+    def command(self, device_id, command, parameter='default',
+                command_type='command'):
+        if self._fail:
+            raise self._fail
+        self.sent.append((device_id, command, parameter))
+        return {}
+
+
+def a_blind(name='Lounge Blinds', device_id='BT01', model='Blind Tilt'):
+    return Device(device_id, name=name, model=model, cloud=True,
+                  driver='switchbot')
+
+
+class TestSwitchBotSigning(unittest.TestCase):
+    """Every request is signed; a wrong signature is a 401 and no blinds."""
+
+    def transport(self, **kwargs):
+        import switchbot_cloud
+        return switchbot_cloud.SwitchBotTransport(
+            token='TOKEN123', secret='SECRET456', **kwargs)
+
+    def test_the_signature_is_hmac_sha256_of_token_stamp_and_nonce(self):
+        import base64
+        import hashlib
+        import hmac
+
+        headers = self.transport()._sign(now=1700000000.0)
+
+        expected = base64.b64encode(hmac.new(
+            b'SECRET456',
+            msg=('TOKEN123' + headers['t'] + headers['nonce']).encode('utf-8'),
+            digestmod=hashlib.sha256).digest()).decode('ascii')
+        self.assertEqual(headers['sign'], expected)
+
+    def test_the_timestamp_is_in_milliseconds(self):
+        """Seconds would be rejected outright: the API wants epoch millis."""
+        headers = self.transport()._sign(now=1700000000.0)
+
+        self.assertEqual(headers['t'], '1700000000000')
+
+    def test_the_token_is_sent_as_the_authorization(self):
+        self.assertEqual(self.transport()._sign(now=1.0)['Authorization'],
+                         'TOKEN123')
+
+    def test_two_requests_do_not_reuse_a_nonce(self):
+        """A replayed nonce is what a nonce exists to stop."""
+        first = self.transport()._sign(now=1.0)['nonce']
+        second = self.transport()._sign(now=1.0)['nonce']
+
+        self.assertNotEqual(first, second)
+
+    def test_half_a_credential_is_not_configured(self):
+        import switchbot_cloud
+
+        make = switchbot_cloud.SwitchBotTransport
+        self.assertTrue(make('t', 's').configured)
+        self.assertFalse(make('t', '').configured)
+        self.assertFalse(make('', 's').configured)
+
+
+class TestSwitchBotDriver(unittest.TestCase):
+
+    def driver(self, api=None):
+        import switchbot_driver
+        api = api if api is not None else FakeSwitchBotAPI()
+        return switchbot_driver.SwitchBotDriver(transport=api), api
+
+    # -- discovery ---------------------------------------------------------
+
+    def test_only_the_covers_are_adopted(self):
+        """A bot and a hub are on the same account and are not blinds."""
+        driver, _api = self.driver()
+
+        found, warnings = driver.discover()
+
+        self.assertEqual([d.device_id for d in found], ['BT01'])
+        self.assertEqual(found[0].name, 'Lounge Blinds')
+        self.assertEqual(found[0].model, 'Blind Tilt')
+        self.assertEqual(warnings, [])
+
+    def test_an_account_with_no_blinds_says_so(self):
+        api = FakeSwitchBotAPI(entries=[
+            {'deviceId': 'BOT1', 'deviceName': 'Bot', 'deviceType': 'Bot'}])
+        driver, _api = self.driver(api)
+
+        found, warnings = driver.discover()
+
+        self.assertEqual(found, [])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn('none of them a blind', warnings[0])
+
+    def test_a_search_with_no_credentials_is_quiet(self):
+        """Not an error. Most installs will never have a SwitchBot account."""
+        import switchbot_driver
+
+        driver = switchbot_driver.SwitchBotDriver(transport=None)
+        self.assertEqual(driver.discover(), ([], []))
+
+    def test_a_failed_search_warns_rather_than_raising(self):
+        import switchbot_cloud
+
+        api = FakeSwitchBotAPI(fail=switchbot_cloud.CloudError('no route'))
+        driver, _api = self.driver(api)
+
+        found, warnings = driver.discover()
+
+        self.assertEqual(found, [])
+        self.assertIn('no route', warnings[0])
+
+    # -- what it claims to be ----------------------------------------------
+
+    def test_a_blind_is_not_a_light_and_not_a_plug(self):
+        """The whole reason CAP_POSITION exists.
+
+        Reported as a plug it would be shut by every "everything off" path in
+        the add-on; reported as a light it would be dimmed by scenes.
+        """
+        from devices import (CAP_BRIGHTNESS, CAP_COLOR, CAP_COLOR_TEMP,
+                             CAP_POSITION)
+
+        driver, _api = self.driver()
+        caps = driver.capabilities(a_blind())
+
+        self.assertIn(CAP_POSITION, caps)
+        for light_only in (CAP_BRIGHTNESS, CAP_COLOR, CAP_COLOR_TEMP):
+            self.assertNotIn(light_only, caps)
+
+    def test_a_scene_passes_over_a_blind(self):
+        """A scene describes how a room looks. A blind is not in that set."""
+        import hub as hub_mod
+        import scenes as scene_lib
+        import switchbot_driver
+
+        hub = hub_mod.Hub(drivers=[switchbot_driver.SwitchBotDriver(
+            transport=FakeSwitchBotAPI())])
+        blind = a_blind()
+
+        self.assertFalse(scene_lib.is_a_light(blind, hub))
+        self.assertEqual(
+            scene_lib.scene_targets(scene_lib.make_scene('All Off'),
+                                    [blind], hub),
+            [])
+
+    # -- positions ---------------------------------------------------------
+
+    def test_a_position_is_clamped_and_made_even(self):
+        """A tilt rejects an odd position rather than rounding it."""
+        import switchbot_driver
+
+        clean = switchbot_driver.clean_position
+        self.assertEqual(clean(51), 50)
+        self.assertEqual(clean(-20), 0)
+        self.assertEqual(clean(500), 100)
+        self.assertEqual(clean('62'), 62)
+
+    def test_nonsense_is_refused_rather_than_sent(self):
+        import switchbot_driver
+        from devices import ControlError
+
+        self.assertRaises(ControlError,
+                          switchbot_driver.clean_position, 'shut')
+
+    def test_setting_a_position_sends_a_direction_with_it(self):
+        driver, api = self.driver()
+
+        driver.set_position(a_blind(), 61)
+
+        self.assertEqual(api.sent, [('BT01', 'setPosition', 'up;60')])
+
+    def test_open_and_close_use_the_tilt_commands(self):
+        """turnOn on a tilt is not what "open" means; fullyOpen is."""
+        driver, api = self.driver()
+        blind = a_blind()
+
+        driver.turn(blind, True)
+        driver.turn(blind, False)
+
+        self.assertEqual([c for _id, c, _p in api.sent],
+                         ['fullyOpen', 'closeDown'])
+
+    def test_a_curtain_is_switched_the_ordinary_way(self):
+        driver, api = self.driver()
+        curtain = a_blind(name='Bedroom Curtain', device_id='CT01',
+                          model='Curtain3')
+
+        driver.turn(curtain, True)
+
+        self.assertEqual([c for _id, c, _p in api.sent], ['turnOn'])
+
+    def test_the_named_commands_are_the_hardware_own_vocabulary(self):
+        driver, api = self.driver()
+
+        self.assertEqual(driver.commands(a_blind()),
+                         ['Open', 'Close Up', 'Close Down', 'Pause'])
+        driver.send_command(a_blind(), 'Close Up')
+        self.assertEqual(api.sent, [('BT01', 'closeUp', 'default')])
+
+    def test_an_unknown_command_is_refused(self):
+        from devices import ControlError
+
+        driver, _api = self.driver()
+        self.assertRaises(ControlError,
+                          driver.send_command, a_blind(), 'Fly Away')
+
+    def test_it_is_not_a_light_and_says_so_plainly(self):
+        from devices import ControlError
+
+        driver, _api = self.driver()
+        self.assertRaises(ControlError, driver.set_brightness, a_blind(), 50)
+        self.assertRaises(ControlError, driver.set_color, a_blind(), 1, 2, 3)
+
+    # -- reading -----------------------------------------------------------
+
+    def test_it_reports_where_the_blind_is(self):
+        driver, _api = self.driver()
+
+        state = driver.get_state(a_blind())
+
+        self.assertEqual(state['position'], 40)
+        self.assertEqual(state['battery'], 88)
+
+    def test_an_unreadable_blind_is_none_rather_than_an_error(self):
+        import switchbot_cloud
+
+        api = FakeSwitchBotAPI(fail=switchbot_cloud.CloudError('offline'))
+        driver, _api = self.driver(api)
+
+        self.assertIsNone(driver.get_state(a_blind()))
+
+
+class TestPositionThroughTheHub(unittest.TestCase):
+
+    def hub(self):
+        import hub as hub_mod
+        import switchbot_driver
+
+        api = FakeSwitchBotAPI()
+        return hub_mod.Hub(drivers=[
+            switchbot_driver.SwitchBotDriver(transport=api),
+            GoveeController()]), api
+
+    def test_the_hub_routes_a_position_to_the_driver_that_owns_it(self):
+        hub, api = self.hub()
+
+        hub.set_position(a_blind(), 30)
+
+        self.assertEqual(api.sent, [('BT01', 'setPosition', 'up;30')])
+
+    def test_a_light_cannot_be_asked_for_a_position(self):
+        """The verb exists on the Hub, so the refusal has to live there."""
+        from devices import ControlError
+
+        hub, _api = self.hub()
+        lamp = Device('AA:BB', name='Lamp', lan=True, driver='govee')
+
+        self.assertRaises(ControlError, hub.set_position, lamp, 30)
+
+
+class TestBlindsInSequences(unittest.TestCase):
+    """A blind belongs in a sequence, which already switches plugs and fires
+    infrared. Scenes stay what they are: lights only."""
+
+    def setUp(self):
+        clean_profile()
+        xbmcaddon.reset()
+        xbmcgui.reset()
+        for name in ('addon_utils', 'paragon_home', 'sequences', 'gui'):
+            if name in sys.modules:
+                del sys.modules[name]
+        import sequences
+
+        self.sequences = sequences
+
+    def tearDown(self):
+        clean_profile()
+
+    def test_a_position_step_survives_being_saved(self):
+        step = self.sequences.normalise_step(
+            {'kind': 'position', 'driver': 'switchbot', 'target': 'BT01',
+             'action': '40'})
+
+        self.assertEqual(step['kind'], self.sequences.KIND_POSITION)
+        self.assertEqual(step['action'], '40')
+
+    def test_a_position_is_clamped_when_it_is_read_back(self):
+        step = self.sequences.normalise_step(
+            {'kind': 'position', 'target': 'BT01', 'action': '250'})
+
+        self.assertEqual(step['action'], '100')
+
+    def test_a_step_with_no_number_is_an_empty_slot(self):
+        """Half a step that looks filled is worse than a blank one."""
+        step = self.sequences.normalise_step(
+            {'kind': 'position', 'target': 'BT01', 'action': 'shut'})
+
+        self.assertEqual(step['kind'], self.sequences.KIND_NONE)
+
+    def test_a_step_with_no_target_is_an_empty_slot(self):
+        step = self.sequences.normalise_step(
+            {'kind': 'position', 'target': '', 'action': '40'})
+
+        self.assertEqual(step['kind'], self.sequences.KIND_NONE)
+
+    def test_the_step_reads_as_what_it_does(self):
+        step = self.sequences.normalise_step(
+            {'kind': 'position', 'target': 'BT01', 'action': '40'})
+
+        self.assertEqual(
+            self.sequences.describe_step(step, device_name='Lounge Blinds'),
+            'Lounge Blinds: 40% open')
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

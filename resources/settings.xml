@@ -45,6 +45,16 @@ the add-on ships a single locale.
                  label="TP-Link account password" default=""/>
     </category>
 
+    <category label="SwitchBot">
+        <setting type="lsep" label="For blinds and shades, via a SwitchBot hub"/>
+        <setting type="lsep" label="App: Profile - Preferences - About,"/>
+        <setting type="lsep" label="tap the version ten times for Developer Options"/>
+        <setting id="switchbot_token" type="text" option="hidden"
+                 label="SwitchBot token" default=""/>
+        <setting id="switchbot_secret" type="text" option="hidden"
+                 label="SwitchBot secret" default=""/>
+    </category>
+
     <category label="Playback lighting">
         <setting id="playback_sync" type="bool"
                  label="Change the lights with playback" default="false"/>
